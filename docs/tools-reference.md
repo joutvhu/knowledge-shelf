@@ -1,6 +1,6 @@
 # Tools Reference
 
-Complete reference for all MCP tools provided by the Knowledge Base server.
+Complete reference for all MCP tools provided by the Knowledge Shelf server.
 
 ---
 

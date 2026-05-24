@@ -108,7 +108,7 @@ The MCP server ignores:
 - Keep doc files concise — split details into `references/` folder
 - Use `tags` for searchability (include language, framework, domain)
 - `aliases` get the highest search score — add abbreviations people actually type
-- Run `knowledge-mcp validate` after creating/modifying units to catch issues
+- Run `knowledge-shelf validate` after creating/modifying units to catch issues
 
 ---
 

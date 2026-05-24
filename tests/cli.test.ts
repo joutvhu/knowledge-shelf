@@ -1,5 +1,5 @@
 /**
- * Integration tests for Knowledge Manager CLI.
+ * Integration tests for Knowledge Shelf CLI.
  *
  * Tests init, list, add (local), remove commands using temp directories.
  * Note: 'add' from remote git is not tested here (requires network).
@@ -24,7 +24,7 @@ describe("CLI Commands", () => {
   let tmpDir: string;
 
   beforeEach(() => {
-    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "knowledge-mcp-test-"));
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "knowledge-shelf-test-"));
   });
 
   afterEach(() => {
@@ -108,7 +108,7 @@ describe("CLI Commands", () => {
   describe("help", () => {
     it("should display help text", () => {
       const result = runCli("help", tmpDir);
-      expect(result).toContain("Knowledge Manager");
+      expect(result).toContain("Knowledge Shelf");
       expect(result).toContain("add");
       expect(result).toContain("list");
       expect(result).toContain("update");

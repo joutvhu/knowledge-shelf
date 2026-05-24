@@ -1,5 +1,5 @@
 /**
- * Knowledge Manager CLI
+ * Knowledge Shelf CLI
  *
  * Subcommands:
  *   add <url> [--path <subfolder>] [--name <alias>]   Pull knowledge from a git repo
@@ -207,7 +207,7 @@ function cmdInit(knowledgeDir: string): void {
     fs.writeFileSync(
       rootGitignore,
       [
-        "# Knowledge Manager",
+        "# Knowledge Shelf",
         ".cache/",
         "",
       ].join("\n"),
@@ -241,7 +241,7 @@ function cmdAdd(knowledgeDir: string, args: string[]): void {
   }
 
   if (!url) {
-    console.error("Error: URL is required.\nUsage: knowledge-mcp add <url> [--path <subfolder>] [--name <alias>] [--all]");
+    console.error("Error: URL is required.\nUsage: knowledge-shelf add <url> [--path <subfolder>] [--name <alias>] [--all]");
     process.exit(1);
   }
 
@@ -481,7 +481,7 @@ function cmdRemove(knowledgeDir: string, args: string[]): void {
   const name = args[0];
 
   if (!name) {
-    console.error("Error: Name is required.\nUsage: knowledge-mcp remove <name>");
+    console.error("Error: Name is required.\nUsage: knowledge-shelf remove <name>");
     process.exit(1);
   }
 
@@ -516,7 +516,7 @@ function cmdInfo(knowledgeDir: string, args: string[]): void {
   const name = args[0];
 
   if (!name) {
-    console.error("Error: Name is required.\nUsage: knowledge-mcp info <name>");
+    console.error("Error: Name is required.\nUsage: knowledge-shelf info <name>");
     process.exit(1);
   }
 
@@ -804,7 +804,7 @@ function cmdPin(knowledgeDir: string, args: string[]): void {
   const version = args[1]; // optional — tag or commit hash
 
   if (!name) {
-    console.error("Error: Name is required.\nUsage: knowledge-mcp pin <name> [tag|commit]");
+    console.error("Error: Name is required.\nUsage: knowledge-shelf pin <name> [tag|commit]");
     process.exit(1);
   }
 
@@ -826,7 +826,7 @@ function cmdUnpin(knowledgeDir: string, args: string[]): void {
   const name = args[0];
 
   if (!name) {
-    console.error("Error: Name is required.\nUsage: knowledge-mcp unpin <name>");
+    console.error("Error: Name is required.\nUsage: knowledge-shelf unpin <name>");
     process.exit(1);
   }
 
@@ -856,7 +856,7 @@ function cmdSearch(knowledgeDir: string, args: string[]): void {
   const query = args.join(" ").trim();
 
   if (!query) {
-    console.error("Error: Query is required.\nUsage: knowledge-mcp search <keywords>");
+    console.error("Error: Query is required.\nUsage: knowledge-shelf search <keywords>");
     process.exit(1);
   }
 
@@ -1068,7 +1068,7 @@ function cmdExport(knowledgeDir: string, args: string[]): void {
   }
 
   if (!name) {
-    console.error("Error: Name is required.\nUsage: knowledge-mcp export <name> [--output <path>] [--format zip|tar]");
+    console.error("Error: Name is required.\nUsage: knowledge-shelf export <name> [--output <path>] [--format zip|tar]");
     process.exit(1);
   }
 
@@ -1119,10 +1119,10 @@ function cmdExport(knowledgeDir: string, args: string[]): void {
 
 function printHelp(): void {
   console.log(`
-Knowledge Manager — manage knowledge sources from git repositories.
+Knowledge Shelf — manage knowledge sources from git repositories.
 
 Usage:
-  knowledge-mcp <command> [--dir <knowledge-path>] [options]
+  knowledge-shelf <command> [--dir <knowledge-path>] [options]
 
 Commands:
   add <url> [--path <subfolder>] [--name <alias>] [--all]
@@ -1174,17 +1174,17 @@ Resolution Order (how the knowledge directory is found):
   4. ~/.knowledge (global default)
 
 Examples:
-  knowledge-mcp add https://github.com/team/qa-knowledge.git
-  knowledge-mcp add https://github.com/team/shared.git --path cucumber-boilerplate --name cucumber
-  knowledge-mcp add https://github.com/team/shared.git --all
-  knowledge-mcp search cucumber ui
-  knowledge-mcp list
-  knowledge-mcp list --dir C:\\projects\\my-repo\\knowledge
-  knowledge-mcp pin cucumber v1.2.0
-  knowledge-mcp update
-  knowledge-mcp update cucumber
-  knowledge-mcp export cucumber --output ./cucumber.zip
-  knowledge-mcp remove cucumber
+  knowledge-shelf add https://github.com/team/qa-knowledge.git
+  knowledge-shelf add https://github.com/team/shared.git --path cucumber-boilerplate --name cucumber
+  knowledge-shelf add https://github.com/team/shared.git --all
+  knowledge-shelf search cucumber ui
+  knowledge-shelf list
+  knowledge-shelf list --dir C:\\projects\\my-repo\\knowledge
+  knowledge-shelf pin cucumber v1.2.0
+  knowledge-shelf update
+  knowledge-shelf update cucumber
+  knowledge-shelf export cucumber --output ./cucumber.zip
+  knowledge-shelf remove cucumber
 `);
 }
 

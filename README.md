@@ -1,4 +1,4 @@
-# Knowledge Base MCP Server
+# Knowledge Shelf MCP Server
 
 A personal knowledge management system for AI coding assistants. Store documentation, code patterns, templates, and workflows locally — AI pulls only what it needs, when it needs it.
 
@@ -12,7 +12,7 @@ Steering files help, but they load everything into context upfront. For large kn
 
 ## The Solution
 
-`knowledge-mcp` gives AI **on-demand access** to your knowledge. AI searches, finds what's relevant, and loads only that — like a developer searching internal docs.
+`knowledge-shelf` gives AI **on-demand access** to your knowledge. AI searches, finds what's relevant, and loads only that — like a developer searching internal docs.
 
 ```
 You: "Set up AG Grid testing for this project"
@@ -69,13 +69,13 @@ AI accesses this through 7 MCP tools:
 ### Initialize your knowledge directory
 
 ```bash
-npx knowledge-mcp init
+npx knowledge-shelf init
 ```
 
 ### Add knowledge from a git repo
 
 ```bash
-npx knowledge-mcp add https://github.com/your-team/shared-knowledge.git --all
+npx knowledge-shelf add https://github.com/your-team/shared-knowledge.git --all
 ```
 
 ### Configure your AI Assistant
@@ -94,7 +94,7 @@ Add the configuration below to your MCP client's configuration file. Here are th
   "mcpServers": {
     "knowledge": {
       "command": "npx",
-      "args": ["-y", "knowledge-mcp"],
+      "args": ["-y", "knowledge-shelf"],
       "disabled": false,
       "autoApprove": [
         "list_docs",
@@ -120,7 +120,7 @@ To use a custom knowledge path:
   "mcpServers": {
     "knowledge": {
       "command": "npx",
-      "args": ["-y", "knowledge-mcp", "C:\\path\\to\\knowledge"],
+      "args": ["-y", "knowledge-shelf", "C:\\path\\to\\knowledge"],
       "disabled": false,
       "autoApprove": [
         "list_docs",
@@ -169,24 +169,24 @@ aliases: auth-guide
 ...
 ```
 
-## Knowledge Manager CLI
+## Knowledge Shelf CLI
 
 Manage knowledge sources from git repositories — like npm for documentation.
 
 ```bash
-knowledge-mcp init                    # Initialize ~/.knowledge
-knowledge-mcp add <url>               # Install from git repo
-knowledge-mcp add <url> --all         # Install all units from monorepo
-knowledge-mcp add <url> --path <dir>  # Install specific subfolder (sparse checkout)
-knowledge-mcp search <keywords>       # Search installed knowledge
-knowledge-mcp info <name>             # Show unit details
-knowledge-mcp validate [name]         # Check structure integrity
-knowledge-mcp list                    # Show installed sources
-knowledge-mcp update [name]           # Pull latest from remotes
-knowledge-mcp pin <name> [version]    # Lock version (skip updates)
-knowledge-mcp unpin <name>            # Unlock
-knowledge-mcp export <name>           # Package as zip for sharing
-knowledge-mcp remove <name>           # Uninstall
+knowledge-shelf init                    # Initialize ~/.knowledge
+knowledge-shelf add <url>               # Install from git repo
+knowledge-shelf add <url> --all         # Install all units from monorepo
+knowledge-shelf add <url> --path <dir>  # Install specific subfolder (sparse checkout)
+knowledge-shelf search <keywords>       # Search installed knowledge
+knowledge-shelf info <name>             # Show unit details
+knowledge-shelf validate [name]         # Check structure integrity
+knowledge-shelf list                    # Show installed sources
+knowledge-shelf update [name]           # Pull latest from remotes
+knowledge-shelf pin <name> [version]    # Lock version (skip updates)
+knowledge-shelf unpin <name>            # Unlock
+knowledge-shelf export <name>           # Package as zip for sharing
+knowledge-shelf remove <name>           # Uninstall
 ```
 
 See [docs/cli-reference.md](docs/cli-reference.md) for full command documentation.
@@ -197,13 +197,13 @@ Organize a git repo and your team can install with one command:
 
 ```bash
 # Single unit repo
-knowledge-mcp add https://github.com/team/qa-boilerplate.git
+knowledge-shelf add https://github.com/team/qa-boilerplate.git
 
 # Monorepo with multiple units
-knowledge-mcp add https://github.com/team/shared-knowledge.git --all
+knowledge-shelf add https://github.com/team/shared-knowledge.git --all
 
 # Specific subfolder
-knowledge-mcp add https://github.com/team/project.git --path knowledge/api-patterns --name api-patterns
+knowledge-shelf add https://github.com/team/project.git --path knowledge/api-patterns --name api-patterns
 ```
 
 See [docs/publishing-knowledge.md](docs/publishing-knowledge.md) for repo layout conventions.
@@ -213,7 +213,7 @@ See [docs/publishing-knowledge.md](docs/publishing-knowledge.md) for repo layout
 Includes the `knowledge-builder` skill for AI-assisted knowledge creation. Copy to your AI agent's skills directory:
 
 ```bash
-cp -r node_modules/knowledge-mcp/skills/knowledge-builder <path-to-your-agent-skills>/
+cp -r node_modules/knowledge-shelf/skills/knowledge-builder <path-to-your-agent-skills>/
 ```
 
 The skill helps AI:

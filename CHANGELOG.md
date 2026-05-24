@@ -10,7 +10,7 @@
 - Security: path traversal protection on get_resource
 - Default knowledge directory: ~/.knowledge
 
-### Knowledge Manager CLI
+### Knowledge Shelf CLI
 - `init` — Initialize knowledge directory with .gitignore and registry
 - `add` — Clone from git repos (supports --path, --name, --all, sparse checkout)
 - `list` — Show installed sources with origin and version

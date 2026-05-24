@@ -1,6 +1,6 @@
 # CLI Reference
 
-Complete reference for all Knowledge Manager CLI commands.
+Complete reference for all Knowledge Shelf CLI commands.
 
 ---
 
@@ -26,8 +26,8 @@ The CLI finds the knowledge directory in this order:
 Initialize a knowledge directory.
 
 ```bash
-knowledge-mcp init
-knowledge-mcp init --dir /path/to/custom
+knowledge-shelf init
+knowledge-shelf init --dir /path/to/custom
 ```
 
 **Creates:**
@@ -42,7 +42,7 @@ knowledge-mcp init --dir /path/to/custom
 Install knowledge from a git repository.
 
 ```bash
-knowledge-mcp add <url> [--path <subfolder>] [--name <alias>] [--all]
+knowledge-shelf add <url> [--path <subfolder>] [--name <alias>] [--all]
 ```
 
 | Option | Description |
@@ -55,16 +55,16 @@ knowledge-mcp add <url> [--path <subfolder>] [--name <alias>] [--all]
 **Examples:**
 ```bash
 # Single repo = single unit
-knowledge-mcp add https://github.com/team/qa-knowledge.git
+knowledge-shelf add https://github.com/team/qa-knowledge.git
 
 # Specific subfolder from monorepo (sparse checkout)
-knowledge-mcp add https://github.com/team/shared.git --path cucumber-boilerplate --name cucumber
+knowledge-shelf add https://github.com/team/shared.git --path cucumber-boilerplate --name cucumber
 
 # All manifest-based units from monorepo
-knowledge-mcp add https://github.com/team/shared.git --all
+knowledge-shelf add https://github.com/team/shared.git --all
 
 # SSH URL
-knowledge-mcp add git@github.com:team/private-knowledge.git
+knowledge-shelf add git@github.com:team/private-knowledge.git
 ```
 
 **Behavior:**
@@ -86,8 +86,8 @@ knowledge-mcp add git@github.com:team/private-knowledge.git
 List all installed knowledge sources.
 
 ```bash
-knowledge-mcp list
-knowledge-mcp ls
+knowledge-shelf list
+knowledge-shelf ls
 ```
 
 **Output includes:**
@@ -103,7 +103,7 @@ knowledge-mcp ls
 Show detailed information about a specific knowledge unit.
 
 ```bash
-knowledge-mcp info <name>
+knowledge-shelf info <name>
 ```
 
 **Output includes:**
@@ -120,7 +120,7 @@ knowledge-mcp info <name>
 Search installed knowledge by keyword.
 
 ```bash
-knowledge-mcp search <keywords>
+knowledge-shelf search <keywords>
 ```
 
 Uses the same scoring algorithm as the MCP `search_docs` tool (excluding section headings):
@@ -139,9 +139,9 @@ Returns top 10 results sorted by relevance.
 
 **Examples:**
 ```bash
-knowledge-mcp search cucumber
-knowledge-mcp search "spring boot testing"
-knowledge-mcp search boilerplate java
+knowledge-shelf search cucumber
+knowledge-shelf search "spring boot testing"
+knowledge-shelf search boilerplate java
 ```
 
 ---
@@ -151,8 +151,8 @@ knowledge-mcp search boilerplate java
 Check knowledge unit integrity.
 
 ```bash
-knowledge-mcp validate          # Validate all manifest-based units
-knowledge-mcp validate <name>   # Validate specific unit
+knowledge-shelf validate          # Validate all manifest-based units
+knowledge-shelf validate <name>   # Validate specific unit
 ```
 
 **Checks performed:**
@@ -177,8 +177,8 @@ knowledge-mcp validate <name>   # Validate specific unit
 Pull latest changes from remote repositories.
 
 ```bash
-knowledge-mcp update            # Update all sources
-knowledge-mcp update <name>     # Update specific source
+knowledge-shelf update            # Update all sources
+knowledge-shelf update <name>     # Update specific source
 ```
 
 **Behavior:**
@@ -193,8 +193,8 @@ knowledge-mcp update <name>     # Update specific source
 Lock a source to prevent updates.
 
 ```bash
-knowledge-mcp pin <name>              # Pin to current commit
-knowledge-mcp pin <name> <version>    # Pin to specific tag/commit
+knowledge-shelf pin <name>              # Pin to current commit
+knowledge-shelf pin <name> <version>    # Pin to specific tag/commit
 ```
 
 Pinned sources are skipped during `update`.  The pin value is stored in `.registry.json`.
@@ -206,7 +206,7 @@ Pinned sources are skipped during `update`.  The pin value is stored in `.regist
 Unlock a pinned source.
 
 ```bash
-knowledge-mcp unpin <name>
+knowledge-shelf unpin <name>
 ```
 
 After unpinning, the source will be updated normally.
@@ -218,7 +218,7 @@ After unpinning, the source will be updated normally.
 Package a knowledge unit as an archive for sharing.
 
 ```bash
-knowledge-mcp export <name> [--output <path>] [--format zip|tar]
+knowledge-shelf export <name> [--output <path>] [--format zip|tar]
 ```
 
 | Option | Default | Description |
@@ -228,9 +228,9 @@ knowledge-mcp export <name> [--output <path>] [--format zip|tar]
 
 **Examples:**
 ```bash
-knowledge-mcp export cucumber                              # → ./cucumber.zip
-knowledge-mcp export cucumber --output ~/share/cuke.zip    # Custom path
-knowledge-mcp export cucumber --format tar                 # → ./cucumber.tar.gz
+knowledge-shelf export cucumber                              # → ./cucumber.zip
+knowledge-shelf export cucumber --output ~/share/cuke.zip    # Custom path
+knowledge-shelf export cucumber --format tar                 # → ./cucumber.tar.gz
 ```
 
 Uses PowerShell `Compress-Archive` on Windows, `zip`/`tar` on Unix.
@@ -242,8 +242,8 @@ Uses PowerShell `Compress-Archive` on Windows, `zip`/`tar` on Unix.
 Remove an installed knowledge unit.
 
 ```bash
-knowledge-mcp remove <name>
-knowledge-mcp rm <name>
+knowledge-shelf remove <name>
+knowledge-shelf rm <name>
 ```
 
 Deletes the directory and removes the entry from `.registry.json`.  If the unit exists on disk but not in registry, it's still deleted (with a note).

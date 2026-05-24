@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Knowledge Base MCP Server (Node.js / TypeScript)
+ * Knowledge Shelf MCP Server (Node.js / TypeScript)
  *
  * Provides AI-accessible documentation and automation from a knowledge/ folder.
  * Supports manifest-based knowledge units and legacy standalone .md files.
@@ -893,7 +893,7 @@ async function main() {
   // Otherwise, start MCP server
   const transport = new StdioServerTransport();
   await server.connect(transport);
-  console.error(`Knowledge Base MCP server running (knowledge_dir: ${KNOWLEDGE_DIR})`);
+  console.error(`Knowledge Shelf MCP server running (knowledge_dir: ${KNOWLEDGE_DIR})`);
 }
 
 main().catch((error) => {

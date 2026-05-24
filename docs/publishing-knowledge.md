@@ -1,6 +1,6 @@
 # Publishing Knowledge to Git
 
-How to organize a git repository so others can install knowledge with `knowledge-mcp add`.
+How to organize a git repository so others can install knowledge with `knowledge-shelf add`.
 
 ---
 
@@ -26,7 +26,7 @@ my-qa-knowledge/              ← git repo root
 
 **Install command:**
 ```bash
-knowledge-mcp add https://github.com/team/my-qa-knowledge.git
+knowledge-shelf add https://github.com/team/my-qa-knowledge.git
 ```
 
 **Result:**  `~/.knowledge/my-qa-knowledge/` contains the full repo (minus `.git/`).
@@ -58,18 +58,18 @@ shared-knowledge/             ← git repo root
 
 **Install individual units (uses sparse checkout — fast):**
 ```bash
-knowledge-mcp add https://github.com/team/shared-knowledge.git --path cucumber-boilerplate
-knowledge-mcp add https://github.com/team/shared-knowledge.git --path spring-boot-patterns
+knowledge-shelf add https://github.com/team/shared-knowledge.git --path cucumber-boilerplate
+knowledge-shelf add https://github.com/team/shared-knowledge.git --path spring-boot-patterns
 ```
 
 **Install ALL units at once (auto-detects manifest.json):**
 ```bash
-knowledge-mcp add https://github.com/team/shared-knowledge.git --all
+knowledge-shelf add https://github.com/team/shared-knowledge.git --all
 ```
 
 **Install entire repo as one unit:**
 ```bash
-knowledge-mcp add https://github.com/team/shared-knowledge.git --name shared
+knowledge-shelf add https://github.com/team/shared-knowledge.git --name shared
 ```
 
 **Best for:**  Teams sharing multiple related knowledge units from one repo.
@@ -97,8 +97,8 @@ my-project/                   ← git repo root
 
 **Install:**
 ```bash
-knowledge-mcp add https://github.com/team/my-project.git --path knowledge/api-patterns --name api-patterns
-knowledge-mcp add https://github.com/team/my-project.git --path knowledge/db-migrations --name db-migrations
+knowledge-shelf add https://github.com/team/my-project.git --path knowledge/api-patterns --name api-patterns
+knowledge-shelf add https://github.com/team/my-project.git --path knowledge/db-migrations --name db-migrations
 ```
 
 **Best for:**  Project-specific knowledge that lives alongside the code.
@@ -121,7 +121,7 @@ team-docs/                    ← git repo root
 
 **Install:**
 ```bash
-knowledge-mcp add https://github.com/team/team-docs.git --name team-docs
+knowledge-shelf add https://github.com/team/team-docs.git --name team-docs
 ```
 
 The MCP server indexes each `.md` file individually (standalone mode).  Add YAML frontmatter for better search:
@@ -153,17 +153,17 @@ aliases: deploy-guide
 
 1. **Use `--name`** to give short, memorable names:
    ```bash
-   knowledge-mcp add https://long-url.git --path some/deep/path --name short-name
+   knowledge-shelf add https://long-url.git --path some/deep/path --name short-name
    ```
-2. **Run `knowledge-mcp update`** periodically to pull latest changes
+2. **Run `knowledge-shelf update`** periodically to pull latest changes
 3. **Pin critical sources** to prevent breaking changes:
    ```bash
-   knowledge-mcp pin cucumber v2.1.0
+   knowledge-shelf pin cucumber v2.1.0
    ```
-4. **Check `knowledge-mcp list`** to see what's installed and where it came from
+4. **Check `knowledge-shelf list`** to see what's installed and where it came from
 5. **Validate after install** to catch missing files:
    ```bash
-   knowledge-mcp validate cucumber
+   knowledge-shelf validate cucumber
    ```
 
 ---
@@ -217,7 +217,7 @@ For private/enterprise repos, ensure git credentials are configured:
 git config --global credential.helper manager
 
 # SSH key
-knowledge-mcp add git@github.com:team/private-knowledge.git
+knowledge-shelf add git@github.com:team/private-knowledge.git
 ```
 
 The CLI uses `git clone` under the hood, so any auth method git supports will work.

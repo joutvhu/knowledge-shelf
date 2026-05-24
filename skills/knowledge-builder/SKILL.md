@@ -5,7 +5,7 @@ description: "Build, scaffold, and maintain knowledge base units.  Also generate
 
 # Knowledge Builder
 
-Helps users create and maintain knowledge base units for the Knowledge Base MCP Server.
+Helps users create and maintain knowledge base units for the Knowledge Shelf.
 
 ## What This Skill Does
 
@@ -64,8 +64,8 @@ Based on user's needs, create/modify files in the knowledge directory.
 
 After creating/modifying, run validation:
 ```bash
-knowledge-mcp validate <name>
-knowledge-mcp info <name>
+knowledge-shelf validate <name>
+knowledge-shelf info <name>
 ```
 
 ## Quick Reference
@@ -169,7 +169,7 @@ Format: `{{UPPER_SNAKE_CASE}}` — declared in manifest `placeholders` field:
 3. Move .md files into the subfolder (as references or doc)
 4. Create `manifest.json` with metadata extracted from frontmatter
 5. Set `"doc"` field to the main .md file
-6. Validate: `knowledge-mcp validate <name>`
+6. Validate: `knowledge-shelf validate <name>`
 
 ## Important Rules
 
@@ -180,7 +180,7 @@ Format: `{{UPPER_SNAKE_CASE}}` — declared in manifest `placeholders` field:
 5. **Workflows reference files relative to knowledge folder root**
 6. **Always write integration guides** when modules need to be wired into existing code
 7. **Always read `references/writing-for-ai.md`** before creating content — follow its guidelines
-8. **Test with CLI** — `knowledge-mcp validate`, `knowledge-mcp info`
+8. **Test with CLI** — `knowledge-shelf validate`, `knowledge-shelf info`
 
 ## Validation Checklist
 

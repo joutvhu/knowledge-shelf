@@ -1,10 +1,10 @@
 {
-  "name": "knowledge-mcp",
+  "name": "knowledge-shelf",
   "version": "1.0.0",
-  "description": "Knowledge Base MCP Server — on-demand documentation, templates, and workflow automation for AI",
+  "description": "Knowledge Shelf MCP Server — on-demand documentation, templates, and workflow automation for AI",
   "type": "module",
   "bin": {
-    "knowledge-mcp": "./dist/index.js"
+    "knowledge-shelf": "./dist/index.js"
   },
   "main": "./dist/index.js",
   "scripts": {

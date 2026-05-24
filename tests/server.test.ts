@@ -1,5 +1,5 @@
 /**
- * Integration tests for Knowledge Base MCP Server tools.
+ * Integration tests for Knowledge Shelf MCP Server tools.
  *
  * Tests the tool implementations by calling the compiled server with
  * KNOWLEDGE_DIR pointing to test fixtures.
