@@ -171,6 +171,12 @@ aliases: auth-guide
 
 Manage knowledge sources from git repositories — like npm for documentation.
 
+Install globally to use the CLI directly without `npx`:
+
+```bash
+npm install -g knowledge-shelf
+```
+
 ```bash
 knowledge-shelf init                    # Initialize ~/.knowledge
 knowledge-shelf add <url>               # Install from git repo
