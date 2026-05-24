@@ -1,0 +1,13 @@
+{
+  "name": "setup",
+  "description": "Setup the project",
+  "inputs": {
+    "TARGET": {"required": true, "type": "path", "description": "Target directory"},
+    "NAME": {"required": false, "type": "string", "description": "Project name", "default": "my-app"}
+  },
+  "steps": [
+    {"action": "message", "text": "Setting up {{NAME}} in {{TARGET}}..."},
+    {"action": "mkdir", "path": "{{TARGET}}/src"},
+    {"action": "message", "text": "Done!"}
+  ]
+}

@@ -1,0 +1,42 @@
+# Node.js and npm
+node_modules/
+dist/
+*.tsbuildinfo
+
+# IDE-specific files
+# IntelliJ / Android Studio
+.idea/
+*.iml
+*.iws
+*.ipr
+.gradle/
+build/
+local.properties
+.cxx/
+.externalNativeBuild/
+
+# VS Code
+.vscode/
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# Other build artifacts
+out/
+target/
+*.log
+*.class
+
+# Test-related ignores
+tests/fixtures/sample-knowledge/.cache/
+
+# Environment variables
+.env
+.env.*

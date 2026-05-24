@@ -1,0 +1,44 @@
+{
+  "name": "knowledge-mcp",
+  "version": "1.0.0",
+  "description": "Knowledge Base MCP Server — on-demand documentation, templates, and workflow automation for AI",
+  "type": "module",
+  "bin": {
+    "knowledge-mcp": "./dist/index.js"
+  },
+  "main": "./dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsx src/index.ts",
+    "start": "node dist/index.js",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": [
+    "mcp",
+    "knowledge-base",
+    "documentation",
+    "ai",
+    "model-context-protocol"
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.0",
+    "vitest": "^4.1.7"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "files": [
+    "dist",
+    "docs",
+    "skills",
+    "README.md"
+  ]
+}
