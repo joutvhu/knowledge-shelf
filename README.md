@@ -1,8 +1,6 @@
 # Knowledge Shelf MCP Server
 
-A personal knowledge management system for AI coding assistants. Store documentation, code patterns, templates, and workflows locally — AI pulls only what it needs, when it needs it.
-
-Built on the [Model Context Protocol](https://modelcontextprotocol.io/).
+A personal knowledge management system for AI coding assistants, built as an [MCP](https://modelcontextprotocol.io/) server. Store documentation, code patterns, templates, and workflows locally — AI pulls only what it needs, when it needs it.
 
 ## The Problem
 
