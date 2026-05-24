@@ -23,6 +23,14 @@
     "ai",
     "model-context-protocol"
   ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/joutvhu/knowledge-shelf.git"
+  },
+  "homepage": "https://github.com/joutvhu/knowledge-shelf#readme",
+  "bugs": {
+    "url": "https://github.com/joutvhu/knowledge-shelf/issues"
+  },
   "license": "MIT",
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0"
