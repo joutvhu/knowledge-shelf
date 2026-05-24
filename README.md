@@ -1,18 +1,18 @@
 # Knowledge Base MCP Server
 
-A personal knowledge management system for AI coding assistants.  Store documentation, code patterns, templates, and workflows locally — AI pulls only what it needs, when it needs it.
+A personal knowledge management system for AI coding assistants. Store documentation, code patterns, templates, and workflows locally — AI pulls only what it needs, when it needs it.
 
 Built on the [Model Context Protocol](https://modelcontextprotocol.io/).
 
 ## The Problem
 
-AI assistants forget everything between sessions.  You explain the same patterns, paste the same boilerplate, re-describe the same internal APIs — over and over.
+AI assistants forget everything between sessions. You explain the same patterns, paste the same boilerplate, re-describe the same internal APIs — over and over.
 
-Steering files help, but they load everything into context upfront.  For large knowledge bases (library docs, code templates, workflow guides), this wastes context budget and slows responses.
+Steering files help, but they load everything into context upfront. For large knowledge bases (library docs, code templates, workflow guides), this wastes context budget and slows responses.
 
 ## The Solution
 
-`knowledge-mcp` gives AI **on-demand access** to your knowledge.  AI searches, finds what's relevant, and loads only that — like a developer searching internal docs.
+`knowledge-mcp` gives AI **on-demand access** to your knowledge. AI searches, finds what's relevant, and loads only that — like a developer searching internal docs.
 
 ```
 You: "Set up AG Grid testing for this project"
@@ -25,15 +25,15 @@ AI: [searches knowledge] → finds cucumber-boilerplate
 
 ## What You Can Store
 
-| Use Case | Example |
-|---|---|
-| **Library documentation** | Internal framework APIs, custom annotations, config options |
+| Use Case                   | Example                                                               |
+| -------------------------- | --------------------------------------------------------------------- |
+| **Library documentation**  | Internal framework APIs, custom annotations, config options           |
 | **Reusable code patterns** | Page objects, base classes, utility functions you use across projects |
-| **Project templates** | Boilerplate for new microservices, test projects, modules |
-| **Team conventions** | Coding standards, architecture decisions, naming rules |
-| **Workflow automation** | Multi-step scaffolding, project setup, code generation |
-| **Onboarding guides** | How-to docs for new team members (AI reads them too) |
-| **Vendor/tool docs** | Summarized docs for tools your team uses daily |
+| **Project templates**      | Boilerplate for new microservices, test projects, modules             |
+| **Team conventions**       | Coding standards, architecture decisions, naming rules                |
+| **Workflow automation**    | Multi-step scaffolding, project setup, code generation                |
+| **Onboarding guides**      | How-to docs for new team members (AI reads them too)                  |
+| **Vendor/tool docs**       | Summarized docs for tools your team uses daily                        |
 
 ## How It Works
 
@@ -54,26 +54,31 @@ AI: [searches knowledge] → finds cucumber-boilerplate
 
 AI accesses this through 7 MCP tools:
 
-| Tool | What AI does with it |
-|---|---|
-| `search_docs` | Find relevant knowledge by keyword |
-| `get_manifest` | Understand what a unit contains (modules, workflows) |
-| `get_doc` | Read main documentation |
-| `get_doc_section` | Read a specific section |
-| `get_resource` | Read code files, templates, configs |
-| `run_workflow` | Execute multi-step automation (scaffold, copy, run scripts) |
-| `list_docs` | Discover all available knowledge |
+| Tool              | What AI does with it                                        |
+| ----------------- | ----------------------------------------------------------- |
+| `search_docs`     | Find relevant knowledge by keyword                          |
+| `get_manifest`    | Understand what a unit contains (modules, workflows)        |
+| `get_doc`         | Read main documentation                                     |
+| `get_doc_section` | Read a specific section                                     |
+| `get_resource`    | Read code files, templates, configs                         |
+| `run_workflow`    | Execute multi-step automation (scaffold, copy, run scripts) |
+| `list_docs`       | Discover all available knowledge                            |
 
 ## Quick Start
 
+### Initialize your knowledge directory
+
 ```bash
-# 1. Initialize your knowledge directory
 npx knowledge-mcp init
+```
 
-# 2. Add knowledge from a git repo
+### Add knowledge from a git repo
+
+```bash
 npx knowledge-mcp add https://github.com/your-team/shared-knowledge.git --all
+```
 
-# 3. Configure your AI Assistant
+### Configure your AI Assistant
 
 Add the configuration below to your MCP client's configuration file. Here are the paths for some popular tools:
 
@@ -91,15 +96,22 @@ Add the configuration below to your MCP client's configuration file. Here are th
       "command": "npx",
       "args": ["-y", "knowledge-mcp"],
       "disabled": false,
-      "autoApprove": ["list_docs", "search_docs", "get_doc", "get_doc_section", "get_resource", "get_manifest"]
+      "autoApprove": [
+        "list_docs",
+        "search_docs",
+        "get_doc",
+        "get_doc_section",
+        "get_resource",
+        "get_manifest"
+      ]
     }
   }
 }
 ```
 
-That's it.  AI now has access to your knowledge.
+That's it. AI now has access to your knowledge.
 
-> **Note:** `run_workflow` is intentionally excluded from `autoApprove` because it has side effects (creates files, runs scripts).  Add it only if you trust all installed knowledge workflows.
+> **Note:** `run_workflow` is intentionally excluded from `autoApprove` because it has side effects (creates files, runs scripts). Add it only if you trust all installed knowledge workflows.
 
 To use a custom knowledge path:
 
@@ -110,7 +122,14 @@ To use a custom knowledge path:
       "command": "npx",
       "args": ["-y", "knowledge-mcp", "C:\\path\\to\\knowledge"],
       "disabled": false,
-      "autoApprove": ["list_docs", "search_docs", "get_doc", "get_doc_section", "get_resource", "get_manifest"]
+      "autoApprove": [
+        "list_docs",
+        "search_docs",
+        "get_doc",
+        "get_doc_section",
+        "get_resource",
+        "get_manifest"
+      ]
     }
   }
 }
@@ -120,7 +139,7 @@ To use a custom knowledge path:
 
 ### Manifest-based (for code, templates, workflows)
 
-Best for reusable code patterns and automation.  A folder with `manifest.json`:
+Best for reusable code patterns and automation. A folder with `manifest.json`:
 
 ```json
 {
@@ -136,7 +155,7 @@ Best for reusable code patterns and automation.  A folder with `manifest.json`:
 
 ### Standalone markdown (for documentation)
 
-Best for guides, conventions, API docs.  Just `.md` files with optional frontmatter:
+Best for guides, conventions, API docs. Just `.md` files with optional frontmatter:
 
 ```markdown
 ---
@@ -146,6 +165,7 @@ aliases: auth-guide
 ---
 
 # Authentication Guide
+
 ...
 ```
 
@@ -190,13 +210,14 @@ See [docs/publishing-knowledge.md](docs/publishing-knowledge.md) for repo layout
 
 ## Bundled Skill
 
-Includes the `knowledge-builder` skill for AI-assisted knowledge creation.  Copy to your AI agent's skills directory:
+Includes the `knowledge-builder` skill for AI-assisted knowledge creation. Copy to your AI agent's skills directory:
 
 ```bash
 cp -r node_modules/knowledge-mcp/skills/knowledge-builder <path-to-your-agent-skills>/
 ```
 
 The skill helps AI:
+
 - Scaffold new knowledge units from scratch
 - Generate reference docs from library source code
 - Convert loose docs into manifest-based units
@@ -204,12 +225,12 @@ The skill helps AI:
 
 ## Documentation
 
-| Doc | Content |
-|---|---|
-| [docs/cli-reference.md](docs/cli-reference.md) | All CLI commands, options, exit codes |
-| [docs/tools-reference.md](docs/tools-reference.md) | MCP tool parameters, responses, examples |
+| Doc                                                              | Content                                           |
+| ---------------------------------------------------------------- | ------------------------------------------------- |
+| [docs/cli-reference.md](docs/cli-reference.md)                   | All CLI commands, options, exit codes             |
+| [docs/tools-reference.md](docs/tools-reference.md)               | MCP tool parameters, responses, examples          |
 | [docs/knowledge-folder-guide.md](docs/knowledge-folder-guide.md) | Knowledge directory organization, manifest schema |
-| [docs/publishing-knowledge.md](docs/publishing-knowledge.md) | Git repo layouts, team sharing, private repos |
+| [docs/publishing-knowledge.md](docs/publishing-knowledge.md)     | Git repo layouts, team sharing, private repos     |
 
 ## Development
 
@@ -223,4 +244,4 @@ npm start           # Run compiled server
 
 ## License
 
-MIT
+[Apache-2.0](LICENSE)
