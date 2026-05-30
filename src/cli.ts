@@ -11,7 +11,7 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { execSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -107,34 +107,43 @@ function saveRegistry(knowledgeDir: string, registry: Registry): void {
 
 function gitClone(url: string, targetDir: string): void {
   assertGitAvailable();
-  execSync(`git clone --depth 1 "${url}" "${targetDir}"`, {
+  const result = spawnSync("git", ["clone", "--depth", "1", url, targetDir], {
     stdio: "pipe",
     encoding: "utf-8",
   });
+  if (result.status !== 0) {
+    throw new Error(result.stderr || "git clone failed");
+  }
 }
 
 function gitGetCommit(repoDir: string): string {
-  return execSync("git rev-parse --short HEAD", {
+  const result = spawnSync("git", ["rev-parse", "--short", "HEAD"], {
     cwd: repoDir,
     encoding: "utf-8",
-  }).trim();
+  });
+  return (result.stdout || "").trim();
 }
 
 function gitCloneSparse(url: string, targetDir: string, sparsePath: string): void {
   assertGitAvailable();
   // Try sparse checkout first (faster for large repos)
-  try {
-    execSync(`git clone --depth 1 --filter=blob:none --sparse "${url}" "${targetDir}"`, {
-      stdio: "pipe",
-      encoding: "utf-8",
-    });
-    execSync(`git sparse-checkout set "${sparsePath}"`, {
-      cwd: targetDir,
-      stdio: "pipe",
-      encoding: "utf-8",
-    });
-  } catch {
+  const cloneResult = spawnSync(
+    "git",
+    ["clone", "--depth", "1", "--filter=blob:none", "--sparse", url, targetDir],
+    { stdio: "pipe", encoding: "utf-8" }
+  );
+  if (cloneResult.status !== 0) {
     // Fallback to full shallow clone if sparse not supported
+    removeDirSync(targetDir);
+    gitClone(url, targetDir);
+    return;
+  }
+  const sparseResult = spawnSync("git", ["sparse-checkout", "set", sparsePath], {
+    cwd: targetDir,
+    stdio: "pipe",
+    encoding: "utf-8",
+  });
+  if (sparseResult.status !== 0) {
     removeDirSync(targetDir);
     gitClone(url, targetDir);
   }
@@ -143,14 +152,13 @@ function gitCloneSparse(url: string, targetDir: string, sparsePath: string): voi
 let _gitChecked = false;
 function assertGitAvailable(): void {
   if (_gitChecked) return;
-  try {
-    execSync("git --version", { stdio: "pipe", encoding: "utf-8" });
-    _gitChecked = true;
-  } catch {
+  const result = spawnSync("git", ["--version"], { stdio: "pipe", encoding: "utf-8" });
+  if (result.status !== 0) {
     console.error("Error: git is not installed or not in PATH.");
     console.error("Install git from https://git-scm.com/ and try again.");
     process.exit(1);
   }
+  _gitChecked = true;
 }
 
 function deriveNameFromUrl(url: string): string {
@@ -263,6 +271,7 @@ function cmdAdd(knowledgeDir: string, args: string[]): void {
     }
   } catch (e) {
     console.error(`Error: Failed to clone repository.\n${e}`);
+    removeDirSync(cloneTarget);
     process.exit(1);
   }
 
@@ -786,6 +795,7 @@ function walkDir(dir: string, callback: (filePath: string) => void): void {
   if (!fs.existsSync(dir)) return;
   const entries = fs.readdirSync(dir, { withFileTypes: true });
   for (const entry of entries) {
+    if (entry.name === ".git" || entry.name === ".cache" || entry.name === "node_modules") continue;
     const fullPath = path.join(dir, entry.name);
     if (entry.isDirectory()) {
       walkDir(fullPath, callback);
@@ -1087,26 +1097,34 @@ function cmdExport(knowledgeDir: string, args: string[]): void {
   console.log(`Exporting '${name}' to ${outputPath}...`);
 
   try {
+    let result: ReturnType<typeof spawnSync>;
     if (format === "tar") {
-      // Use tar (available on Windows via Git Bash or built-in tar)
-      execSync(`tar -czf "${outputPath}" -C "${knowledgeDir}" "${name}"`, {
+      result = spawnSync("tar", ["-czf", outputPath, "-C", knowledgeDir, name], {
         stdio: "pipe",
         encoding: "utf-8",
       });
     } else {
       // Use PowerShell Compress-Archive on Windows, zip on Unix
       if (process.platform === "win32") {
-        execSync(
-          `powershell -NoProfile -Command "Compress-Archive -Path '${unitDir}\\*' -DestinationPath '${outputPath}' -Force"`,
+        const escapedUnitDir = unitDir.replace(/'/g, "''");
+        const escapedOutputPath = outputPath.replace(/'/g, "''");
+        result = spawnSync(
+          "powershell",
+          ["-NoProfile", "-Command",
+            `Compress-Archive -Path '${escapedUnitDir}\\*' -DestinationPath '${escapedOutputPath}' -Force`],
           { stdio: "pipe", encoding: "utf-8" }
         );
       } else {
-        execSync(`zip -r "${outputPath}" "${name}"`, {
+        result = spawnSync("zip", ["-r", outputPath, name], {
           cwd: knowledgeDir,
           stdio: "pipe",
           encoding: "utf-8",
         });
       }
+    }
+
+    if (result.status !== 0) {
+      throw new Error(String(result.stderr || "archive command failed"));
     }
 
     const stat = fs.statSync(outputPath);

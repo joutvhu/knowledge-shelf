@@ -23,7 +23,7 @@ import {
 } from "@modelcontextprotocol/sdk/types.js";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { execSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 
 // ---------------------------------------------------------------------------
 // Configuration
@@ -136,6 +136,7 @@ function walkDir(dir: string, callback: (filePath: string) => void): void {
   if (!fs.existsSync(dir)) return;
   const entries = fs.readdirSync(dir, { withFileTypes: true });
   for (const entry of entries) {
+    if (entry.name === ".git" || entry.name === ".cache" || entry.name === "node_modules") continue;
     const fullPath = path.join(dir, entry.name);
     if (entry.isDirectory()) {
       walkDir(fullPath, callback);
@@ -169,7 +170,7 @@ function parseFrontmatter(content: string): { metadata: Record<string, unknown>;
       const frontmatterText = parts[1].trim();
       body = parts.slice(2).join("---").trim();
 
-      for (const line of frontmatterText.split("\n")) {
+      for (const line of frontmatterText.split(/\r?\n/)) {
         const trimmed = line.trim();
         const colonIdx = trimmed.indexOf(":");
         if (colonIdx > 0) {
@@ -190,7 +191,7 @@ function parseFrontmatter(content: string): { metadata: Record<string, unknown>;
 
 function extractTitle(metadata: Record<string, unknown>, body: string, filename: string): string {
   if (metadata.title && typeof metadata.title === "string") return metadata.title;
-  for (const line of body.split("\n")) {
+  for (const line of body.split(/\r?\n/)) {
     if (line.startsWith("# ")) return line.slice(2).trim();
   }
   return path.basename(filename, ".md").replace(/[-_]/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
@@ -281,7 +282,7 @@ function scanDocuments(): DocEntry[] {
 
     let description = typeof metadata.description === "string" ? metadata.description : "";
     if (!description) {
-      for (const line of body.split("\n")) {
+      for (const line of body.split(/\r?\n/)) {
         const stripped = line.trim();
         if (stripped && !stripped.startsWith("#")) {
           description = stripped.slice(0, 200);
@@ -374,6 +375,30 @@ function findResourceCaseInsensitive(name: string): string | null {
 }
 
 // ---------------------------------------------------------------------------
+// Security Helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * Resolves a user-supplied name/path relative to KNOWLEDGE_DIR and verifies
+ * the result stays inside KNOWLEDGE_DIR. Returns the resolved absolute path,
+ * or null if the path escapes the knowledge directory.
+ * Uses realpathSync to follow symlinks and prevent symlink traversal attacks.
+ */
+function resolveInsideKnowledgeDir(name: string): string | null {
+  try {
+    const candidate = path.resolve(KNOWLEDGE_DIR, name);
+    const canonicalBase = fs.realpathSync(KNOWLEDGE_DIR);
+    const canonical = fs.existsSync(candidate) ? fs.realpathSync(candidate) : candidate;
+    if (canonical !== canonicalBase && !canonical.startsWith(canonicalBase + path.sep)) {
+      return null;
+    }
+    return canonical;
+  } catch {
+    return null;
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Workflow Execution
 // ---------------------------------------------------------------------------
 
@@ -427,6 +452,14 @@ function executeRunStep(
 
   const scriptPath = path.join(folder, scriptRel);
 
+  // Ensure script is inside the workflow's folder — prevent ../traversal via workflow JSON
+  const resolvedScript = path.resolve(scriptPath);
+  const resolvedFolder = path.resolve(folder);
+  if (!resolvedScript.startsWith(resolvedFolder + path.sep) && resolvedScript !== resolvedFolder) {
+    results.errors.push(`Script path '${scriptRel}' is outside the knowledge unit folder.`);
+    return;
+  }
+
   if (!fs.existsSync(scriptPath)) {
     results.errors.push(`Script not found: ${scriptRel}`);
     return;
@@ -440,31 +473,34 @@ function executeRunStep(
       ".py": "python",
       ".js": "node",
       ".ps1": "pwsh",
-      ".cmd": "cmd /c",
       ".sh": "bash",
     };
     interpreter = interpreterMap[ext] || "node";
   }
 
-  const cmd = `${interpreter} "${scriptPath}" ${args.map((a) => `"${a}"`).join(" ")}`;
+  // Whitelist allowed interpreters to prevent injection via the interpreter field
+  const allowedInterpreters = new Set(["python", "python3", "node", "pwsh", "powershell", "bash", "sh"]);
+  if (!allowedInterpreters.has(interpreter.toLowerCase())) {
+    results.errors.push(`Interpreter '${interpreter}' is not allowed.`);
+    return;
+  }
 
-  try {
-    const stdout = execSync(cmd, {
-      cwd: folder,
-      timeout: 120_000,
-      encoding: "utf-8",
-      stdio: ["pipe", "pipe", "pipe"],
-    });
-    results.scripts_run.push({ script: scriptRel, exit_code: 0, stdout: stdout.slice(0, 2000), stderr: "" });
-  } catch (err: unknown) {
-    const e = err as { status?: number; stdout?: string; stderr?: string; message?: string };
-    results.scripts_run.push({
-      script: scriptRel,
-      exit_code: e.status ?? 1,
-      stdout: (e.stdout || "").slice(0, 2000),
-      stderr: (e.stderr || "").slice(0, 1000),
-    });
-    results.errors.push(`Script '${scriptRel}' exited with code ${e.status ?? 1}: ${(e.stderr || "").slice(0, 200)}`);
+  // Use spawnSync with array args — never shell: true — to prevent command injection
+  const result = spawnSync(interpreter, [scriptPath, ...args], {
+    cwd: folder,
+    timeout: 120_000,
+    encoding: "utf-8",
+    stdio: ["pipe", "pipe", "pipe"],
+  });
+
+  const stdout = (result.stdout || "").slice(0, 2000);
+  const stderr = (result.stderr || "").slice(0, 1000);
+  const exitCode = result.status ?? 1;
+
+  results.scripts_run.push({ script: scriptRel, exit_code: exitCode, stdout, stderr });
+
+  if (exitCode !== 0) {
+    results.errors.push(`Script '${scriptRel}' exited with code ${exitCode}: ${stderr.slice(0, 200)}`);
   }
 }
 
@@ -510,6 +546,12 @@ function toolSearchDocs(query: string, maxResults = 10): string {
 }
 
 function toolGetDoc(name: string): string {
+  // Validate path stays inside KNOWLEDGE_DIR
+  const resolvedFolder = resolveInsideKnowledgeDir(name);
+  if (!resolvedFolder) {
+    return JSON.stringify({ error: "Access denied. Path outside knowledge directory." }, null, 2);
+  }
+
   // Try as manifest-based folder first
   const folder = path.join(KNOWLEDGE_DIR, name);
   if (fs.existsSync(folder) && fs.statSync(folder).isDirectory()) {
@@ -613,10 +655,10 @@ function toolGetResource(name: string): string {
   }
 
   // Security check — ensure path is inside KNOWLEDGE_DIR
-  const resolved = path.resolve(filePath);
-  const resolvedBase = path.resolve(KNOWLEDGE_DIR);
+  const resolved = fs.existsSync(filePath) ? fs.realpathSync(filePath) : path.resolve(filePath);
+  const resolvedBase = fs.realpathSync(KNOWLEDGE_DIR);
   if (!resolved.startsWith(resolvedBase + path.sep) && resolved !== resolvedBase) {
-    return JSON.stringify({ error: "Access denied.  Path outside knowledge directory." }, null, 2);
+    return JSON.stringify({ error: "Access denied. Path outside knowledge directory." }, null, 2);
   }
 
   try {
@@ -630,6 +672,11 @@ function toolGetResource(name: string): string {
 }
 
 function toolGetManifest(name: string): string {
+  // Validate path stays inside KNOWLEDGE_DIR
+  if (!resolveInsideKnowledgeDir(name)) {
+    return JSON.stringify({ error: "Access denied. Path outside knowledge directory." }, null, 2);
+  }
+
   const folder = path.join(KNOWLEDGE_DIR, name);
 
   if (!fs.existsSync(folder) || !fs.statSync(folder).isDirectory()) {
@@ -646,6 +693,11 @@ function toolGetManifest(name: string): string {
 }
 
 function toolRunWorkflow(name: string, workflow: string, inputsJson: string): string {
+  // Validate path stays inside KNOWLEDGE_DIR
+  if (!resolveInsideKnowledgeDir(name)) {
+    return JSON.stringify({ error: "Access denied. Path outside knowledge directory." }, null, 2);
+  }
+
   const folder = path.join(KNOWLEDGE_DIR, name);
   if (!fs.existsSync(folder) || !fs.statSync(folder).isDirectory()) {
     return JSON.stringify({ error: `Knowledge folder '${name}' not found.` }, null, 2);

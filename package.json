@@ -1,6 +1,6 @@
 {
   "name": "knowledge-shelf",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Knowledge Shelf MCP Server — on-demand documentation, templates, and workflow automation for AI",
   "type": "module",
   "bin": {
@@ -31,7 +31,7 @@
   "bugs": {
     "url": "https://github.com/joutvhu/knowledge-shelf/issues"
   },
-  "license": "MIT",
+  "license": "Apache-2.0",
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0"
   },

@@ -1,5 +1,27 @@
 # Changelog
 
+## [1.0.1] - 2026-05-30
+
+### Security
+- Fixed path traversal vulnerability in `get_doc`, `get_manifest`, and `run_workflow` — all tool inputs are now validated to stay inside the knowledge directory
+- Fixed command injection in workflow `run` steps — replaced `execSync` string concatenation with `spawnSync` array args (shell is never invoked)
+- Fixed command injection in CLI git operations (`add`, `update`) — replaced `execSync` string interpolation with `spawnSync` array args
+- Fixed PowerShell command injection in `export` on Windows — single quotes in paths are now escaped with `''`
+- Fixed symlink traversal in `get_resource`, `get_doc`, `get_manifest`, `run_workflow` — `realpathSync` is used to resolve symlinks before boundary check, and the resolved canonical path is returned to callers
+- Fixed script path traversal in workflow `run` steps — script path is validated to stay inside the knowledge unit folder before execution
+- Fixed missing cleanup of temporary clone directory on `add` failure
+- Added interpreter whitelist for workflow scripts (`python`, `python3`, `node`, `pwsh`, `powershell`, `bash`, `sh`)
+
+### Performance
+- `walkDir` in both MCP server and CLI now skips `.git`, `.cache`, and `node_modules` directories
+
+### Fixed
+- Frontmatter parsing in MCP server now uses `\r?\n` split for consistent behavior on Windows (CRLF line endings)
+
+### Changed
+- Added MCP server `instructions` field to guide AI on recommended tool usage flow
+- Added `repository`, `homepage`, and `bugs` fields to `package.json` for npm registry display
+
 ## [1.0.0] - 2025-05-24
 
 Initial release of Knowledge Shelf — a personal knowledge management system for AI coding assistants, built as an MCP server.

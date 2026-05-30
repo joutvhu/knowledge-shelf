@@ -33,6 +33,7 @@ out/
 target/
 *.log
 *.class
+logs/
 
 # Test-related ignores
 tests/fixtures/sample-knowledge/.cache/
