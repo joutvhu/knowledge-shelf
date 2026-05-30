@@ -256,6 +256,31 @@ Deletes the directory and removes the entry from `.registry.json`.  If the unit 
 |---|---|
 | `KNOWLEDGE_DIR` | Override knowledge directory path (priority 2, after --dir) |
 
+### How to Set KNOWLEDGE_DIR Permanently
+
+To avoid passing the `--dir` flag on every CLI execution, you can configure the environment variable persistently:
+
+#### macOS & Linux
+Append the following line to your shell configuration (e.g., `~/.zshrc` or `~/.bashrc`):
+```bash
+export KNOWLEDGE_DIR="$HOME/.kiro/knowledge"
+```
+Then reload the configuration: `source ~/.zshrc`
+
+#### Windows (PowerShell)
+Execute this command in PowerShell to set a user-level environment variable:
+```powershell
+[Environment]::SetEnvironmentVariable("KNOWLEDGE_DIR", "$HOME\.kiro\knowledge", "User")
+```
+
+#### Windows (GUI)
+1. Search for **"Environment Variables"** in Windows Search and select **"Edit the system environment variables"**.
+2. Click **"Environment Variables..."**.
+3. Under **"User variables"**, click **"New..."** and enter:
+   - **Variable name:** `KNOWLEDGE_DIR`
+   - **Variable value:** `C:\Users\YourUsername\.kiro\knowledge`
+4. Click **OK** to save. Restart your terminal for changes to take effect.
+
 ---
 
 ## Exit Codes
