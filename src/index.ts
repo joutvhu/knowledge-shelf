@@ -814,7 +814,7 @@ function toolRunWorkflow(name: string, workflow: string, inputsArg: unknown): st
 const server = new McpServer(
   {
     name: 'knowledge-shelf',
-    version: '1.0.1'
+    version: '1.0.2'
   },
   {
     capabilities: {tools: {}},

@@ -1,5 +1,28 @@
 # Changelog
 
+## [1.0.2] - 2026-05-31
+
+### Refactored
+- Migrated MCP server setup from the deprecated `Server` to the recommended `McpServer` API (`@modelcontextprotocol/sdk/server/mcp.js`).
+- Migrated tool registrations from manual `setRequestHandler` + `ListToolsRequestSchema`/`CallToolRequestSchema` to `server.registerTool`.
+- Replaced plain JSON Schema objects with Zod-based type-safe input schemas (`z.object()`) for all tools — enables automatic argument validation by the SDK.
+- Added `zod` as a runtime dependency.
+
+### Fixed
+- Fixed `run_workflow` `inputs` parameter type: changed from `string` (requiring manual `JSON.stringify` by the caller) to `object` (`z.record(z.string(), z.string())`), matching MCP conventions. Updated `toolRunWorkflow` to accept `unknown` and coerce values to string instead of calling `JSON.parse`.
+- Fixed `list_docs` tool description which had been incorrectly set to a context-gatherer agent description unrelated to the tool's purpose.
+
+### Changed
+- Added MCP server `instructions` field with guidance on when and how to use each tool, recommended call order (`search_docs` → `get_manifest` → `get_doc`/`get_doc_section`/`get_resource` → `run_workflow`), and the two knowledge formats.
+- Improved all tool descriptions with usage guidance, cross-tool hints, and path format examples:
+  - `search_docs`: clarified it should be called first before any task; documented scoring order.
+  - `get_doc`: added hint to prefer `get_doc_section` for large documents.
+  - `get_doc_section`: noted context efficiency and partial heading match support.
+  - `get_resource`: added "use `get_manifest` first to discover paths" and path format example.
+  - `get_manifest`: added "always call before `run_workflow`" guidance.
+  - `run_workflow`: noted side effects (file creation, script execution).
+- Improved all tool parameter descriptions with path format clarifications (relative to knowledge directory root) and concrete examples.
+
 ## [1.0.1] - 2026-05-30
 
 ### Security
@@ -19,7 +42,6 @@
 - Frontmatter parsing in MCP server now uses `\r?\n` split for consistent behavior on Windows (CRLF line endings)
 
 ### Changed
-- Added MCP server `instructions` field to guide AI on recommended tool usage flow
 - Added `repository`, `homepage`, and `bugs` fields to `package.json` for npm registry display
 
 ## [1.0.0] - 2025-05-24
