@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Test helper — calls knowledge-base tool functions directly.
+ * Test helper — calls knowledge-shelf tool functions directly.
  *
  * Usage: node tool-helper.mjs <toolName> [--arg value ...]
  *
