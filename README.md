@@ -216,10 +216,10 @@ See [docs/publishing-knowledge.md](docs/publishing-knowledge.md) for repo layout
 
 ## Bundled Skill
 
-Includes the `knowledge-builder` skill for AI-assisted knowledge creation. Copy to your AI agent's skills directory:
+Includes the `knowledge-builder` skill for AI-assisted knowledge creation. Install it directly using the CLI (defaults to the current directory if path is omitted):
 
 ```bash
-cp -r node_modules/knowledge-shelf/skills/knowledge-builder <path-to-your-agent-skills>/
+knowledge-shelf install-skill [path-to-your-agent-skills]
 ```
 
 The skill helps AI:

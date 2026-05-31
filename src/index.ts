@@ -814,7 +814,7 @@ function toolRunWorkflow(name: string, workflow: string, inputsArg: unknown): st
 const server = new McpServer(
   {
     name: 'knowledge-shelf',
-    version: '1.0.2'
+    version: '1.0.3'
   },
   {
     capabilities: {tools: {}},
@@ -963,7 +963,7 @@ server.registerTool(
 // Entry Point
 // ---------------------------------------------------------------------------
 
-const CLI_COMMANDS = new Set(['add', 'info', 'search', 'list', 'ls', 'update', 'up', 'pin', 'unpin', 'export', 'remove', 'rm', 'init', 'validate', 'help', '--help', '-h']);
+const CLI_COMMANDS = new Set(['add', 'info', 'search', 'list', 'ls', 'update', 'up', 'pin', 'unpin', 'export', 'install-skill', 'remove', 'rm', 'init', 'validate', 'help', '--help', '-h']);
 
 async function main() {
   // Detect CLI mode: if first non-path arg is a known command, run CLI

@@ -1,6 +1,6 @@
 {
   "name": "knowledge-shelf",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "description": "Knowledge Shelf MCP Server — on-demand documentation, templates, and workflow automation for AI",
   "type": "module",
   "bin": {

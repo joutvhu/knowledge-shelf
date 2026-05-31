@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.3] - 2026-05-31
+
+### Added
+- Added new `install-skill` CLI command to easily install the bundled `knowledge-builder` skill directly into an agent's skills directory.
+- Enabled `install-skill` to automatically default to the current working directory (`.`) if no path argument is provided.
+- Added comprehensive integration tests in `tests/cli.test.ts` to verify programmatic copying and overwriting of bundled skills.
+
 ## [1.0.2] - 2026-05-31
 
 ### Refactored

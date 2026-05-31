@@ -310,4 +310,34 @@ describe("CLI Commands", () => {
       expect(content).toContain(".cache/");
     });
   });
+
+  describe("install-skill", () => {
+    it("should install the bundled skill to the target directory", () => {
+      const skillsDir = path.join(tmpDir, "my-skills");
+      const result = execSync(`node "${CLI_PATH}" install-skill "${skillsDir}"`, {
+        encoding: "utf-8",
+        timeout: 10_000,
+      }).trim();
+
+      expect(result).toContain("Successfully installed bundled skill");
+      expect(fs.existsSync(path.join(skillsDir, "knowledge-builder", "SKILL.md"))).toBe(true);
+    });
+
+    it("should handle overwriting if skill is already installed", () => {
+      const skillsDir = path.join(tmpDir, "my-skills");
+      // Run once
+      execSync(`node "${CLI_PATH}" install-skill "${skillsDir}"`, { timeout: 10_000 });
+      
+      // Run again and verify it overwrites successfully
+      const result = execSync(`node "${CLI_PATH}" install-skill "${skillsDir}"`, {
+        encoding: "utf-8",
+        timeout: 10_000,
+      }).trim();
+
+      expect(result).toContain("already installed");
+      expect(result).toContain("Overwriting");
+      expect(result).toContain("Successfully installed bundled skill");
+      expect(fs.existsSync(path.join(skillsDir, "knowledge-builder", "SKILL.md"))).toBe(true);
+    });
+  });
 });
