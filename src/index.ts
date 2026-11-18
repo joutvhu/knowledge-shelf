@@ -39,7 +39,11 @@ async function main() {
   let cliDir: string | undefined;
   const rest: string[] = [];
   for (let i = 0; i < rawArgs.length; i++) {
-    if (rawArgs[i] === '--dir' && i + 1 < rawArgs.length) {
+    if (rawArgs[i] === '--dir') {
+      if (i + 1 >= rawArgs.length || rawArgs[i + 1].startsWith('-')) {
+        console.error('Error: --dir requires a directory path.');
+        process.exit(1);
+      }
       cliDir = rawArgs[++i];
     } else {
       rest.push(rawArgs[i]);

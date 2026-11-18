@@ -21,6 +21,7 @@ import * as path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import {
+  findManifestFolders,
   getPackageVersion,
   resolveInsideDir,
   resolveKnowledgeDir,
@@ -295,14 +296,28 @@ function cmdAdd(knowledgeDir: string, args: string[]): void {
   let addAll = false;
 
   for (let i = 0; i < args.length; i++) {
-    if (args[i] === '--path' && i + 1 < args.length) {
+    if (args[i] === '--path') {
+      if (i + 1 >= args.length || args[i + 1].startsWith('-')) {
+        console.error('Error: --path requires a subfolder argument.');
+        process.exit(1);
+      }
       subPath = args[++i];
-    } else if (args[i] === '--name' && i + 1 < args.length) {
+    } else if (args[i] === '--name') {
+      if (i + 1 >= args.length || args[i + 1].startsWith('-')) {
+        console.error('Error: --name requires an alias argument.');
+        process.exit(1);
+      }
       customName = args[++i];
     } else if (args[i] === '--all') {
       addAll = true;
+    } else if (args[i].startsWith('-')) {
+      console.error(`Error: Unknown option '${args[i]}' for 'add'.`);
+      process.exit(1);
     } else if (!url) {
       url = args[i];
+    } else {
+      console.error(`Error: Unexpected argument '${args[i]}'.`);
+      process.exit(1);
     }
   }
 
@@ -342,24 +357,19 @@ function cmdAdd(knowledgeDir: string, args: string[]): void {
       process.exit(1);
     }
 
-    const entries = fs.readdirSync(baseDir, { withFileTypes: true });
+    const manifestFolders = findManifestFolders(baseDir).filter((f) => path.resolve(f) !== path.resolve(baseDir));
     const registry = loadRegistry(knowledgeDir);
     let installed = 0;
     let skipped = 0;
 
-    for (const entry of entries) {
-      if (!entry.isDirectory()) continue;
-      const manifestPath = path.join(baseDir, entry.name, 'manifest.json');
-      if (!fs.existsSync(manifestPath)) continue;
-
-      const unitName = entry.name;
+    for (const sourceDir of manifestFolders) {
+      const unitName = path.basename(sourceDir);
       if (registry.sources.find((s) => s.name === unitName)) {
         console.log(`  Skipping '${unitName}' (already installed)`);
         skipped++;
         continue;
       }
 
-      const sourceDir = path.join(baseDir, entry.name);
       const destDir = resolveSafeUnitDir(knowledgeDir, unitName);
       if (fs.existsSync(destDir)) {
         console.log(`  Skipping '${unitName}' (directory exists)`);
@@ -368,7 +378,7 @@ function cmdAdd(knowledgeDir: string, args: string[]): void {
       }
 
       copyDirSync(sourceDir, destDir);
-      const sourcePath = subPath ? `${subPath}/${entry.name}` : entry.name;
+      const sourcePath = path.relative(cloneTarget, sourceDir).replace(/\\/g, '/');
       const now = new Date().toISOString();
       registry.sources.push({
         name: unitName,
@@ -491,7 +501,11 @@ function cmdUpdate(knowledgeDir: string, args: string[]): void {
 
     try {
       removeDirSync(cloneTarget);
-      gitClone(source.url, cloneTarget);
+      if (source.path) {
+        gitCloneSparse(source.url, cloneTarget, source.path);
+      } else {
+        gitClone(source.url, cloneTarget);
+      }
 
       const newCommit = gitGetCommit(cloneTarget);
 
@@ -666,22 +680,31 @@ function cmdValidate(knowledgeDir: string, args: string[]): void {
     resolveSafeUnitDir(knowledgeDir, targetName);
   }
 
-  const entries = fs.readdirSync(knowledgeDir, { withFileTypes: true });
-  const units = entries.filter((e) => e.isDirectory() && e.name !== '.cache').map((e) => e.name);
-
-  const toValidate = targetName ? units.filter((u) => u === targetName) : units;
+  const allManifestFolders = findManifestFolders(knowledgeDir);
+  const toValidate = targetName
+    ? allManifestFolders.filter((folder) => {
+        const rel = path.relative(knowledgeDir, folder).replace(/\\/g, '/');
+        return rel === targetName.replace(/\\/g, '/') || path.basename(folder) === targetName;
+      })
+    : allManifestFolders;
 
   if (targetName && toValidate.length === 0) {
-    console.error(`Error: '${targetName}' not found.`);
-    process.exit(1);
+    const targetDir = path.join(knowledgeDir, targetName);
+    if (!fs.existsSync(targetDir)) {
+      console.error(`Error: '${targetName}' not found.`);
+      process.exit(1);
+    }
+    console.log('No manifest-based units to validate.');
+    return;
   }
 
   let validatedCount = 0;
   let totalErrors = 0;
   let totalWarnings = 0;
 
-  for (const unitName of toValidate) {
-    const unitDir = path.join(knowledgeDir, unitName);
+  for (const unitDir of toValidate) {
+    const unitName = path.basename(unitDir);
+    const displayUnit = path.relative(knowledgeDir, unitDir).replace(/\\/g, '/');
     const manifestPath = path.join(unitDir, 'manifest.json');
 
     if (!fs.existsSync(manifestPath)) {
@@ -689,7 +712,7 @@ function cmdValidate(knowledgeDir: string, args: string[]): void {
     }
 
     validatedCount++;
-    console.log(`Validating '${unitName}'...`);
+    console.log(`Validating '${displayUnit}'...`);
     const errors: string[] = [];
     const warnings: string[] = [];
 
@@ -698,7 +721,7 @@ function cmdValidate(knowledgeDir: string, args: string[]): void {
       manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf-8'));
     } catch (e) {
       errors.push(`manifest.json is invalid JSON: ${e}`);
-      printValidationResults(unitName, errors, warnings);
+      printValidationResults(displayUnit, errors, warnings);
       totalErrors += errors.length;
       continue;
     }
@@ -806,7 +829,7 @@ function cmdValidate(knowledgeDir: string, args: string[]): void {
       }
     }
 
-    printValidationResults(unitName, errors, warnings);
+    printValidationResults(displayUnit, errors, warnings);
     totalErrors += errors.length;
     totalWarnings += warnings.length;
   }
@@ -1121,7 +1144,11 @@ export function runCli(rawArgs: string[]): void {
   const args: string[] = [];
 
   for (let i = 0; i < rawArgs.length; i++) {
-    if (rawArgs[i] === '--dir' && i + 1 < rawArgs.length) {
+    if (rawArgs[i] === '--dir') {
+      if (i + 1 >= rawArgs.length || rawArgs[i + 1].startsWith('-')) {
+        console.error('Error: --dir requires a directory path.');
+        process.exit(1);
+      }
       cliDir = rawArgs[++i];
     } else {
       args.push(rawArgs[i]);

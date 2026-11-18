@@ -53,13 +53,20 @@ describe('CLI Commands', () => {
       expect(out).toContain(tmpDir);
     });
 
-    it('should reject unknown flags with exit code 1 instead of starting MCP server', () => {
+    it('should reject unknown flags or missing --dir value with exit code 1', () => {
       const res = spawnSync(process.execPath, [CLI_PATH, '--unknown-flag'], {
         encoding: 'utf-8',
         timeout: 5_000,
       });
       expect(res.status).toBe(1);
       expect(res.stderr).toContain('Unknown command');
+
+      const missingDir = spawnSync(process.execPath, [CLI_PATH, 'list', '--dir'], {
+        encoding: 'utf-8',
+        timeout: 5_000,
+      });
+      expect(missingDir.status).toBe(1);
+      expect(missingDir.stderr).toContain('--dir requires a directory path');
     });
   });
 

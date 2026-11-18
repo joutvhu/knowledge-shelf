@@ -427,17 +427,51 @@ describe('Security, Binary Detection & Script Execution Edge Cases', () => {
       );
 
       if (process.platform === 'win32') {
-        fs.writeFileSync(path.join(evilUnit, 'scripts', 'hello.cmd'), '@echo off\r\necho CMD_OK:%1\r\n', 'utf-8');
+        fs.writeFileSync(
+          path.join(evilUnit, 'scripts', 'hello space.cmd'),
+          '@echo off\r\necho CMD_OK:%~1\r\n',
+          'utf-8'
+        );
         fs.writeFileSync(
           path.join(evilUnit, 'workflows', 'run-cmd.json'),
           JSON.stringify({
             name: 'run-cmd',
-            description: 'Runs Windows cmd script',
-            steps: [{ action: 'run', script: 'scripts/hello.cmd', args: ['win'] }],
+            description: 'Runs Windows cmd script with spaces in path and arg',
+            steps: [{ action: 'run', script: 'scripts/hello space.cmd', args: ['win value'] }],
           }),
           'utf-8'
         );
       }
+
+      // Binary asset inside unit + workflow to copy it and workflow trying to escape target root
+      const binaryBytes = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x00, 0xff, 0xfe, 0xfd]);
+      fs.writeFileSync(path.join(evilUnit, 'logo.bin'), binaryBytes);
+      fs.writeFileSync(
+        path.join(evilUnit, 'workflows', 'copy-binary.json'),
+        JSON.stringify({
+          name: 'copy-binary',
+          description: 'Copies a binary file intact',
+          inputs: { TARGET: { required: true } },
+          steps: [{ action: 'copy', source: 'logo.bin', target: '{{TARGET}}/assets/logo.bin' }],
+        }),
+        'utf-8'
+      );
+      fs.writeFileSync(
+        path.join(evilUnit, 'workflows', 'escape-target.json'),
+        JSON.stringify({
+          name: 'escape-target',
+          description: 'Attempts target traversal out of TARGET',
+          inputs: { TARGET: { required: true } },
+          steps: [{ action: 'copy', source: 'logo.bin', target: '{{TARGET}}/../../escaped.bin' }],
+        }),
+        'utf-8'
+      );
+
+      // Nested standalone docs with same filename in two folders
+      fs.mkdirSync(path.join(tmpKnowDir, 'guides'), { recursive: true });
+      fs.mkdirSync(path.join(tmpKnowDir, 'other'), { recursive: true });
+      fs.writeFileSync(path.join(tmpKnowDir, 'guides', 'deploy.md'), '# Guides Deploy Doc', 'utf-8');
+      fs.writeFileSync(path.join(tmpKnowDir, 'other', 'deploy.md'), '# Other Deploy Doc', 'utf-8');
 
       // 2. Binary file
       fs.writeFileSync(path.join(tmpKnowDir, 'image.bin'), Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x00, 0x0d, 0x0a]));
@@ -506,8 +540,34 @@ describe('Security, Binary Detection & Script Execution Edge Cases', () => {
           expect(cmdRes.isError).toBeFalsy();
           const cmdJson = JSON.parse(getText(cmdRes));
           expect(cmdJson.scripts_run[0].exit_code).toBe(0);
-          expect(cmdJson.scripts_run[0].stdout).toContain('CMD_OK:win');
+          expect(cmdJson.scripts_run[0].stdout).toContain('CMD_OK:win value');
         }
+
+        // Binary copy preserves exact bytes without UTF-8 corruption
+        const outDir = path.join(tmpKnowDir, 'out-target');
+        const binCopyRes = await client.callTool({
+          name: 'run_workflow',
+          arguments: { name: 'evil-unit', workflow: 'copy-binary', inputs: { TARGET: outDir } },
+        });
+        expect(binCopyRes.isError).toBeFalsy();
+        const copiedBytes = fs.readFileSync(path.join(outDir, 'assets', 'logo.bin'));
+        expect(copiedBytes.equals(binaryBytes)).toBe(true);
+
+        // Target path traversal out of {{TARGET}} is rejected
+        const targetEscapeRes = await client.callTool({
+          name: 'run_workflow',
+          arguments: { name: 'evil-unit', workflow: 'escape-target', inputs: { TARGET: outDir } },
+        });
+        expect(targetEscapeRes.isError).toBe(true);
+        expect(getText(targetEscapeRes)).toContain('escapes base directory');
+
+        // Subfolder doc lookup without .md resolves to exact subfolder, not sibling with same basename
+        const subDocRes = await client.callTool({
+          name: 'get_doc',
+          arguments: { name: 'other/deploy' },
+        });
+        expect(subDocRes.isError).toBeFalsy();
+        expect(getText(subDocRes)).toContain('Other Deploy Doc');
 
         // Binary resource detected
         const binRes = await client.callTool({ name: 'get_resource', arguments: { name: 'image.bin' } });

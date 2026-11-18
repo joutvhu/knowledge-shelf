@@ -37,6 +37,7 @@ logs/
 
 # Test-related ignores
 tests/fixtures/sample-knowledge/.cache/
+.jbeval/
 
 # Environment variables
 .env

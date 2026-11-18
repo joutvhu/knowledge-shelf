@@ -1,5 +1,27 @@
 # Changelog
 
+## [Unreleased]
+
+### Security
+- Enforced strict path containment (`resolveInsideDir`) across `manifest.doc`, case-insensitive document lookups, workflow names, workflow `copy` sources, workflow `copy`/`mkdir` target paths, and all CLI commands (`remove`, `add`, `update`, `info`, `export`, `validate`).
+- Hardened Windows `.cmd`/`.bat` script execution with `windowsVerbatimArguments` and proper argument quoting to safely handle spaces in paths/arguments and prevent environment variable expansion.
+
+### Fixed
+- Fixed data loss in `parseFrontmatter` where documents containing `---` horizontal rules in the body were truncated after the first rule.
+- Fixed `extractSections` and `get_doc_section` to ignore `#` comment lines inside fenced code blocks (`` ``` `` / `~~~`) and prioritize exact heading matches over partial parent heading matches.
+- Fixed binary file corruption in workflow `copy` steps (e.g., `.jar`, `.png`, `.woff2` files are now copied as raw buffers instead of UTF-8 text).
+- Fixed binary detection in `get_resource` by checking buffer bytes for `NUL` instead of relying on an unreachable UTF-8 read exception, and set standard MCP `isError: true` on all error tool responses.
+- Fixed `run_workflow` to apply `default` values defined in workflow input schemas when optional inputs are omitted.
+- Fixed `knowledge-shelf pin <name> <tag|commit>` to check out the requested git ref so on-disk files match the pinned version.
+- Fixed `findCaseInsensitive` when looking up subfolder documents without the `.md` extension (`guides/deploy` now resolves to `guides/deploy.md` instead of colliding with same-named files in other folders).
+- Fixed CLI entrypoint handling for `version`/`--version`/`-v`, `--dir` flag placement before subcommands, missing flag arguments, and unknown options.
+
+### Changed
+- Extracted shared core logic into `src/core.ts` and MCP server factory into `src/server.ts`, unifying search scoring (with whole-token priority and section heading support) between the MCP server and CLI.
+- Updated `update` CLI command to use sparse checkout for subfolder sources (`--path`), and updated `validate` and `add --all` to discover nested manifest units recursively.
+- Replaced duplicated `tests/tool-helper.mjs` test harness with direct MCP SDK `Client` + `InMemoryTransport` and `StdioClientTransport` integration tests against the real server, and added GitHub Actions CI workflow (`.github/workflows/ci.yml`).
+- Updated `@modelcontextprotocol/sdk`, `zod`, and `vitest` to patch transitive dependency vulnerabilities.
+
 ## [1.0.3] - 2026-05-31
 
 ### Added

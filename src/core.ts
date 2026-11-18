@@ -438,6 +438,20 @@ export function scanDocuments(knowledgeDir: string): DocEntry[] {
   return docs;
 }
 
+function matchesToken(haystackLower: string, termLower: string): boolean {
+  const escaped = termLower.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(`(?:^|[^a-z0-9])${escaped}(?:$|[^a-z0-9])`, 'i').test(haystackLower);
+}
+
+function scoreField(haystackLower: string, termLower: string, fullWeight: number): number {
+  if (!haystackLower || !haystackLower.includes(termLower)) return 0;
+  if (matchesToken(haystackLower, termLower)) return fullWeight;
+  // Short terms (<=2 chars) that only match inside another word get no score to avoid noise;
+  // longer partial/prefix matches receive half weight.
+  if (termLower.length <= 2) return 0;
+  return Math.max(1, Math.floor(fullWeight / 2));
+}
+
 export function searchScore(doc: DocEntry, queryTerms: string[]): number {
   let score = 0;
   const titleLower = (doc.title || '').toLowerCase();
@@ -452,14 +466,14 @@ export function searchScore(doc: DocEntry, queryTerms: string[]): number {
   for (const term of queryTerms) {
     const t = term.toLowerCase();
     if (!t) continue;
-    if (aliasesLower.includes(t)) score += 12;
-    if (titleLower.includes(t)) score += 10;
-    if (tagsLower.includes(t)) score += 8;
-    if (typeLower.includes(t)) score += 7;
-    if (modulesLower.includes(t)) score += 6;
-    if (nameLower.includes(t)) score += 6;
-    if (sectionsLower.includes(t)) score += 4;
-    if (descLower.includes(t)) score += 2;
+    score += scoreField(aliasesLower, t, 12);
+    score += scoreField(titleLower, t, 10);
+    score += scoreField(tagsLower, t, 8);
+    score += scoreField(typeLower, t, 7);
+    score += scoreField(modulesLower, t, 6);
+    score += scoreField(nameLower, t, 6);
+    score += scoreField(sectionsLower, t, 4);
+    score += scoreField(descLower, t, 2);
   }
 
   return score;
@@ -471,17 +485,21 @@ export function searchScore(doc: DocEntry, queryTerms: string[]): number {
 
 function findCaseInsensitive(knowledgeDir: string, name: string): string | null {
   if (!fs.existsSync(knowledgeDir)) return null;
-  const nameLower = name.toLowerCase().replace(/\\/g, '/');
+  const nameLower = name.toLowerCase().replace(/\\/g, '/').replace(/^\/+/, '');
+  const nameWithMd = nameLower.endsWith('.md') ? nameLower : `${nameLower}.md`;
 
   const mdFiles = findMdFiles(knowledgeDir);
   for (const filePath of mdFiles) {
-    const rel = path.relative(knowledgeDir, filePath).replace(/\\/g, '/');
-    if (rel.toLowerCase() === nameLower) return filePath;
+    const rel = path.relative(knowledgeDir, filePath).replace(/\\/g, '/').toLowerCase();
+    if (rel === nameLower || rel === nameWithMd) return filePath;
   }
 
-  const targetStem = path.basename(name, '.md').toLowerCase();
-  for (const filePath of mdFiles) {
-    if (path.basename(filePath, '.md').toLowerCase() === targetStem) return filePath;
+  // Fallback to filename stem match only when caller did not specify a directory path
+  if (!nameLower.includes('/')) {
+    const targetStem = path.basename(nameLower, '.md');
+    for (const filePath of mdFiles) {
+      if (path.basename(filePath, '.md').toLowerCase() === targetStem) return filePath;
+    }
   }
 
   return null;
@@ -512,6 +530,54 @@ function replacePlaceholders(text: string, values: Record<string, string>): stri
   return text;
 }
 
+/**
+ * Validates that a workflow output path (`copy` target or `mkdir` path) does not
+ * contain unresolved placeholders, is not a relative path escaping into the MCP
+ * server's own working directory, and stays inside any root path input that the
+ * step template explicitly prefixes (`{{KEY}}/...`).
+ */
+function resolveSafeOutputTarget(
+  pathTemplate: string,
+  inputs: Record<string, string>
+): { resolvedPath?: string; error?: string } {
+  const rendered = replacePlaceholders(pathTemplate, inputs).trim();
+  if (!rendered) {
+    return { error: 'Target path is empty.' };
+  }
+  if (/\{\{[A-Za-z0-9_]+\}\}/.test(rendered)) {
+    return { error: `Target path '${rendered}' contains unresolved placeholder(s).` };
+  }
+
+  // If the template starts with {{KEY}} (e.g. "{{TARGET}}/src/App.java"), enforce containment
+  // within that root input directory so neither the input nor the template can traverse outside it.
+  const prefixMatch = pathTemplate.trim().match(/^\{\{([A-Za-z0-9_]+)\}\}(?:[/\\](.*))?$/);
+  if (prefixMatch) {
+    const rootKey = prefixMatch[1];
+    const rootVal = inputs[rootKey];
+    if (rootVal) {
+      if (!path.isAbsolute(rootVal)) {
+        return { error: `Input '${rootKey}' ('${rootVal}') must be an absolute path.` };
+      }
+      const rootBase = path.resolve(rootVal);
+      const subRel = replacePlaceholders(prefixMatch[2] || '', inputs);
+      if (!subRel) {
+        return { resolvedPath: rootBase };
+      }
+      const safe = resolveInsideDir(rootBase, subRel, true);
+      if (!safe) {
+        return { error: `Target path '${rendered}' escapes base directory '${rootBase}'.` };
+      }
+      return { resolvedPath: safe };
+    }
+  }
+
+  if (!path.isAbsolute(rendered)) {
+    return { error: `Target path '${rendered}' must be an absolute path.` };
+  }
+
+  return { resolvedPath: path.resolve(rendered) };
+}
+
 function executeCopyStep(
   step: Record<string, unknown>,
   folder: string,
@@ -537,7 +603,12 @@ function executeCopyStep(
     return;
   }
 
-  const targetPath = replacePlaceholders(targetTemplate, inputs);
+  const targetCheck = resolveSafeOutputTarget(targetTemplate, inputs);
+  if (!targetCheck.resolvedPath) {
+    results.errors.push(targetCheck.error || `Invalid target path for '${sourceRel}'.`);
+    return;
+  }
+  const targetPath = targetCheck.resolvedPath;
 
   if (skipIfExists && fs.existsSync(targetPath)) {
     results.files_skipped.push(sourceRel);
@@ -549,11 +620,16 @@ function executeCopyStep(
     return;
   }
 
-  let content = fs.readFileSync(sourcePath, 'utf-8');
-  content = replacePlaceholders(content, inputs);
-
   fs.mkdirSync(path.dirname(targetPath), { recursive: true });
-  fs.writeFileSync(targetPath, content, 'utf-8');
+
+  const buf = fs.readFileSync(sourcePath);
+  if (buf.subarray(0, 8192).includes(0)) {
+    // Binary file: copy raw bytes without corrupting non-UTF-8 data
+    fs.writeFileSync(targetPath, buf);
+  } else {
+    const content = replacePlaceholders(buf.toString('utf-8'), inputs);
+    fs.writeFileSync(targetPath, content, 'utf-8');
+  }
   results.files_created.push(targetPath);
 }
 
@@ -617,22 +693,30 @@ function executeRunStep(
     return;
   }
 
-  const buildSpawnArgs = (interp: string): [string, string[]] => {
-    if (interp === 'cmd') {
-      return ['cmd.exe', ['/d', '/s', '/c', resolvedScript, ...args]];
-    }
-    if (interp === 'pwsh' || interp === 'powershell') {
-      return [interp, ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', resolvedScript, ...args]];
-    }
-    return [interp, [resolvedScript, ...args]];
+  const quoteCmdArg = (arg: string): string => {
+    // Reject control characters and escape cmd.exe metacharacters outside/inside quotes
+    const clean = arg.replace(/[\r\n\0]/g, '');
+    return `"${clean.replace(/"/g, '""').replace(/%/g, '%%')}"`;
   };
 
-  let [bin, spawnArgs] = buildSpawnArgs(normalizedInterp);
+  const buildSpawnArgs = (interp: string): [string, string[], boolean] => {
+    if (interp === 'cmd') {
+      const cmdLine = `"${[resolvedScript, ...args].map(quoteCmdArg).join(' ')}"`;
+      return ['cmd.exe', ['/d', '/s', '/c', cmdLine], true];
+    }
+    if (interp === 'pwsh' || interp === 'powershell') {
+      return [interp, ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', resolvedScript, ...args], false];
+    }
+    return [interp, [resolvedScript, ...args], false];
+  };
+
+  let [bin, spawnArgs, verbatim] = buildSpawnArgs(normalizedInterp);
   let result = spawnSync(bin, spawnArgs, {
     cwd: folder,
     timeout: 120_000,
     encoding: 'utf-8',
     stdio: ['pipe', 'pipe', 'pipe'],
+    windowsVerbatimArguments: verbatim,
   });
 
   // Fallback from pwsh to Windows PowerShell if pwsh is not installed
@@ -643,12 +727,13 @@ function executeRunStep(
     !rawInterpreter &&
     process.platform === 'win32'
   ) {
-    [bin, spawnArgs] = buildSpawnArgs('powershell');
+    [bin, spawnArgs, verbatim] = buildSpawnArgs('powershell');
     result = spawnSync(bin, spawnArgs, {
       cwd: folder,
       timeout: 120_000,
       encoding: 'utf-8',
       stdio: ['pipe', 'pipe', 'pipe'],
+      windowsVerbatimArguments: verbatim,
     });
   }
 
@@ -665,13 +750,22 @@ function executeRunStep(
   }
 }
 
-function executeMkdirStep(step: Record<string, unknown>, inputs: Record<string, string>): void {
+function executeMkdirStep(
+  step: Record<string, unknown>,
+  inputs: Record<string, string>,
+  results: WorkflowResults
+): void {
   const pathTemplate = String(step.path || '');
-  const dirPath = replacePlaceholders(pathTemplate, inputs);
-  if (!dirPath) {
-    throw new Error('Mkdir step missing path.');
+  if (!pathTemplate) {
+    results.errors.push('Mkdir step missing path.');
+    return;
   }
-  fs.mkdirSync(dirPath, { recursive: true });
+  const targetCheck = resolveSafeOutputTarget(pathTemplate, inputs);
+  if (!targetCheck.resolvedPath) {
+    results.errors.push(targetCheck.error || 'Invalid mkdir path.');
+    return;
+  }
+  fs.mkdirSync(targetCheck.resolvedPath, { recursive: true });
 }
 
 // ---------------------------------------------------------------------------
@@ -1075,7 +1169,7 @@ export function toolRunWorkflow(
       } else if (action === 'run') {
         executeRunStep(step, folder, inputValues, results);
       } else if (action === 'mkdir') {
-        executeMkdirStep(step, inputValues);
+        executeMkdirStep(step, inputValues, results);
       } else if (action === 'message') {
         const text = replacePlaceholders(String(step.text || ''), inputValues);
         results.messages.push(text);
