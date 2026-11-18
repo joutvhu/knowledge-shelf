@@ -12,7 +12,6 @@
  *   pin <name> [tag|commit]                                   Lock knowledge source version
  *   unpin <name>                                              Unlock knowledge source
  *   export <name> [--output <path>] [--format zip|tar]        Package knowledge unit
- *   install-skill [path]                                      Install bundled skill
  *   remove <name>                                             Remove installed knowledge
  *   init                                                      Initialize a knowledge directory
  */
@@ -20,7 +19,6 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { fileURLToPath } from 'node:url';
 import {
   findManifestFolders,
   findMdFiles,
@@ -251,36 +249,6 @@ function formatSize(bytes: number): string {
 // ---------------------------------------------------------------------------
 // Commands
 // ---------------------------------------------------------------------------
-
-function cmdInstallSkill(args: string[]): void {
-  const targetParentDir = args[0] || '.';
-
-  const resolvedTargetParent = path.resolve(targetParentDir);
-  if (!fs.existsSync(resolvedTargetParent)) {
-    console.log(`Target directory '${resolvedTargetParent}' does not exist. Creating it...`);
-    fs.mkdirSync(resolvedTargetParent, { recursive: true });
-  }
-
-  const __filename = fileURLToPath(import.meta.url);
-  const __dirname = path.dirname(__filename);
-  const skillSrc = path.resolve(__dirname, '..', 'skills', 'knowledge-builder');
-
-  if (!fs.existsSync(skillSrc)) {
-    console.error(`Error: Bundled skill source not found at: ${skillSrc}`);
-    process.exit(1);
-  }
-
-  const destDir = path.join(resolvedTargetParent, 'knowledge-builder');
-  if (fs.existsSync(destDir)) {
-    console.log(`Skill 'knowledge-builder' is already installed at: ${destDir}`);
-    console.log('Overwriting...');
-    removeDirSync(destDir);
-  }
-
-  console.log(`Copying skill 'knowledge-builder' to ${destDir}...`);
-  copyDirSync(skillSrc, destDir);
-  console.log('✓ Successfully installed bundled skill!');
-}
 
 function cmdInit(knowledgeDir: string): void {
   fs.mkdirSync(knowledgeDir, { recursive: true });
@@ -1587,9 +1555,6 @@ Commands:
   export <name> [--output <path>] [--format zip|tar]
       Package a knowledge unit as a zip or tar.gz archive for sharing.
 
-  install-skill [path]
-      Install the bundled 'knowledge-builder' skill to the target agent skills directory (default: current directory).
-
   remove <name>
       Remove an installed knowledge source.
 
@@ -1665,9 +1630,6 @@ export function runCli(rawArgs: string[]): void {
       break;
     case 'export':
       cmdExport(knowledgeDir, args.slice(1));
-      break;
-    case 'install-skill':
-      cmdInstallSkill(args.slice(1));
       break;
     case 'remove':
     case 'rm':

@@ -20,7 +20,6 @@ const CLI_COMMANDS = new Set([
   'pin',
   'unpin',
   'export',
-  'install-skill',
   'remove',
   'rm',
   'init',

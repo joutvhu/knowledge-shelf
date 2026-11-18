@@ -215,20 +215,20 @@ knowledge-shelf add https://github.com/team/project.git --path knowledge/api-pat
 
 See [docs/publishing-knowledge.md](docs/publishing-knowledge.md) for repo layout conventions.
 
-## Bundled Skill
+## Knowledge Builder Skill
 
-Includes the `knowledge-builder` skill for AI-assisted knowledge creation. Install it directly using the CLI (defaults to the current directory if path is omitted):
+Includes the `knowledge-builder` skill for AI-assisted knowledge creation. Install it using the [skills CLI](https://skills.sh):
 
 ```bash
-knowledge-shelf install-skill [path-to-your-agent-skills]
+npx skills add joutvhu/knowledge-shelf
 ```
 
 The skill helps AI:
 
-- Scaffold new knowledge units from scratch
+- Draft new knowledge units in `./.agents/knowledges/` for review before installing
 - Generate reference docs from library source code
 - Convert loose docs into manifest-based units
-- Validate structure and fix issues
+- Validate and install drafted knowledge with `knowledge-shelf validate` and `knowledge-shelf install`
 
 ## Documentation
 

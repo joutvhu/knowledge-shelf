@@ -2,7 +2,7 @@
  * Integration tests for Knowledge Shelf CLI.
  *
  * Tests init, list, add/update/pin (against local git repos), validate, info,
- * search, export, install-skill, remove, version, and entrypoint arg handling.
+ * search, export, remove, version, and entrypoint arg handling.
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
@@ -430,25 +430,6 @@ describe('CLI Commands', () => {
       });
       expect(unknownFlag.status).toBe(1);
       expect(unknownFlag.stderr).toContain('Unknown option');
-    });
-  });
-
-  describe('install-skill', () => {
-    it('should install and overwrite the bundled skill cleanly', () => {
-      const skillsDir = path.join(tmpDir, 'my-skills');
-      const res1 = execSync(`node "${CLI_PATH}" install-skill "${skillsDir}"`, {
-        encoding: 'utf-8',
-        timeout: 10_000,
-      }).trim();
-      expect(res1).toContain('Successfully installed bundled skill');
-      expect(fs.existsSync(path.join(skillsDir, 'knowledge-builder', 'SKILL.md'))).toBe(true);
-
-      const res2 = execSync(`node "${CLI_PATH}" install-skill "${skillsDir}"`, {
-        encoding: 'utf-8',
-        timeout: 10_000,
-      }).trim();
-      expect(res2).toContain('Overwriting');
-      expect(res2).toContain('Successfully installed bundled skill');
     });
   });
 });
