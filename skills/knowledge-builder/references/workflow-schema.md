@@ -1,19 +1,13 @@
 # Workflow Schema Reference
 
-Complete schema for workflow JSON files (`workflows/<name>.json`).
-
-## Overview
-
-Workflows automate multi-step tasks.  AI calls `run_workflow` with the workflow name and inputs — the MCP server executes all steps sequentially.
+Complete schema and runtime constraints for workflow JSON files (`workflows/<name>.json`).
 
 ## File Location
 
 ```
-knowledge/<knowledge-name>/
+.agents/knowledges/<knowledge-name>/
 └── workflows/
-    ├── setup-project.json
-    ├── add-module.json
-    └── validate.json
+    └── <workflow-name>.json   ← Must match key in manifest.json "workflows"
 ```
 
 ## Schema
@@ -23,111 +17,123 @@ knowledge/<knowledge-name>/
   "name": "<workflow-name>",
   "description": "<what this workflow does>",
   "inputs": {
-    "<INPUT_NAME>": {
+    "TARGET": {
       "required": true,
-      "type": "path|string|number|boolean",
-      "description": "<what this input is>",
-      "default": "<optional default value>"
+      "type": "path",
+      "description": "Absolute path to target project root"
+    },
+    "PACKAGE_PATH": {
+      "required": true,
+      "type": "string",
+      "description": "Package path (e.g. com/example/app)",
+      "default": "com/example/app"
     }
   },
   "steps": [
-    { "action": "copy|run|mkdir|message", ... }
+    { "action": "mkdir|copy|run|message", ... }
   ]
 }
 ```
 
-## Top-Level Fields
+## Security & Placeholder Rules (Enforced by MCP Server)
 
-| Field | Required | Description |
-|---|---|---|
-| `name` | ✅ | Workflow identifier (matches filename without .json) |
-| `description` | ✅ | What this workflow does |
-| `inputs` | Optional | Input parameters AI must provide (omit if no placeholders used) |
-| `steps` | ✅ | Ordered list of actions to execute |
+1. **Placeholder format**: `{{KEY}}` where `KEY` matches `/[A-Za-z0-9_]+/`.
+2. **Root Path Containment for `copy.target` and `mkdir.path`**:
+   - Every `target` (in `copy`) and `path` (in `mkdir`) **MUST** start with a root placeholder prefix `{{ROOT_KEY}}` (or `{{ROOT_KEY}}/...`, e.g., `{{TARGET}}/src/...`).
+   - At runtime, the input value for `ROOT_KEY` **MUST** be an absolute path (`path.isAbsolute(inputs[ROOT_KEY]) === true`).
+   - The rendered destination must not contain any unresolved `{{...}}` placeholders and must resolve strictly inside `inputs[ROOT_KEY]` (any `..` or symlink escape is blocked).
+3. **Source & Script Containment**:
+   - `copy.source` and `run.script` are resolved relative to the knowledge unit folder root and must stay strictly inside that unit folder.
+4. **Binary-safe `copy`**:
+   - Text files have `{{KEY}}` placeholders replaced with `inputs[KEY]`. Binary files (detected via null byte in first 8 KB) are copied byte-for-byte without placeholder replacement.
 
 ## Step Actions
 
-### `copy` — Copy a resource file to target
+### `copy` — Copy and render a template/resource file to target
 
 ```json
 {
   "action": "copy",
-  "source": "<relative-path-in-knowledge-folder>",
-  "target": "{{INPUT}}/path/to/destination",
-  "skip_if_exists": false
+  "source": "pages/AgGridPage.java",
+  "target": "{{TARGET}}/src/test/java/{{PACKAGE_PATH}}/pages/AgGridPage.java",
+  "skip_if_exists": true
 }
 ```
 
 | Field | Required | Description |
 |---|---|---|
-| `source` | ✅ | File path relative to knowledge folder root |
-| `target` | ✅ | Destination path (supports `{{PLACEHOLDER}}`) |
-| `skip_if_exists` | Optional | Skip when target exists.  Default: `false`. |
+| `source` | ✅ | Relative file path inside the knowledge unit folder |
+| `target` | ✅ | Destination path starting with `{{ROOT_KEY}}/...` |
+| `skip_if_exists` | Optional | If `true`, skips overwriting when destination file already exists (recommended for idempotency). Default: `false`. |
 
-**Behavior:**  Read source → replace `{{KEY}}` with input values → create parent dirs → write target.
+### `mkdir` — Create target directory
 
-### `run` — Execute a script
+```json
+{
+  "action": "mkdir",
+  "path": "{{TARGET}}/src/test/java/{{PACKAGE_PATH}}/pages"
+}
+```
+
+| Field | Required | Description |
+|---|---|---|
+| `path` | ✅ | Directory path starting with `{{ROOT_KEY}}` or `{{ROOT_KEY}}/...` |
+
+### `run` — Execute a script inside the knowledge unit
 
 ```json
 {
   "action": "run",
-  "script": "scripts/<filename>.py",
-  "args": ["--target", "{{INPUT}}", "--flag"],
+  "script": "scripts/validate.py",
+  "args": ["--target", "{{TARGET}}"],
   "interpreter": "python"
 }
 ```
 
 | Field | Required | Description |
 |---|---|---|
-| `script` | ✅ | Script path relative to knowledge folder |
-| `args` | Optional | CLI arguments (supports `{{PLACEHOLDER}}`) |
-| `interpreter` | Optional | Auto-detected from extension if omitted |
+| `script` | ✅ | Script path relative to knowledge unit folder root |
+| `args` | Optional | Array of string arguments (`{{KEY}}` placeholders are replaced) |
+| `interpreter` | Optional | One of: `python`, `python3`, `node`, `pwsh`, `powershell`, `bash`, `sh`, `cmd`. Auto-detected from file extension (`.py`, `.js`, `.mjs`, `.cjs`, `.ps1`, `.sh`, `.cmd`, `.bat`) if omitted. |
 
-**Behavior:**  Execute script with timeout (120s).  Non-zero exit → error recorded, workflow continues.
+- Runs with `cwd` set to the knowledge unit folder and a 120-second timeout.
+- On Windows, `.ps1` with default `pwsh` automatically falls back to `powershell` if `pwsh` is not installed.
 
-### `mkdir` — Create directory
-
-```json
-{
-  "action": "mkdir",
-  "path": "{{TARGET}}/src/test/java/{{PACKAGE_PATH}}"
-}
-```
-
-### `message` — Output progress message
+### `message` — Emit progress message
 
 ```json
 {
   "action": "message",
-  "text": "Setting up module..."
+  "text": "Setting up AG Grid module in {{TARGET}}..."
 }
 ```
 
-## Placeholder Replacement
-
-All string fields support `{{KEY}}` replacement from workflow inputs.  Unreplaced placeholders remain as-is.
-
-## Execution
-
-- Steps execute sequentially
-- Errors are recorded but do NOT stop execution (no rollback)
-- Final response includes:  `steps_executed`, `files_created`, `files_skipped`, `scripts_run`, `errors`, `summary`
-
-## Example
+## Complete Example
 
 ```json
 {
   "name": "setup-ag-grid",
-  "description": "Add AG Grid testing module",
+  "description": "Scaffold AG Grid testing page objects into an existing project",
   "inputs": {
-    "TARGET": {"required": true, "type": "path", "description": "Project root"},
-    "PACKAGE_PATH": {"required": true, "type": "string", "description": "Package as path"}
+    "TARGET": {"required": true, "type": "path", "description": "Absolute path to project root"},
+    "PACKAGE_NAME": {"required": true, "type": "string", "description": "Java package name"},
+    "PACKAGE_PATH": {"required": true, "type": "string", "description": "Java package as slash path"}
   },
   "steps": [
-    {"action": "message", "text": "Setting up AG Grid..."},
+    {"action": "message", "text": "Setting up AG Grid in {{TARGET}}..."},
     {"action": "mkdir", "path": "{{TARGET}}/src/test/java/{{PACKAGE_PATH}}/pages"},
-    {"action": "copy", "source": "pages/BaseAngularPage.java", "target": "{{TARGET}}/src/test/java/{{PACKAGE_PATH}}/pages/BaseAngularPage.java", "skip_if_exists": true},
-    {"action": "copy", "source": "pages/AgGridPage.java", "target": "{{TARGET}}/src/test/java/{{PACKAGE_PATH}}/pages/AgGridPage.java"},
+    {
+      "action": "copy",
+      "source": "pages/BaseAngularPage.java",
+      "target": "{{TARGET}}/src/test/java/{{PACKAGE_PATH}}/pages/BaseAngularPage.java",
+      "skip_if_exists": true
+    },
+    {
+      "action": "copy",
+      "source": "pages/AgGridPage.java",
+      "target": "{{TARGET}}/src/test/java/{{PACKAGE_PATH}}/pages/AgGridPage.java",
+      "skip_if_exists": false
+    },
     {"action": "run", "script": "scripts/validate.py", "args": ["--target", "{{TARGET}}"]},
     {"action": "message", "text": "Done."}
   ]

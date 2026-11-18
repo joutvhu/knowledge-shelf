@@ -180,19 +180,20 @@ npm install -g knowledge-shelf
 ```
 
 ```bash
-knowledge-shelf init                    # Initialize ~/.knowledge
-knowledge-shelf add <url>               # Install from git repo
-knowledge-shelf add <url> --all         # Install all units from monorepo
-knowledge-shelf add <url> --path <dir>  # Install specific subfolder (sparse checkout)
-knowledge-shelf search <keywords>       # Search installed knowledge
-knowledge-shelf info <name>             # Show unit details
-knowledge-shelf validate [name]         # Check structure integrity
-knowledge-shelf list                    # Show installed sources
-knowledge-shelf update [name]           # Pull latest from remotes
-knowledge-shelf pin <name> [version]    # Lock version (skip updates)
-knowledge-shelf unpin <name>            # Unlock
-knowledge-shelf export <name>           # Package as zip for sharing
-knowledge-shelf remove <name>           # Uninstall
+knowledge-shelf init                              # Initialize ~/.knowledge
+knowledge-shelf add <url>                         # Install from git repo
+knowledge-shelf add <url> --all                   # Install all units from monorepo
+knowledge-shelf add <url> --path <dir>            # Install specific subfolder (sparse checkout)
+knowledge-shelf install <path> [--force] [--all]  # Validate & install drafted knowledge from local path
+knowledge-shelf search <keywords>                 # Search installed knowledge
+knowledge-shelf info <name>                       # Show unit details
+knowledge-shelf validate [name|path]              # Check structure integrity (installed or local draft)
+knowledge-shelf list                              # Show installed sources
+knowledge-shelf update [name]                     # Pull latest from remotes / local sources
+knowledge-shelf pin <name> [version]              # Lock version (skip updates)
+knowledge-shelf unpin <name>                      # Unlock
+knowledge-shelf export <name>                     # Package as zip for sharing
+knowledge-shelf remove <name>                     # Uninstall
 ```
 
 See [docs/cli-reference.md](docs/cli-reference.md) for full command documentation.

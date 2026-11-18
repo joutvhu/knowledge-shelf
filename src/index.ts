@@ -10,6 +10,7 @@ import { createKnowledgeServer } from './server.js';
 
 const CLI_COMMANDS = new Set([
   'add',
+  'install',
   'info',
   'search',
   'list',

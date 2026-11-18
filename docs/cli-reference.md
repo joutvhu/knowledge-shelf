@@ -81,6 +81,44 @@ knowledge-shelf add git@github.com:team/private-knowledge.git
 
 ---
 
+## install
+
+Validate and install locally drafted knowledge (e.g., from `./.agents/knowledges/`) into the active knowledge directory.
+
+```bash
+knowledge-shelf install <path> [--name <alias>] [--force] [--all]
+```
+
+| Option | Description |
+|---|---|
+| `<path>` | Local path to a manifest-based folder, a standalone `.md` file, or a parent staging directory (when used with `--all`). |
+| `--name <alias>` | Custom name for the installed unit (default: folder/file basename). Not allowed with `--all`. |
+| `--force`, `-f` | Overwrite existing knowledge unit of the same name. |
+| `--all` | Auto-detect, validate, and install ALL manifest-based units and top-level standalone `.md` files inside `<path>`. |
+
+**Examples:**
+```bash
+# Validate and install a drafted manifest unit from workspace staging
+knowledge-shelf install ./.agents/knowledges/my-boilerplate
+
+# Re-install after making changes in staging
+knowledge-shelf install ./.agents/knowledges/my-boilerplate --force
+
+# Install a standalone Markdown reference doc
+knowledge-shelf install ./.agents/knowledges/spring-security-guide.md
+
+# Install all drafted units inside ./.agents/knowledges/
+knowledge-shelf install ./.agents/knowledges --all --force
+```
+
+**Behavior:**
+1. Validates the target manifest unit(s) or standalone `.md` file(s) before copying.
+2. If any validation error is found, aborts with exit code 1 without modifying the knowledge directory.
+3. Copies validated files to `<knowledge-dir>/<name>` (and syncs `manifest.name` if `--name` was passed).
+4. Records the source in `.registry.json` with `url: "local:<resolved-path>"` and `commit: "local"`.
+
+---
+
 ## list
 
 List all installed knowledge sources.
@@ -149,11 +187,12 @@ knowledge-shelf search boilerplate java
 
 ## validate
 
-Check knowledge unit integrity.
+Check knowledge unit integrity (for installed units or local draft paths).
 
 ```bash
-knowledge-shelf validate          # Validate all manifest-based units
-knowledge-shelf validate <name>   # Validate specific unit
+knowledge-shelf validate                                  # Validate all manifest-based units in knowledge dir
+knowledge-shelf validate <name>                           # Validate specific installed unit
+knowledge-shelf validate ./.agents/knowledges/<name>      # Validate a drafted unit or standalone .md directly by path
 ```
 
 **Checks performed:**

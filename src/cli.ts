@@ -3,10 +3,11 @@
  *
  * Subcommands:
  *   add <url> [--path <subfolder>] [--name <alias>] [--all]   Pull knowledge from a git repo
+ *   install <path> [--name <alias>] [--force] [--all]         Validate & install knowledge from a local path
  *   info <name>                                               Show detailed unit info
  *   search <keywords>                                         Search installed knowledge
  *   list                                                      List installed knowledge sources
- *   validate [name]                                           Validate manifest-based units
+ *   validate [name|path]                                      Validate manifest-based units or standalone docs
  *   update [name]                                             Update all or specific knowledge
  *   pin <name> [tag|commit]                                   Lock knowledge source version
  *   unpin <name>                                              Unlock knowledge source
@@ -22,7 +23,9 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import {
   findManifestFolders,
+  findMdFiles,
   getPackageVersion,
+  parseFrontmatter,
   resolveInsideDir,
   resolveKnowledgeDir,
   scanDocuments,
@@ -505,6 +508,37 @@ function cmdUpdate(knowledgeDir: string, args: string[]): void {
       continue;
     }
 
+    if (source.url.startsWith('local:')) {
+      const localPath = source.url.slice('local:'.length);
+      console.log(`Updating '${source.name}' from local path ${localPath}...`);
+      if (!fs.existsSync(localPath)) {
+        console.log(`  Skipping '${source.name}' (local source path no longer exists)`);
+        continue;
+      }
+      try {
+        const stat = fs.statSync(localPath);
+        if (stat.isFile()) {
+          const destFile = resolveSafeUnitDir(knowledgeDir, source.name);
+          fs.mkdirSync(path.dirname(destFile), { recursive: true });
+          fs.copyFileSync(localPath, destFile);
+        } else {
+          const destDir = resolveSafeUnitDir(knowledgeDir, source.name);
+          removeDirSync(destDir);
+          copyDirSync(localPath, destDir);
+          if (fs.existsSync(path.join(destDir, 'manifest.json'))) {
+            syncManifestName(destDir, source.name);
+          }
+        }
+        source.updatedAt = new Date().toISOString();
+        updated++;
+        console.log(`  ✓ Updated from local path`);
+      } catch (e) {
+        console.error(`  Error updating '${source.name}': ${e}`);
+        failed++;
+      }
+      continue;
+    }
+
     console.log(`Updating '${source.name}'...`);
 
     const repoName = deriveNameFromUrl(source.url);
@@ -593,10 +627,51 @@ function cmdInfo(knowledgeDir: string, args: string[]): void {
     process.exit(1);
   }
 
-  const unitDir = resolveSafeUnitDir(knowledgeDir, name);
-  if (!fs.existsSync(unitDir) || !fs.statSync(unitDir).isDirectory()) {
+  let unitDir = resolveSafeUnitDir(knowledgeDir, name);
+  if (!fs.existsSync(unitDir) && !name.endsWith('.md')) {
+    const mdCandidate = resolveSafeUnitDir(knowledgeDir, `${name}.md`);
+    if (fs.existsSync(mdCandidate)) {
+      unitDir = mdCandidate;
+    }
+  }
+
+  if (!fs.existsSync(unitDir)) {
     console.error(`Error: '${name}' not found in ${knowledgeDir}`);
     process.exit(1);
+  }
+
+  const stat = fs.statSync(unitDir);
+  if (stat.isFile()) {
+    const displayName = path.relative(knowledgeDir, unitDir).replace(/\\/g, '/');
+    const content = fs.readFileSync(unitDir, 'utf-8');
+    const { metadata } = parseFrontmatter(content);
+    const registry = loadRegistry(knowledgeDir);
+    const source = registry.sources.find((s) => s.name === displayName || s.name === name);
+
+    console.log(`\n  ${displayName}`);
+    console.log(`  ${'─'.repeat(displayName.length + 4)}`);
+    console.log('  Type:         standalone (.md)');
+    if (metadata.description) {
+      console.log(`  Description:  ${metadata.description}`);
+    }
+    if (Array.isArray(metadata.tags) && metadata.tags.length > 0) {
+      console.log(`  Tags:         ${metadata.tags.join(', ')}`);
+    }
+    if (Array.isArray(metadata.aliases) && metadata.aliases.length > 0) {
+      console.log(`  Aliases:      ${metadata.aliases.join(', ')}`);
+    }
+    console.log('  Files:        1');
+    console.log(`  Size:         ${formatSize(stat.size)}`);
+    console.log(`  Path:         ${unitDir}`);
+    if (source) {
+      console.log(`  Source:       ${source.url}`);
+      console.log(`  Installed:    ${source.installedAt}`);
+      console.log(`  Updated:      ${source.updatedAt}`);
+    } else {
+      console.log('  Source:       local (not from registry)');
+    }
+    console.log('');
+    return;
   }
 
   const manifestPath = path.join(unitDir, 'manifest.json');
@@ -679,30 +754,292 @@ function cmdInfo(knowledgeDir: string, args: string[]): void {
   console.log('');
 }
 
+interface ValidationResult {
+  errors: string[];
+  warnings: string[];
+}
+
+function validateManifestUnitDir(unitDir: string, expectedUnitName?: string): ValidationResult {
+  const unitName = expectedUnitName || path.basename(unitDir);
+  const manifestPath = path.join(unitDir, 'manifest.json');
+  const errors: string[] = [];
+  const warnings: string[] = [];
+
+  if (!fs.existsSync(manifestPath)) {
+    errors.push('manifest.json not found');
+    return { errors, warnings };
+  }
+
+  let manifest: Record<string, unknown>;
+  try {
+    manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf-8'));
+  } catch (e) {
+    errors.push(`manifest.json is invalid JSON: ${e}`);
+    return { errors, warnings };
+  }
+
+  if (!manifest.name) errors.push('Missing required field: name');
+  if (!manifest.version) errors.push('Missing required field: version');
+  if (!manifest.type) errors.push('Missing required field: type');
+  if (!manifest.description) errors.push('Missing required field: description');
+
+  if (manifest.name && manifest.name !== unitName) {
+    errors.push(`manifest.name "${manifest.name}" does not match folder name "${unitName}"`);
+  }
+
+  if (manifest.doc && typeof manifest.doc === 'string') {
+    const docPath = resolveInsideDir(unitDir, manifest.doc, true);
+    if (!docPath) {
+      errors.push(`doc path escapes unit folder: ${manifest.doc}`);
+    } else if (!fs.existsSync(docPath)) {
+      errors.push(`doc file not found: ${manifest.doc}`);
+    }
+  }
+
+  const modules = manifest.modules as
+    | Record<string, { files?: string[]; guide?: string; dependencies?: string[] }>
+    | undefined;
+  if (modules) {
+    const moduleNames = Object.keys(modules);
+    for (const [modName, mod] of Object.entries(modules)) {
+      if (mod.files) {
+        for (const file of mod.files) {
+          const filePath = resolveInsideDir(unitDir, file, true);
+          if (!filePath) {
+            errors.push(`modules.${modName}.files: path escapes unit folder: ${file}`);
+          } else if (!fs.existsSync(filePath)) {
+            errors.push(`modules.${modName}.files: file not found: ${file}`);
+          }
+        }
+      }
+      if (mod.guide) {
+        const guidePath = resolveInsideDir(unitDir, mod.guide, true);
+        if (!guidePath) {
+          errors.push(`modules.${modName}.guide: path escapes unit folder: ${mod.guide}`);
+        } else if (!fs.existsSync(guidePath)) {
+          warnings.push(`modules.${modName}.guide: file not found: ${mod.guide}`);
+        }
+      }
+      if (mod.dependencies) {
+        for (const dep of mod.dependencies) {
+          if (!moduleNames.includes(dep)) {
+            errors.push(`modules.${modName}.dependencies: unknown module "${dep}"`);
+          }
+        }
+      }
+    }
+  }
+
+  const scripts = manifest.scripts as Record<string, { file?: string }> | undefined;
+  if (scripts) {
+    for (const [scriptName, script] of Object.entries(scripts)) {
+      if (script.file) {
+        const scriptPath = resolveInsideDir(unitDir, script.file, true);
+        if (!scriptPath) {
+          errors.push(`scripts.${scriptName}.file: path escapes unit folder: ${script.file}`);
+        } else if (!fs.existsSync(scriptPath)) {
+          errors.push(`scripts.${scriptName}.file: not found: ${script.file}`);
+        }
+      }
+    }
+  }
+
+  const references = manifest.references as Record<string, { file?: string }> | undefined;
+  if (references) {
+    for (const [refName, ref] of Object.entries(references)) {
+      if (ref.file) {
+        const refPath = resolveInsideDir(unitDir, ref.file, true);
+        if (!refPath) {
+          errors.push(`references.${refName}.file: path escapes unit folder: ${ref.file}`);
+        } else if (!fs.existsSync(refPath)) {
+          errors.push(`references.${refName}.file: not found: ${ref.file}`);
+        }
+      }
+    }
+  }
+
+  const workflows = manifest.workflows as Record<string, unknown> | undefined;
+  if (workflows) {
+    const workflowsDir = path.join(unitDir, 'workflows');
+    for (const wfName of Object.keys(workflows)) {
+      const wfPath = resolveInsideDir(workflowsDir, `${wfName}.json`, true);
+      if (!wfPath) {
+        errors.push(`workflows.${wfName}: invalid workflow name`);
+      } else if (!fs.existsSync(wfPath)) {
+        warnings.push(`workflows.${wfName}: file not found: workflows/${wfName}.json`);
+      } else {
+        try {
+          const wfContent = fs.readFileSync(wfPath, 'utf-8');
+          const wfDef = JSON.parse(wfContent);
+          if (!wfDef.steps || !Array.isArray(wfDef.steps)) {
+            errors.push(`workflows/${wfName}.json: missing or invalid "steps" array`);
+          }
+        } catch (e) {
+          errors.push(`workflows/${wfName}.json: invalid JSON: ${e}`);
+        }
+      }
+    }
+  }
+
+  return { errors, warnings };
+}
+
+function validateStandaloneMdFile(filePath: string): ValidationResult {
+  const errors: string[] = [];
+  const warnings: string[] = [];
+
+  if (!filePath.toLowerCase().endsWith('.md')) {
+    errors.push(`File is not a Markdown (.md) document: ${path.basename(filePath)}`);
+    return { errors, warnings };
+  }
+
+  if (path.basename(filePath).toLowerCase() === 'readme.md') {
+    errors.push('Standalone doc cannot be named README.md (ignored by knowledge scanner).');
+    return { errors, warnings };
+  }
+
+  let content: string;
+  try {
+    content = fs.readFileSync(filePath, 'utf-8');
+  } catch (e) {
+    errors.push(`Failed to read file: ${e}`);
+    return { errors, warnings };
+  }
+
+  if (!content.trim()) {
+    errors.push('Markdown file is empty');
+    return { errors, warnings };
+  }
+
+  const { metadata, body } = parseFrontmatter(content);
+  if (!body.trim()) {
+    errors.push('Markdown body is empty');
+  }
+  if (!metadata.description) {
+    warnings.push('Missing frontmatter "description" (recommended for search relevance)');
+  }
+  if (!metadata.tags && !metadata.keywords) {
+    warnings.push('Missing frontmatter "tags" (recommended for search relevance)');
+  }
+
+  return { errors, warnings };
+}
+
+function syncManifestName(unitDir: string, targetName: string): void {
+  const manifestPath = path.join(unitDir, 'manifest.json');
+  if (!fs.existsSync(manifestPath)) return;
+  try {
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf-8')) as Record<string, unknown>;
+    if (manifest.name !== targetName) {
+      manifest.name = targetName;
+      fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + '\n', 'utf-8');
+    }
+  } catch {
+    /* ignore */
+  }
+}
+
 function cmdValidate(knowledgeDir: string, args: string[]): void {
-  const targetName = args[0];
+  const targetArg = args[0];
+
+  // Check if targetArg refers to an external or local filesystem path directly
+  if (targetArg) {
+    const localCandidate = path.resolve(targetArg);
+    const hasPathSyntax =
+      /[\\/]/.test(targetArg) ||
+      targetArg.startsWith('.') ||
+      targetArg.endsWith('.md') ||
+      path.isAbsolute(targetArg);
+
+    if (fs.existsSync(localCandidate) && (hasPathSyntax || !fs.existsSync(path.join(knowledgeDir, targetArg)))) {
+      const stat = fs.statSync(localCandidate);
+      if (stat.isFile()) {
+        const display = path.basename(localCandidate);
+        console.log(`Validating '${display}'...`);
+        const { errors, warnings } = validateStandaloneMdFile(localCandidate);
+        printValidationResults(display, errors, warnings);
+        console.log(`\n1 unit(s) validated.  ${errors.length} error(s), ${warnings.length} warning(s).`);
+        if (errors.length > 0) process.exit(1);
+        return;
+      }
+
+      if (stat.isDirectory()) {
+        const manifestFolders = findManifestFolders(localCandidate);
+        if (manifestFolders.length > 0) {
+          let totalErrors = 0;
+          let totalWarnings = 0;
+          for (const unitDir of manifestFolders) {
+            const rel = path.relative(localCandidate, unitDir).replace(/\\/g, '/');
+            const displayUnit = rel || path.basename(unitDir);
+            console.log(`Validating '${displayUnit}'...`);
+            const { errors, warnings } = validateManifestUnitDir(unitDir);
+            printValidationResults(displayUnit, errors, warnings);
+            totalErrors += errors.length;
+            totalWarnings += warnings.length;
+          }
+          console.log(
+            `\n${manifestFolders.length} unit(s) validated.  ${totalErrors} error(s), ${totalWarnings} warning(s).`
+          );
+          if (totalErrors > 0) process.exit(1);
+          return;
+        }
+
+        const mdFiles = findMdFiles(localCandidate);
+        if (mdFiles.length > 0) {
+          let totalErrors = 0;
+          let totalWarnings = 0;
+          for (const mdFile of mdFiles) {
+            const displayUnit = path.relative(localCandidate, mdFile).replace(/\\/g, '/');
+            console.log(`Validating '${displayUnit}'...`);
+            const { errors, warnings } = validateStandaloneMdFile(mdFile);
+            printValidationResults(displayUnit, errors, warnings);
+            totalErrors += errors.length;
+            totalWarnings += warnings.length;
+          }
+          console.log(
+            `\n${mdFiles.length} unit(s) validated.  ${totalErrors} error(s), ${totalWarnings} warning(s).`
+          );
+          if (totalErrors > 0) process.exit(1);
+          return;
+        }
+
+        console.log('No manifest-based units to validate.');
+        return;
+      }
+    }
+  }
 
   if (!fs.existsSync(knowledgeDir)) {
     console.error(`Error: Knowledge directory not found: ${knowledgeDir}`);
     process.exit(1);
   }
 
-  if (targetName) {
-    resolveSafeUnitDir(knowledgeDir, targetName);
+  if (targetArg) {
+    resolveSafeUnitDir(knowledgeDir, targetArg);
   }
 
   const allManifestFolders = findManifestFolders(knowledgeDir);
-  const toValidate = targetName
+  const toValidate = targetArg
     ? allManifestFolders.filter((folder) => {
         const rel = path.relative(knowledgeDir, folder).replace(/\\/g, '/');
-        return rel === targetName.replace(/\\/g, '/') || path.basename(folder) === targetName;
+        return rel === targetArg.replace(/\\/g, '/') || path.basename(folder) === targetArg;
       })
     : allManifestFolders;
 
-  if (targetName && toValidate.length === 0) {
-    const targetDir = path.join(knowledgeDir, targetName);
+  if (targetArg && toValidate.length === 0) {
+    const targetDir = path.join(knowledgeDir, targetArg);
+    const targetMd = targetArg.endsWith('.md') ? targetDir : `${targetDir}.md`;
+    if (fs.existsSync(targetMd) && fs.statSync(targetMd).isFile()) {
+      const display = path.relative(knowledgeDir, targetMd).replace(/\\/g, '/');
+      console.log(`Validating '${display}'...`);
+      const { errors, warnings } = validateStandaloneMdFile(targetMd);
+      printValidationResults(display, errors, warnings);
+      console.log(`\n1 unit(s) validated.  ${errors.length} error(s), ${warnings.length} warning(s).`);
+      if (errors.length > 0) process.exit(1);
+      return;
+    }
     if (!fs.existsSync(targetDir)) {
-      console.error(`Error: '${targetName}' not found.`);
+      console.error(`Error: '${targetArg}' not found.`);
       process.exit(1);
     }
     console.log('No manifest-based units to validate.');
@@ -714,7 +1051,6 @@ function cmdValidate(knowledgeDir: string, args: string[]): void {
   let totalWarnings = 0;
 
   for (const unitDir of toValidate) {
-    const unitName = path.basename(unitDir);
     const displayUnit = path.relative(knowledgeDir, unitDir).replace(/\\/g, '/');
     const manifestPath = path.join(unitDir, 'manifest.json');
 
@@ -724,122 +1060,7 @@ function cmdValidate(knowledgeDir: string, args: string[]): void {
 
     validatedCount++;
     console.log(`Validating '${displayUnit}'...`);
-    const errors: string[] = [];
-    const warnings: string[] = [];
-
-    let manifest: Record<string, unknown>;
-    try {
-      manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf-8'));
-    } catch (e) {
-      errors.push(`manifest.json is invalid JSON: ${e}`);
-      printValidationResults(displayUnit, errors, warnings);
-      totalErrors += errors.length;
-      continue;
-    }
-
-    if (!manifest.name) errors.push('Missing required field: name');
-    if (!manifest.version) errors.push('Missing required field: version');
-    if (!manifest.type) errors.push('Missing required field: type');
-    if (!manifest.description) errors.push('Missing required field: description');
-
-    if (manifest.name && manifest.name !== unitName) {
-      errors.push(`manifest.name "${manifest.name}" does not match folder name "${unitName}"`);
-    }
-
-    if (manifest.doc && typeof manifest.doc === 'string') {
-      const docPath = resolveInsideDir(unitDir, manifest.doc, true);
-      if (!docPath) {
-        errors.push(`doc path escapes unit folder: ${manifest.doc}`);
-      } else if (!fs.existsSync(docPath)) {
-        errors.push(`doc file not found: ${manifest.doc}`);
-      }
-    }
-
-    const modules = manifest.modules as
-      | Record<string, { files?: string[]; guide?: string; dependencies?: string[] }>
-      | undefined;
-    if (modules) {
-      const moduleNames = Object.keys(modules);
-      for (const [modName, mod] of Object.entries(modules)) {
-        if (mod.files) {
-          for (const file of mod.files) {
-            const filePath = resolveInsideDir(unitDir, file, true);
-            if (!filePath) {
-              errors.push(`modules.${modName}.files: path escapes unit folder: ${file}`);
-            } else if (!fs.existsSync(filePath)) {
-              errors.push(`modules.${modName}.files: file not found: ${file}`);
-            }
-          }
-        }
-        if (mod.guide) {
-          const guidePath = resolveInsideDir(unitDir, mod.guide, true);
-          if (!guidePath) {
-            errors.push(`modules.${modName}.guide: path escapes unit folder: ${mod.guide}`);
-          } else if (!fs.existsSync(guidePath)) {
-            warnings.push(`modules.${modName}.guide: file not found: ${mod.guide}`);
-          }
-        }
-        if (mod.dependencies) {
-          for (const dep of mod.dependencies) {
-            if (!moduleNames.includes(dep)) {
-              errors.push(`modules.${modName}.dependencies: unknown module "${dep}"`);
-            }
-          }
-        }
-      }
-    }
-
-    const scripts = manifest.scripts as Record<string, { file?: string }> | undefined;
-    if (scripts) {
-      for (const [scriptName, script] of Object.entries(scripts)) {
-        if (script.file) {
-          const scriptPath = resolveInsideDir(unitDir, script.file, true);
-          if (!scriptPath) {
-            errors.push(`scripts.${scriptName}.file: path escapes unit folder: ${script.file}`);
-          } else if (!fs.existsSync(scriptPath)) {
-            errors.push(`scripts.${scriptName}.file: not found: ${script.file}`);
-          }
-        }
-      }
-    }
-
-    const references = manifest.references as Record<string, { file?: string }> | undefined;
-    if (references) {
-      for (const [refName, ref] of Object.entries(references)) {
-        if (ref.file) {
-          const refPath = resolveInsideDir(unitDir, ref.file, true);
-          if (!refPath) {
-            errors.push(`references.${refName}.file: path escapes unit folder: ${ref.file}`);
-          } else if (!fs.existsSync(refPath)) {
-            errors.push(`references.${refName}.file: not found: ${ref.file}`);
-          }
-        }
-      }
-    }
-
-    const workflows = manifest.workflows as Record<string, unknown> | undefined;
-    if (workflows) {
-      const workflowsDir = path.join(unitDir, 'workflows');
-      for (const wfName of Object.keys(workflows)) {
-        const wfPath = resolveInsideDir(workflowsDir, `${wfName}.json`, true);
-        if (!wfPath) {
-          errors.push(`workflows.${wfName}: invalid workflow name`);
-        } else if (!fs.existsSync(wfPath)) {
-          warnings.push(`workflows.${wfName}: file not found: workflows/${wfName}.json`);
-        } else {
-          try {
-            const wfContent = fs.readFileSync(wfPath, 'utf-8');
-            const wfDef = JSON.parse(wfContent);
-            if (!wfDef.steps || !Array.isArray(wfDef.steps)) {
-              errors.push(`workflows/${wfName}.json: missing or invalid "steps" array`);
-            }
-          } catch (e) {
-            errors.push(`workflows/${wfName}.json: invalid JSON: ${e}`);
-          }
-        }
-      }
-    }
-
+    const { errors, warnings } = validateManifestUnitDir(unitDir);
     printValidationResults(displayUnit, errors, warnings);
     totalErrors += errors.length;
     totalWarnings += warnings.length;
@@ -851,6 +1072,228 @@ function cmdValidate(knowledgeDir: string, args: string[]): void {
   } else {
     console.log('No manifest-based units to validate.');
   }
+}
+
+function cmdInstall(knowledgeDir: string, args: string[]): void {
+  let sourceArg = '';
+  let customName = '';
+  let force = false;
+  let installAll = false;
+
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === '--name') {
+      if (i + 1 >= args.length || args[i + 1].startsWith('-')) {
+        console.error('Error: --name requires an alias argument.');
+        process.exit(1);
+      }
+      customName = args[++i];
+    } else if (args[i] === '--force' || args[i] === '-f') {
+      force = true;
+    } else if (args[i] === '--all') {
+      installAll = true;
+    } else if (args[i].startsWith('-')) {
+      console.error(`Error: Unknown option '${args[i]}' for 'install'.`);
+      process.exit(1);
+    } else if (!sourceArg) {
+      sourceArg = args[i];
+    } else {
+      console.error(`Error: Unexpected argument '${args[i]}'.`);
+      process.exit(1);
+    }
+  }
+
+  if (!sourceArg) {
+    console.error(
+      'Error: Source path is required.\nUsage: knowledge-shelf install <path> [--name <alias>] [--force] [--all]'
+    );
+    process.exit(1);
+  }
+
+  const resolvedSource = path.resolve(sourceArg);
+  if (!fs.existsSync(resolvedSource)) {
+    console.error(`Error: Source path not found: ${sourceArg}`);
+    process.exit(1);
+  }
+
+  fs.mkdirSync(knowledgeDir, { recursive: true });
+  const registry = loadRegistry(knowledgeDir);
+  const stat = fs.statSync(resolvedSource);
+
+  const upsertRegistryEntry = (unitName: string, originPath: string) => {
+    const now = new Date().toISOString();
+    const existing = registry.sources.find((s) => s.name === unitName);
+    if (existing) {
+      existing.url = `local:${originPath}`;
+      existing.commit = 'local';
+      existing.updatedAt = now;
+    } else {
+      registry.sources.push({
+        name: unitName,
+        url: `local:${originPath}`,
+        commit: 'local',
+        installedAt: now,
+        updatedAt: now,
+      });
+    }
+  };
+
+  // Case 1: Standalone .md file
+  if (stat.isFile()) {
+    if (installAll) {
+      console.error('Error: --all cannot be used when installing a single file.');
+      process.exit(1);
+    }
+    const baseName = customName
+      ? customName.endsWith('.md')
+        ? customName
+        : `${customName}.md`
+      : path.basename(resolvedSource);
+    console.log(`Validating '${baseName}'...`);
+    const { errors, warnings } = validateStandaloneMdFile(resolvedSource);
+    printValidationResults(baseName, errors, warnings);
+    if (errors.length > 0) {
+      console.error(`\nError: Validation failed with ${errors.length} error(s). Aborting install.`);
+      process.exit(1);
+    }
+
+    const destFile = resolveSafeUnitDir(knowledgeDir, baseName);
+    if (path.resolve(destFile) === resolvedSource) {
+      console.error(`Error: Source and destination are the same path (${destFile}).`);
+      process.exit(1);
+    }
+    if (fs.existsSync(destFile) && !force) {
+      console.error(`Error: '${baseName}' already exists in knowledge folder. Use --force to overwrite.`);
+      process.exit(1);
+    }
+
+    fs.mkdirSync(path.dirname(destFile), { recursive: true });
+    fs.copyFileSync(resolvedSource, destFile);
+    upsertRegistryEntry(baseName, resolvedSource);
+    saveRegistry(knowledgeDir, registry);
+    console.log(`✓ Installed standalone knowledge '${baseName}'`);
+    return;
+  }
+
+  // Case 2: Directory with --all (install all units / standalone docs inside a staging folder)
+  if (installAll) {
+    if (customName) {
+      console.error('Error: --name cannot be combined with --all.');
+      process.exit(1);
+    }
+
+    const manifestFolders = findManifestFolders(resolvedSource).filter(
+      (f) => path.resolve(f) !== resolvedSource
+    );
+    const topLevelMds = fs
+      .readdirSync(resolvedSource, { withFileTypes: true })
+      .filter((e) => e.isFile() && e.name.toLowerCase().endsWith('.md') && e.name.toLowerCase() !== 'readme.md')
+      .map((e) => path.join(resolvedSource, e.name));
+
+    if (manifestFolders.length === 0 && topLevelMds.length === 0) {
+      console.error(`Error: No knowledge units or standalone .md files found inside '${sourceArg}'.`);
+      process.exit(1);
+    }
+
+    let validationFailures = 0;
+    for (const unitDir of manifestFolders) {
+      const unitName = path.basename(unitDir);
+      console.log(`Validating '${unitName}'...`);
+      const { errors, warnings } = validateManifestUnitDir(unitDir, unitName);
+      printValidationResults(unitName, errors, warnings);
+      if (errors.length > 0) validationFailures += errors.length;
+    }
+    for (const mdFile of topLevelMds) {
+      const docName = path.basename(mdFile);
+      console.log(`Validating '${docName}'...`);
+      const { errors, warnings } = validateStandaloneMdFile(mdFile);
+      printValidationResults(docName, errors, warnings);
+      if (errors.length > 0) validationFailures += errors.length;
+    }
+
+    if (validationFailures > 0) {
+      console.error(`\nError: Validation failed with ${validationFailures} error(s). Aborting install.`);
+      process.exit(1);
+    }
+
+    let installed = 0;
+    let skipped = 0;
+
+    for (const unitDir of manifestFolders) {
+      const unitName = path.basename(unitDir);
+      const destDir = resolveSafeUnitDir(knowledgeDir, unitName);
+      if (fs.existsSync(destDir) && !force) {
+        console.log(`  Skipping '${unitName}' (already exists; use --force to overwrite)`);
+        skipped++;
+        continue;
+      }
+      removeDirSync(destDir);
+      copyDirSync(unitDir, destDir);
+      upsertRegistryEntry(unitName, unitDir);
+      console.log(`  ✓ Installed '${unitName}'`);
+      installed++;
+    }
+
+    for (const mdFile of topLevelMds) {
+      const docName = path.basename(mdFile);
+      const destFile = resolveSafeUnitDir(knowledgeDir, docName);
+      if (fs.existsSync(destFile) && !force) {
+        console.log(`  Skipping '${docName}' (already exists; use --force to overwrite)`);
+        skipped++;
+        continue;
+      }
+      fs.copyFileSync(mdFile, destFile);
+      upsertRegistryEntry(docName, mdFile);
+      console.log(`  ✓ Installed '${docName}'`);
+      installed++;
+    }
+
+    saveRegistry(knowledgeDir, registry);
+    console.log(`\nDone. ${installed} installed, ${skipped} skipped.`);
+    return;
+  }
+
+  // Case 3: Single manifest-based directory
+  const manifestPath = path.join(resolvedSource, 'manifest.json');
+  if (!fs.existsSync(manifestPath)) {
+    console.error(
+      `Error: No manifest.json found in '${sourceArg}'. (If this is a parent folder of multiple units, pass --all)`
+    );
+    process.exit(1);
+  }
+
+  const unitName = customName || path.basename(resolvedSource);
+  console.log(`Validating '${unitName}'...`);
+  const { errors, warnings } = validateManifestUnitDir(
+    resolvedSource,
+    customName ? path.basename(resolvedSource) : unitName
+  );
+  printValidationResults(unitName, errors, warnings);
+
+  if (errors.length > 0) {
+    console.error(`\nError: Validation failed with ${errors.length} error(s). Aborting install.`);
+    process.exit(1);
+  }
+
+  const destDir = resolveSafeUnitDir(knowledgeDir, unitName);
+  if (path.resolve(destDir) === resolvedSource) {
+    console.error(`Error: Source and destination are the same directory (${destDir}).`);
+    process.exit(1);
+  }
+
+  if (fs.existsSync(destDir) && !force) {
+    console.error(`Error: '${unitName}' is already installed. Use --force to overwrite.`);
+    process.exit(1);
+  }
+
+  removeDirSync(destDir);
+  copyDirSync(resolvedSource, destDir);
+  if (customName) {
+    syncManifestName(destDir, unitName);
+  }
+
+  upsertRegistryEntry(unitName, resolvedSource);
+  saveRegistry(knowledgeDir, registry);
+  console.log(`✓ Installed '${unitName}'`);
 }
 
 function printValidationResults(name: string, errors: string[], warnings: string[]): void {
@@ -1109,6 +1552,13 @@ Commands:
       --name    Custom name for the installed knowledge (default: derived from URL/path).
       --all     Auto-detect and install ALL subfolders with manifest.json (monorepo mode).
 
+  install <path> [--name <alias>] [--force] [--all]
+      Validate and install drafted knowledge from a local path (e.g. ./.agents/knowledges/<name>)
+      into the knowledge directory. Supports manifest folders and standalone .md files.
+      --name    Custom name for the installed knowledge unit.
+      --force   Overwrite if already installed in the knowledge directory.
+      --all     Install all knowledge units and standalone .md files inside <path>.
+
   info <name>
       Show detailed information about an installed knowledge unit.
 
@@ -1118,9 +1568,10 @@ Commands:
   list
       List all installed knowledge sources with their origin and version.
 
-  validate [name]
-      Validate knowledge unit structure (manifest, file references, workflows).
-      If no name given, validates all manifest-based units.
+  validate [name|path]
+      Validate knowledge unit structure (manifest, file references, workflows, or standalone .md).
+      Accepts an installed unit name or a direct local path (e.g. ./.agents/knowledges/<name>).
+      If omitted, validates all manifest-based units in the knowledge directory.
 
   update [name]
       Update all installed sources (or a specific one) from their remote repos.
@@ -1185,6 +1636,9 @@ export function runCli(rawArgs: string[]): void {
   switch (command) {
     case 'add':
       cmdAdd(knowledgeDir, args.slice(1));
+      break;
+    case 'install':
+      cmdInstall(knowledgeDir, args.slice(1));
       break;
     case 'info':
       cmdInfo(knowledgeDir, args.slice(1));

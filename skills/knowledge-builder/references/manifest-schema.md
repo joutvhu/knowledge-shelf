@@ -1,31 +1,32 @@
 # Manifest Schema Reference
 
-Complete schema for `manifest.json` — the file that defines a knowledge unit.
+Complete schema for `manifest.json` — the metadata definition of a manifest-based knowledge unit.
 
 ## Required Fields
 
-| Field | Type | Description |
+| Field | Type | Rules |
 |---|---|---|
-| `name` | string | Identifier, must match folder name.  Lowercase, hyphens, numbers. |
+| `name` | string | Must match the unit folder name exactly. Lowercase letters, numbers, and hyphens only. (Scored at **10 pts** in search). |
 | `version` | string | Semantic version (e.g., `"1.0.0"`). |
-| `type` | string | One of:  `boilerplate`, `template`, `toolkit`, `cookbook`. |
-| `description` | string | 1-2 sentence summary.  Used for search matching. |
+| `type` | string | One of: `boilerplate`, `template`, `toolkit`, `cookbook`. (Scored at **7 pts** in search). |
+| `description` | string | 1–2 sentence summary containing key search nouns. (Scored at **2 pts** in search). |
 
 ## Optional Fields
 
 | Field | Type | Description |
 |---|---|---|
-| `doc` | string | Filename of main doc (e.g., `"overview.md"`).  `get_doc` returns this file. |
-| `tags` | string[] | Keywords for search.  Include language, framework, domain. |
-| `requires` | string[] | Knowledge folders this depends on.  AI reads those first. |
-| `enhances` | string[] | Knowledge folders this complements (not required). |
-| `modules` | object | Named modules with files, dependencies, guide. |
-| `scripts` | object | Named scripts with file path, interpreter, args. |
-| `workflows` | object | Named workflows (name + description only — details in workflow JSON). |
-| `references` | object | Named reference docs with file path + description. |
-| `placeholders` | object | Named placeholders with description + example. |
+| `doc` | string | Relative path to main overview Markdown file (e.g., `"overview.md"`). Returned by `get_doc`. |
+| `aliases` | string[] | High-priority alternate names, artifact IDs, or abbreviations. (**Highest search weight: 12 pts**). |
+| `tags` | string[] | 8–12 search keywords covering language, framework, domain, and pattern. (**8 pts** in search). |
+| `requires` | string[] | Other knowledge unit names this unit depends on. |
+| `enhances` | string[] | Other knowledge unit names this unit complements. |
+| `modules` | object | Named reusable code/doc modules with `files`, `dependencies`, `guide`, and `tags`. (Module keys score **6 pts**). |
+| `scripts` | object | Named automation scripts with `file`, `interpreter`, `description`, and `args`. |
+| `workflows` | object | Named workflows (`{ "<name>": { "description": "..." } }`). Full definition lives in `workflows/<name>.json`. |
+| `references` | object | Named on-demand reference docs (`{ "<name>": { "file": "references/<file>.md", "description": "..." } }`). |
+| `placeholders` | object | Named template variables (`{{UPPER_SNAKE_CASE}}`) with `description` and `example`. |
 
-## Modules
+## Modules (`modules`)
 
 ```json
 "modules": {
@@ -42,22 +43,10 @@ Complete schema for `manifest.json` — the file that defines a knowledge unit.
 }
 ```
 
-| Field | Required | Description |
-|---|---|---|
-| `description` | ✅ | What the module provides |
-| `guide` | Optional | Path to reference doc explaining this module |
-| `files` | Recommended | List of resource files belonging to this module |
-| `dependencies` | Optional | Other module names that must be present first |
-| `tags` | Optional | Keywords for matching user requests to modules |
+- All paths in `files` and `guide` are relative to the knowledge unit folder root and must exist on disk (`knowledge-shelf validate` verifies every path and blocks path traversal).
+- `dependencies` must reference valid module keys within the same `manifest.json` (no circular dependencies).
 
-> **Note:** "Required" here means the `validate` CLI will report errors if missing.  The MCP server itself is lenient — it indexes whatever is present.
-
-**Dependency rules:**
-- Dependencies are module names within the same knowledge unit
-- AI should copy/install dependency modules before the dependent module
-- Circular dependencies are not allowed
-
-## Scripts
+## Scripts (`scripts`)
 
 ```json
 "scripts": {
@@ -73,26 +62,12 @@ Complete schema for `manifest.json` — the file that defines a knowledge unit.
 }
 ```
 
-| Field | Required | Description |
-|---|---|---|
-| `file` | ✅ | Path to script file relative to knowledge folder |
-| `interpreter` | Optional | Runtime command.  Auto-detected from extension if omitted. |
-| `description` | Recommended | What the script does |
-| `args` | Optional | CLI arguments with metadata |
+- `file` is required and must exist inside the knowledge unit folder.
+- `interpreter` is optional if the file uses a standard extension (`.py`, `.js`, `.mjs`, `.cjs`, `.ps1`, `.sh`, `.cmd`, `.bat`). Allowed values: `python`, `python3`, `node`, `pwsh`, `powershell`, `bash`, `sh`, `cmd`.
 
-**Interpreter auto-detection:**
+## Workflows (`workflows`)
 
-| Extension | Interpreter |
-|---|---|
-| `.py` | `python` |
-| `.js` | `node` |
-| `.ps1` | `pwsh` |
-| `.cmd` | `cmd /c` |
-| `.sh` | `bash` |
-
-## Workflows
-
-Manifest only stores name + description.  Full definition lives in `workflows/<name>.json`.
+Manifest only declares the workflow name and description. For every key `<workflow-name>`, a corresponding `workflows/<workflow-name>.json` file must exist with a valid `steps` array:
 
 ```json
 "workflows": {
@@ -100,29 +75,28 @@ Manifest only stores name + description.  Full definition lives in `workflows/<n
 }
 ```
 
-See `workflow-schema.md` for workflow JSON format.
-
-## References
+## References (`references`)
 
 ```json
 "references": {
-  "<ref-name>": {"file": "references/<filename>.md", "description": "What this covers"}
+  "<ref-name>": {
+    "file": "references/<filename>.md",
+    "description": "What this reference covers"
+  }
 }
 ```
 
-## Placeholders
+## Placeholders (`placeholders`)
 
 ```json
 "placeholders": {
-  "<PLACEHOLDER_NAME>": {"description": "What this value represents", "example": "com.example.app"}
+  "PACKAGE_NAME": {"description": "Target package or namespace", "example": "com.example.app"}
 }
 ```
 
-- Keys are UPPER_SNAKE_CASE (matching `{{KEY}}` in resource files)
-- `description` helps AI ask user the right question
-- `example` helps AI suggest default values
+- Keys must match `{{UPPER_SNAKE_CASE}}` (`/[A-Za-z0-9_]+/`) used inside template files and workflows.
 
-## Full Example
+## Complete Example
 
 ```json
 {
@@ -131,20 +105,21 @@ See `workflow-schema.md` for workflow JSON format.
   "version": "1.0.0",
   "type": "boilerplate",
   "doc": "overview.md",
-  "description": "Boilerplate for XYZ framework testing",
-  "tags": ["xyz", "testing", "java"],
-  "requires": ["xyz-common-docs"],
+  "description": "Boilerplate for XYZ framework testing with page objects and form utilities",
+  "aliases": ["xyz-test", "xyz-qa"],
+  "tags": ["xyz", "testing", "java", "page-object", "automation", "forms", "e2e", "qa"],
+  "requires": [],
   "enhances": [],
   "modules": {
     "base": {
-      "description": "Base classes and configuration",
+      "description": "Base classes and test lifecycle hooks",
       "guide": "references/setup-guide.md",
       "files": ["src/BasePage.java", "config/Hooks.java"],
       "dependencies": [],
       "tags": ["base", "setup"]
     },
     "forms": {
-      "description": "Form interaction utilities",
+      "description": "Form interaction and validation utilities",
       "guide": "references/forms-guide.md",
       "files": ["src/FormPage.java", "steps/FormSteps.java"],
       "dependencies": ["base"],
@@ -163,15 +138,16 @@ See `workflow-schema.md` for workflow JSON format.
     }
   },
   "workflows": {
-    "setup-forms": {"description": "Add form testing to existing project"}
+    "setup-forms": {"description": "Add form testing module to an existing project"}
   },
   "references": {
-    "setup-guide": {"file": "references/setup-guide.md", "description": "How to setup from scratch"},
-    "forms-guide": {"file": "references/forms-guide.md", "description": "Form locators and patterns"}
+    "setup-guide": {"file": "references/setup-guide.md", "description": "Initial project setup and hook registration"},
+    "forms-guide": {"file": "references/forms-guide.md", "description": "Form locators, API methods, and usage examples"}
   },
   "placeholders": {
-    "PACKAGE_NAME": {"description": "Target package/namespace", "example": "com.example.qa"},
-    "APP_NAME": {"description": "Application name", "example": "MyApp"}
+    "TARGET": {"description": "Absolute path to target project root", "example": "/workspace/my-project"},
+    "PACKAGE_NAME": {"description": "Target Java package", "example": "com.example.qa"},
+    "PACKAGE_PATH": {"description": "Target Java package as directory path", "example": "com/example/qa"}
   }
 }
 ```

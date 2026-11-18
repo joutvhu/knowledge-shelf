@@ -1,96 +1,73 @@
 ---
 name: knowledge-builder
-description: "Build, scaffold, and maintain knowledge base units.  Also generates reference documentation from library/framework source code.  Use when: creating new knowledge from scratch, converting existing docs into manifest-based knowledge, adding modules/workflows/scripts, generating docs from source code, or validating knowledge structure.  Triggers on: 'create knowledge', 'build knowledge', 'new knowledge', 'add module to knowledge', 'add workflow', 'scaffold knowledge', 'knowledge manifest', 'convert to knowledge', 'generate knowledge from source', 'write knowledge docs', 'analyze library for knowledge'."
+description: "Build, scaffold, validate, and install knowledge units for Knowledge Shelf. Use when creating new knowledge from scratch, extracting reference docs or boilerplates from source code, converting existing docs into manifest-based knowledge, adding modules/workflows/scripts, or validating and installing drafted knowledge. Triggers on: 'create knowledge', 'build knowledge', 'new knowledge', 'add module to knowledge', 'add workflow', 'scaffold knowledge', 'knowledge manifest', 'convert to knowledge', 'generate knowledge from source', 'write knowledge docs', 'install knowledge'."
 ---
 
 # Knowledge Builder
 
-Helps users create and maintain knowledge base units for the Knowledge Shelf.
+Author, validate, and install knowledge units for the Knowledge Shelf MCP server.
 
-## What This Skill Does
+## Authoring Workflow (Stage → Validate → Review → Install)
 
-1. **Scaffold new knowledge** — Create manifest.json + folder structure from scratch
-2. **Add modules** — Add new modules (with files, dependencies, guide) to existing knowledge
-3. **Add workflows** — Create workflow JSON definitions for automation
-4. **Add scripts** — Create automation scripts with proper conventions
-5. **Add references** — Create reference documentation
-6. **Add integration guides** — Write step-by-step instructions for wiring code into projects
-7. **Convert legacy** — Upgrade loose .md files into manifest-based knowledge units
-8. **Validate** — Check knowledge structure for completeness and consistency
-9. **Generate docs from source** — Analyze library source code and produce reference documentation
+Always draft new or modified knowledge inside the workspace staging directory `./.agents/knowledges/` first so the user can inspect files in their IDE before installing into the active Knowledge Shelf directory (`~/.knowledge/` or `KNOWLEDGE_DIR`).
 
-## References (load on demand)
+### Step 1: Clarify scope & format
+Determine which of the two formats fits the request:
+- **Manifest-based unit** (`./.agents/knowledges/<name>/manifest.json` + resources): For reusable code (`boilerplate`), project scaffolding (`template`), automation scripts (`toolkit`), or multi-part guides (`cookbook`).
+- **Standalone Markdown doc** (`./.agents/knowledges/<name>.md` with YAML frontmatter): For single-file API references, team conventions, or library documentation without code templates or workflows.
 
-For detailed schemas, templates, and guidelines, read these files:
+### Step 2: Draft in workspace staging (`./.agents/knowledges/`)
+1. Read `references/manifest-schema.md` when creating/updating `manifest.json`, and `references/workflow-schema.md` when authoring `workflows/<name>.json`.
+2. Write all drafted files under `./.agents/knowledges/<name>/` (or `./.agents/knowledges/<name>.md` for standalone docs).
+   - *Exception*: Only edit an installed knowledge folder directly if the user explicitly asks to modify an already-installed unit in place.
 
-| Reference | When to read |
-|---|---|
-| `references/manifest-schema.md` | Creating/modifying manifest.json |
-| `references/workflow-schema.md` | Creating workflow JSON files |
-| `references/integration-guide-template.md` | Writing integration guides for modules |
-| `references/writing-for-ai.md` | Best practices for AI-consumable content |
-| `references/source-code-analysis.md` | Generating docs from library source code |
-
-## Workflow
-
-### Step 1:  Understand what user wants
-
-Ask:
-- What type of knowledge?  (boilerplate, template, toolkit, cookbook)
-- What language/framework?
-- What's the purpose?
-- Does it already exist (upgrade) or start from scratch?
-
-### Step 2:  Determine knowledge directory
-
-Find where knowledge lives:
-- Check if `KNOWLEDGE_DIR` env var is set
-- Look for `~/.knowledge/` (global default)
-- Or ask user for the path
-
-### Step 3:  Read relevant references
-
-Before creating content, **always** read `references/writing-for-ai.md` first, then read the task-specific reference:
-- Scaffolding → read `references/manifest-schema.md`
-- Adding workflow → read `references/workflow-schema.md`
-- Module with integration needs → read `references/integration-guide-template.md`
-- Generating from source → read `references/source-code-analysis.md`
-
-### Step 4:  Scaffold or modify
-
-Based on user's needs, create/modify files in the knowledge directory.
-
-### Step 5:  Validate
-
-After creating/modifying, run validation:
+### Step 3: Validate the staged knowledge
+Run the CLI validator directly against the staged path:
 ```bash
-knowledge-shelf validate <name>
-knowledge-shelf info <name>
+knowledge-shelf validate ./.agents/knowledges/<name>
+```
+Fix all reported errors (`✗ ERROR`) and address warnings (`⚠ WARNING`) before proceeding.
+
+### Step 4: Present for user review & install
+Show the user what was generated in `./.agents/knowledges/<name>` and ask them to review it. Once approved (or if the user asked to install immediately), install it into the Knowledge Shelf:
+```bash
+# Install a single manifest unit or standalone .md file (runs validation automatically)
+knowledge-shelf install ./.agents/knowledges/<name>
+
+# Overwrite an existing unit of the same name after iterative edits
+knowledge-shelf install ./.agents/knowledges/<name> --force
+
+# Install all drafted units inside ./.agents/knowledges/
+knowledge-shelf install ./.agents/knowledges --all --force
 ```
 
-## Quick Reference
+---
 
-### Minimum viable knowledge
+## Knowledge Formats & Architecture
+
+### 1. Manifest-Based Unit (`./.agents/knowledges/<name>/`)
 
 ```
-<knowledge-dir>/<name>/
-├── manifest.json              ← only required file
-└── (resources, references, scripts, workflows — all optional)
+.agents/knowledges/<name>/
+├── manifest.json              ← Required: metadata, modules, workflows, scripts, references
+├── overview.md                ← Main doc (referenced by manifest "doc" field; returned by get_doc)
+├── references/                ← Deep guides & API docs (loaded on-demand via get_resource)
+├── workflows/                 ← Automation definitions (<workflow-name>.json; run via run_workflow)
+├── scripts/                   ← Self-contained scripts (.py, .js, .ps1, .sh, .cmd)
+└── <resource-dirs>/           ← Self-contained code templates with {{UPPER_SNAKE_CASE}} placeholders
 ```
 
-### manifest.json template
-
-> `$schema` is a convention — not validated by the server.
-
+Minimal `manifest.json`:
 ```json
 {
   "$schema": "knowledge-manifest/1.0",
   "name": "<name>",
   "version": "1.0.0",
   "type": "<boilerplate|template|toolkit|cookbook>",
-  "doc": "<optional-doc-file.md>",
-  "description": "<1-2 sentence description for search>",
-  "tags": ["<tag1>", "<tag2>", "<tag3>"],
+  "doc": "overview.md",
+  "description": "<1-2 sentence summary with specific domain keywords>",
+  "aliases": ["<short-alias>", "<alt-name>"],
+  "tags": ["<lang>", "<framework>", "<domain>", "<pattern>"],
   "modules": {},
   "scripts": {},
   "workflows": {},
@@ -99,100 +76,50 @@ knowledge-shelf info <name>
 }
 ```
 
-### Required fields
+### 2. Standalone Markdown Document (`./.agents/knowledges/<name>.md`)
 
-| Field | Rules |
+> **Important**: Never name a standalone document `README.md` — the Knowledge Shelf scanner ignores `README.md` and `manifest.json` when indexing standalone files.
+
+```markdown
+---
+title: "<Human-readable Title>"
+description: "<1-2 sentence summary for search>"
+tags: [<lang>, <framework>, <domain>, <topic>]
+aliases: [<short-name>, <artifact-id>]
+---
+
+# <Title>
+
+## <Section Heading 1>
+...
+```
+*(Note: Markdown files placed inside `references/` of a manifest-based unit do NOT need YAML frontmatter because `manifest.json` handles their metadata.)*
+
+---
+
+## Engine Rules & Non-Obvious Constraints
+
+1. **Search Ranking Weights (`search_docs` & `knowledge-shelf search`)**:
+   - `aliases`: **12 pts** | `title` (or `manifest.name`): **10 pts** | `tags`: **8 pts** | `type`: **7 pts** | `modules` & folder/file `name`: **6 pts** | Markdown `sections` (H1–H6 headings): **4 pts** | `description`: **2 pts**.
+   - Always populate `aliases` (e.g. artifact IDs, abbreviations) and 8–12 specific `tags` so AI agents can discover the unit on the first search.
+2. **`doc` vs `references/` Split (Context Budget)**:
+   - `doc` (loaded via `get_doc`) must stay concise (< 100 lines): overview, prerequisites, and quick-start workflow/module table.
+   - Put detailed API tables, module wiring instructions, and edge cases in `references/<topic>.md` (loaded on-demand via `get_resource` or `get_doc_section`).
+3. **Workflow Path Containment Security (`copy` and `mkdir` steps)**:
+   - Every `target` (in `copy`) and `path` (in `mkdir`) **MUST** start with a root placeholder prefix `{{ROOT_KEY}}/...` (e.g. `{{TARGET}}/src/...`), and the runtime value of `ROOT_KEY` must be an **absolute path**. Relative targets or paths without a `{{ROOT_KEY}}` prefix are rejected by the MCP server security check.
+   - Every `source` (in `copy`) and `script` (in `run`) must stay strictly inside the knowledge unit folder (no `..` traversal).
+4. **Allowed Script Interpreters (`run` steps)**:
+   - Whitelisted interpreters: `python`, `python3`, `node`, `pwsh`, `powershell`, `bash`, `sh`, `cmd`.
+   - Auto-detected extensions when `interpreter` is omitted: `.py` → `python`, `.js`/`.mjs`/`.cjs` → `node`, `.ps1` → `pwsh` (falls back to `powershell` on Windows), `.sh` → `bash`, `.cmd`/`.bat` → `cmd`.
+   - Scripts execute with `cwd` set to the knowledge unit folder and a 120-second timeout. Keep scripts self-contained with zero external relative imports outside the unit folder.
+5. **Placeholders**:
+   - Must use exact `{{UPPER_SNAKE_CASE}}` syntax (`/[A-Za-z0-9_]+/`). Declare all placeholders used across code templates in `manifest.json` under `"placeholders"`.
+6. **Module Wiring Guides**:
+   - When a module's files need to be wired into existing host project files (e.g. registering hooks, dependency injection, config), attach `"guide": "references/<module>-guide.md"` to the module entry documenting target file locations, host code edits, and a minimal usage example.
+
+## References (Load on Demand)
+
+| Reference | When to read |
 |---|---|
-| `name` | Must match folder name.  Lowercase, hyphens, numbers only. |
-| `version` | Semantic version (e.g., `"1.0.0"`) |
-| `type` | One of: `boilerplate`, `template`, `toolkit`, `cookbook` |
-| `description` | 1-2 sentences.  Drives search relevance — be specific. |
-
-### Knowledge Types (guidelines, not enforced)
-
-| Type | Modules | Scripts | Code | Primary use |
-|---|---|---|---|---|
-| `boilerplate` | ✅ | ✅ | ✅ | Copy code partially into projects |
-| `template` | ❌ | ✅ | ✅ | Scaffold entire projects |
-| `toolkit` | ❌ | ✅ | ❌ | Run scripts for tasks |
-| `cookbook` | ✅ | ❌ | ⚠️ | Patterns and guides |
-
-### Adding components (quick syntax)
-
-**Module:**
-```json
-"modules": {
-  "<name>": {
-    "description": "<what it provides>",
-    "files": ["<path/File>"],
-    "guide": "references/<name>-guide.md",
-    "dependencies": ["<other-module>"],
-    "tags": ["<keyword>"]
-  }
-}
-```
-
-**Workflow:**  Create `workflows/<name>.json` (see `references/workflow-schema.md`), then:
-```json
-"workflows": { "<name>": {"description": "<what it does>"} }
-```
-
-**Script:**
-```json
-"scripts": {
-  "<name>": {
-    "file": "scripts/<name>.py",
-    "description": "<what it does>",
-    "args": { "--target": {"required": true, "type": "path", "description": "Target dir"} }
-  }
-}
-```
-
-**Reference:**
-```json
-"references": { "<name>": {"file": "references/<name>.md", "description": "<what it covers>"} }
-```
-
-### Placeholder convention
-
-Format: `{{UPPER_SNAKE_CASE}}` — declared in manifest `placeholders` field:
-```json
-"placeholders": {
-  "PACKAGE_NAME": {"description": "Target Java package", "example": "com.example.qa"}
-}
-```
-
-## Converting Legacy to Manifest-Based
-
-1. Identify the legacy .md file(s)
-2. Create a subfolder with the knowledge name
-3. Move .md files into the subfolder (as references or doc)
-4. Create `manifest.json` with metadata extracted from frontmatter
-5. Set `"doc"` field to the main .md file
-6. Validate: `knowledge-shelf validate <name>`
-
-## Important Rules
-
-1. **manifest.json is the only required file** — everything else is optional
-2. **Folder name must match manifest `name`**
-3. **Scripts must be self-contained** — no imports from outside the knowledge folder
-4. **Placeholders only for project-specific values** — not for logic
-5. **Workflows reference files relative to knowledge folder root**
-6. **Always write integration guides** when modules need to be wired into existing code
-7. **Always read `references/writing-for-ai.md`** before creating content — follow its guidelines
-8. **Test with CLI** — `knowledge-shelf validate`, `knowledge-shelf info`
-
-## Validation Checklist
-
-- [ ] Required fields present: `name`, `version`, `type`, `description`
-- [ ] `name` matches folder name
-- [ ] All `modules.*.files` exist on disk
-- [ ] All `scripts.*.file` exist on disk
-- [ ] All `references.*.file` exist on disk
-- [ ] Workflow JSON files valid with `steps` array
-- [ ] Module `dependencies` reference valid module names
-- [ ] `doc` file exists (if specified)
-- [ ] Placeholders use `{{UPPER_SNAKE_CASE}}` format
-- [ ] Tags: 8-12 keywords covering language, framework, domain
-- [ ] Description: specific, searchable terms
-- [ ] Integration guide exists for modules that need wiring
+| `references/manifest-schema.md` | Full `manifest.json` field specifications and complete example |
+| `references/workflow-schema.md` | Full `workflows/<name>.json` step actions, security rules, and execution semantics |

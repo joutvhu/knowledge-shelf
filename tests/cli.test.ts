@@ -191,6 +191,122 @@ describe('CLI Commands', () => {
       expect(res.status).toBe(1);
       expect(res.stdout).toContain('doc file not found: missing.md');
     });
+
+    it('should validate an external draft path directly without installing it', () => {
+      const stagingRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'ks-staging-'));
+      try {
+        const draftDir = path.join(stagingRoot, '.agents', 'knowledges', 'draft-unit');
+        fs.mkdirSync(draftDir, { recursive: true });
+        fs.writeFileSync(path.join(draftDir, 'overview.md'), '# Overview\n\nBody.', 'utf-8');
+        fs.writeFileSync(
+          path.join(draftDir, 'manifest.json'),
+          JSON.stringify({
+            name: 'draft-unit',
+            version: '1.0.0',
+            type: 'cookbook',
+            description: 'Drafted in workspace',
+            doc: 'overview.md',
+          }),
+          'utf-8'
+        );
+
+        const out = runCli(`validate "${draftDir}"`, tmpDir);
+        expect(out).toContain('draft-unit — OK');
+        expect(out).toContain('0 error(s)');
+      } finally {
+        fs.rmSync(stagingRoot, { recursive: true, force: true });
+      }
+    });
+  });
+
+  describe('install from local staging path', () => {
+    it('should validate and install a staged manifest unit, block invalid units, and support --force & --all', () => {
+      const stagingRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'ks-install-staging-'));
+      try {
+        runCli('init', tmpDir);
+
+        const stagedKnowledges = path.join(stagingRoot, '.agents', 'knowledges');
+        const unitADir = path.join(stagedKnowledges, 'unit-a');
+        fs.mkdirSync(unitADir, { recursive: true });
+        fs.writeFileSync(path.join(unitADir, 'overview.md'), '# Unit A v1\n\nContent.', 'utf-8');
+        fs.writeFileSync(
+          path.join(unitADir, 'manifest.json'),
+          JSON.stringify({
+            name: 'unit-a',
+            version: '1.0.0',
+            type: 'cookbook',
+            description: 'Staged unit A',
+            doc: 'overview.md',
+          }),
+          'utf-8'
+        );
+
+        // Install single manifest unit
+        const installOut = runCli(`install "${unitADir}"`, tmpDir);
+        expect(installOut).toContain('unit-a — OK');
+        expect(installOut).toContain("Installed 'unit-a'");
+        expect(fs.existsSync(path.join(tmpDir, 'unit-a', 'manifest.json'))).toBe(true);
+
+        // Re-installing without --force fails
+        const dupRes = spawnSync(process.execPath, [CLI_PATH, 'install', unitADir, '--dir', tmpDir], {
+          encoding: 'utf-8',
+          timeout: 10_000,
+        });
+        expect(dupRes.status).toBe(1);
+        expect(dupRes.stderr).toContain('Use --force to overwrite');
+
+        // Modify in staging and re-install with --force
+        fs.writeFileSync(path.join(unitADir, 'overview.md'), '# Unit A v2\n\nUpdated.', 'utf-8');
+        const forceOut = runCli(`install "${unitADir}" --force`, tmpDir);
+        expect(forceOut).toContain("Installed 'unit-a'");
+        expect(fs.readFileSync(path.join(tmpDir, 'unit-a', 'overview.md'), 'utf-8')).toContain('Unit A v2');
+
+        // Standalone .md file in staging
+        const standaloneMd = path.join(stagedKnowledges, 'api-conventions.md');
+        fs.writeFileSync(
+          standaloneMd,
+          '---\ndescription: REST API conventions\ntags: [api, rest]\n---\n\n# API Conventions\n\nUse JSON.',
+          'utf-8'
+        );
+
+        // Install all from .agents/knowledges with --all --force
+        const allOut = runCli(`install "${stagedKnowledges}" --all --force`, tmpDir);
+        expect(allOut).toContain("Installed 'unit-a'");
+        expect(allOut).toContain("Installed 'api-conventions.md'");
+        expect(fs.existsSync(path.join(tmpDir, 'api-conventions.md'))).toBe(true);
+
+        // Info works on standalone .md too
+        const infoOut = runCli('info api-conventions.md', tmpDir);
+        expect(infoOut).toContain('standalone (.md)');
+        expect(infoOut).toContain('REST API conventions');
+
+        // Invalid unit is blocked from installation
+        const invalidDir = path.join(stagedKnowledges, 'invalid-unit');
+        fs.mkdirSync(invalidDir, { recursive: true });
+        fs.writeFileSync(
+          path.join(invalidDir, 'manifest.json'),
+          JSON.stringify({
+            name: 'invalid-unit',
+            version: '1.0.0',
+            type: 'boilerplate',
+            description: 'Missing referenced file',
+            doc: 'nonexistent.md',
+          }),
+          'utf-8'
+        );
+
+        const badInstall = spawnSync(process.execPath, [CLI_PATH, 'install', invalidDir, '--dir', tmpDir], {
+          encoding: 'utf-8',
+          timeout: 10_000,
+        });
+        expect(badInstall.status).toBe(1);
+        expect(badInstall.stdout).toContain('doc file not found: nonexistent.md');
+        expect(badInstall.stderr).toContain('Aborting install');
+        expect(fs.existsSync(path.join(tmpDir, 'invalid-unit'))).toBe(false);
+      } finally {
+        fs.rmSync(stagingRoot, { recursive: true, force: true });
+      }
+    });
   });
 
   describe('add, update, and pin with local git repository', () => {
