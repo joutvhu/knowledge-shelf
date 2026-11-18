@@ -123,7 +123,7 @@ Search installed knowledge by keyword.
 knowledge-shelf search <keywords>
 ```
 
-Uses the same scoring algorithm as the MCP `search_docs` tool (excluding section headings):
+Uses the exact same scoring algorithm as the MCP `search_docs` tool:
 
 | Match location | Score |
 |---|---|
@@ -133,6 +133,7 @@ Uses the same scoring algorithm as the MCP `search_docs` tool (excluding section
 | `type` | 7 |
 | `modules` | 6 |
 | filename | 6 |
+| section headings | 4 |
 | `description` | 2 |
 
 Returns top 10 results sorted by relevance.
