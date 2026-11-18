@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [1.1.0] - 2026-11-19
 
 ### Added
 - Added `install <path> [--name <alias>] [--force] [--all]` CLI command to validate and install drafted knowledge units or standalone `.md` files from a local directory.
