@@ -243,6 +243,16 @@ describe('CLI Commands', () => {
         runCli('unpin demo-lib', tmpDir);
         runCli('update demo-lib', tmpDir);
         expect(fs.readFileSync(path.join(tmpDir, 'demo-lib', 'guide.md'), 'utf-8')).toContain('Version 2.0.0');
+
+        // Pinning to a non-existent ref must fail and not record a bogus pin
+        const badPin = spawnSync(process.execPath, [CLI_PATH, 'pin', 'demo-lib', 'v99.99.99', '--dir', tmpDir], {
+          encoding: 'utf-8',
+          timeout: 10_000,
+        });
+        expect(badPin.status).toBe(1);
+        expect(badPin.stderr).toContain('Failed to checkout');
+        const regAfterBadPin = JSON.parse(fs.readFileSync(path.join(tmpDir, '.registry.json'), 'utf-8'));
+        expect(regAfterBadPin.sources[0].pin).toBeUndefined();
       } finally {
         fs.rmSync(repoDir, { recursive: true, force: true });
       }
@@ -287,6 +297,23 @@ describe('CLI Commands', () => {
       expect(result).toContain('Exported');
       expect(fs.existsSync(outputPath)).toBe(true);
       expect(fs.statSync(outputPath).size).toBeGreaterThan(0);
+    });
+
+    it('should reject missing --output value and unknown flags', () => {
+      runCli('init', tmpDir);
+      const missingOut = spawnSync(process.execPath, [CLI_PATH, 'export', 'exportable', '--output', '--dir', tmpDir], {
+        encoding: 'utf-8',
+        timeout: 5_000,
+      });
+      expect(missingOut.status).toBe(1);
+      expect(missingOut.stderr).toContain('--output requires a file path');
+
+      const unknownFlag = spawnSync(process.execPath, [CLI_PATH, 'export', 'exportable', '--bogus', '--dir', tmpDir], {
+        encoding: 'utf-8',
+        timeout: 5_000,
+      });
+      expect(unknownFlag.status).toBe(1);
+      expect(unknownFlag.stderr).toContain('Unknown option');
     });
   });
 

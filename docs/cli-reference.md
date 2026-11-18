@@ -16,7 +16,7 @@ The CLI finds the knowledge directory in this order:
 
 1. `--dir <path>` flag (highest priority)
 2. `KNOWLEDGE_DIR` environment variable
-3. Walk up from CWD looking for a folder containing `.registry.json`
+3. Walk up from CWD looking for `.registry.json` (or `knowledge/.registry.json`)
 4. `~/.knowledge` (global default)
 
 ---

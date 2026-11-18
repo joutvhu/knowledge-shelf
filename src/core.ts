@@ -125,6 +125,12 @@ export interface ToolResponse {
 // Security Helpers
 // ---------------------------------------------------------------------------
 
+function isPathInside(base: string, target: string, strictChild: boolean): boolean {
+  const rel = path.relative(base, target);
+  if (!rel) return !strictChild;
+  return !rel.startsWith('..') && !path.isAbsolute(rel);
+}
+
 /**
  * Resolves `subPath` relative to `baseDir` and verifies the target stays inside
  * `baseDir` (following symlinks on existing ancestors to block symlink escapes).
@@ -135,9 +141,7 @@ export function resolveInsideDir(baseDir: string, subPath: string, strictChild =
     const resolvedBase = fs.existsSync(baseDir) ? fs.realpathSync(baseDir) : path.resolve(baseDir);
     const candidate = path.resolve(resolvedBase, subPath);
 
-    if (strictChild) {
-      if (!candidate.startsWith(resolvedBase + path.sep)) return null;
-    } else if (candidate !== resolvedBase && !candidate.startsWith(resolvedBase + path.sep)) {
+    if (!isPathInside(resolvedBase, candidate, strictChild)) {
       return null;
     }
 
@@ -155,9 +159,7 @@ export function resolveInsideDir(baseDir: string, subPath: string, strictChild =
     const realExisting = fs.existsSync(current) ? fs.realpathSync(current) : current;
     const canonical = tail.length > 0 ? path.join(realExisting, ...tail) : realExisting;
 
-    if (strictChild) {
-      if (!canonical.startsWith(resolvedBase + path.sep)) return null;
-    } else if (canonical !== resolvedBase && !canonical.startsWith(resolvedBase + path.sep)) {
+    if (!isPathInside(resolvedBase, canonical, strictChild)) {
       return null;
     }
 
@@ -524,58 +526,54 @@ function findResourceCaseInsensitive(knowledgeDir: string, name: string): string
 // ---------------------------------------------------------------------------
 
 function replacePlaceholders(text: string, values: Record<string, string>): string {
-  for (const [key, value] of Object.entries(values)) {
-    text = text.replaceAll(`{{${key}}}`, value);
-  }
-  return text;
+  return text.replace(/\{\{([A-Za-z0-9_]+)\}\}/g, (match, key: string) =>
+    Object.prototype.hasOwnProperty.call(values, key) ? values[key] : match
+  );
 }
 
 /**
  * Validates that a workflow output path (`copy` target or `mkdir` path) does not
- * contain unresolved placeholders, is not a relative path escaping into the MCP
- * server's own working directory, and stays inside any root path input that the
- * step template explicitly prefixes (`{{KEY}}/...`).
+ * contain unresolved placeholders, starts with a root path placeholder (`{{KEY}}/...`),
+ * and stays inside that root input directory.
  */
 function resolveSafeOutputTarget(
   pathTemplate: string,
   inputs: Record<string, string>
 ): { resolvedPath?: string; error?: string } {
-  const rendered = replacePlaceholders(pathTemplate, inputs).trim();
-  if (!rendered) {
+  const trimmedTemplate = pathTemplate.trim();
+  if (!trimmedTemplate) {
     return { error: 'Target path is empty.' };
   }
+
+  const prefixMatch = trimmedTemplate.match(/^\{\{([A-Za-z0-9_]+)\}\}(?:[/\\](.*))?$/);
+  if (!prefixMatch) {
+    return {
+      error: `Target path '${pathTemplate}' must start with a root path placeholder (e.g. {{TARGET}}/...).`,
+    };
+  }
+
+  const rendered = replacePlaceholders(trimmedTemplate, inputs).trim();
   if (/\{\{[A-Za-z0-9_]+\}\}/.test(rendered)) {
     return { error: `Target path '${rendered}' contains unresolved placeholder(s).` };
   }
 
-  // If the template starts with {{KEY}} (e.g. "{{TARGET}}/src/App.java"), enforce containment
-  // within that root input directory so neither the input nor the template can traverse outside it.
-  const prefixMatch = pathTemplate.trim().match(/^\{\{([A-Za-z0-9_]+)\}\}(?:[/\\](.*))?$/);
-  if (prefixMatch) {
-    const rootKey = prefixMatch[1];
-    const rootVal = inputs[rootKey];
-    if (rootVal) {
-      if (!path.isAbsolute(rootVal)) {
-        return { error: `Input '${rootKey}' ('${rootVal}') must be an absolute path.` };
-      }
-      const rootBase = path.resolve(rootVal);
-      const subRel = replacePlaceholders(prefixMatch[2] || '', inputs);
-      if (!subRel) {
-        return { resolvedPath: rootBase };
-      }
-      const safe = resolveInsideDir(rootBase, subRel, true);
-      if (!safe) {
-        return { error: `Target path '${rendered}' escapes base directory '${rootBase}'.` };
-      }
-      return { resolvedPath: safe };
-    }
+  const rootKey = prefixMatch[1];
+  const rootVal = inputs[rootKey];
+  if (!rootVal || !path.isAbsolute(rootVal)) {
+    return { error: `Input '${rootKey}' ('${rootVal || ''}') must be an absolute path.` };
   }
 
-  if (!path.isAbsolute(rendered)) {
-    return { error: `Target path '${rendered}' must be an absolute path.` };
+  const rootBase = path.resolve(rootVal);
+  const subRel = replacePlaceholders(prefixMatch[2] || '', inputs);
+  if (!subRel) {
+    return { resolvedPath: rootBase };
   }
 
-  return { resolvedPath: path.resolve(rendered) };
+  const safe = resolveInsideDir(rootBase, subRel, true);
+  if (!safe) {
+    return { error: `Target path '${rendered}' escapes base directory '${rootBase}'.` };
+  }
+  return { resolvedPath: safe };
 }
 
 function executeCopyStep(
@@ -813,6 +811,16 @@ export function toolSearchDocs(knowledgeDir: string, query: string, maxResults =
   };
 }
 
+function findManifestFolderCaseInsensitive(knowledgeDir: string, name: string): string | null {
+  const nameLower = name.toLowerCase().replace(/\\/g, '/').replace(/^\/+|\/+$/g, '');
+  if (!nameLower) return null;
+  for (const folder of findManifestFolders(knowledgeDir)) {
+    const rel = path.relative(knowledgeDir, folder).replace(/\\/g, '/').toLowerCase();
+    if (rel === nameLower) return folder;
+  }
+  return null;
+}
+
 export function toolGetDoc(knowledgeDir: string, name: string): ToolResponse {
   const resolvedTarget = resolveInsideDir(knowledgeDir, name, true);
   if (!resolvedTarget) {
@@ -822,14 +830,19 @@ export function toolGetDoc(knowledgeDir: string, name: string): ToolResponse {
     };
   }
 
-  // Try as manifest-based folder first
-  if (fs.existsSync(resolvedTarget) && fs.statSync(resolvedTarget).isDirectory()) {
-    const manifest = loadManifest(resolvedTarget);
+  // Try as manifest-based folder first (exact or case-insensitive)
+  const manifestFolder =
+    fs.existsSync(resolvedTarget) && fs.statSync(resolvedTarget).isDirectory()
+      ? resolvedTarget
+      : findManifestFolderCaseInsensitive(knowledgeDir, name);
+
+  if (manifestFolder) {
+    const manifest = loadManifest(manifestFolder);
 
     if (manifest) {
       const docFile = manifest.doc;
       if (docFile && typeof docFile === 'string') {
-        const docPath = resolveInsideDir(resolvedTarget, docFile, true);
+        const docPath = resolveInsideDir(manifestFolder, docFile, true);
         if (!docPath) {
           return {
             text: JSON.stringify({ error: 'Access denied. Manifest doc path outside knowledge unit.' }, null, 2),
@@ -840,7 +853,7 @@ export function toolGetDoc(knowledgeDir: string, name: string): ToolResponse {
           try {
             const content = fs.readFileSync(docPath, 'utf-8');
             const { body } = parseFrontmatter(content);
-            return { text: `directory: ${resolvedTarget}\n---\n\n${body}` };
+            return { text: `directory: ${manifestFolder}\n---\n\n${body}` };
           } catch (e) {
             return {
               text: JSON.stringify({ error: `Failed to read ${docFile}: ${e}` }, null, 2),
@@ -850,7 +863,7 @@ export function toolGetDoc(knowledgeDir: string, name: string): ToolResponse {
         }
       }
       const desc = manifest.description || 'No description available.';
-      return { text: `directory: ${resolvedTarget}\n---\n\n${desc}` };
+      return { text: `directory: ${manifestFolder}\n---\n\n${desc}` };
     }
   }
 

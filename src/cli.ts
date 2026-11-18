@@ -106,9 +106,16 @@ function gitEnv(): NodeJS.ProcessEnv {
     : { ...process.env, GIT_TERMINAL_PROMPT: '0' };
 }
 
+function assertSafeGitArg(value: string, label: string): void {
+  if (!value || value.startsWith('-')) {
+    throw new Error(`Invalid ${label}: '${value}'`);
+  }
+}
+
 function gitClone(url: string, targetDir: string): void {
   assertGitAvailable();
-  const result = spawnSync('git', ['clone', '--depth', '1', url, targetDir], {
+  assertSafeGitArg(url, 'repository URL');
+  const result = spawnSync('git', ['clone', '--depth', '1', '--', url, targetDir], {
     stdio: 'pipe',
     encoding: 'utf-8',
     env: gitEnv(),
@@ -120,8 +127,10 @@ function gitClone(url: string, targetDir: string): void {
 
 function gitCloneAtRef(url: string, targetDir: string, ref: string): void {
   assertGitAvailable();
+  assertSafeGitArg(url, 'repository URL');
+  assertSafeGitArg(ref, 'git ref');
   // Fast path: shallow clone by branch or tag
-  const branchClone = spawnSync('git', ['clone', '--depth', '1', '--branch', ref, url, targetDir], {
+  const branchClone = spawnSync('git', ['clone', '--depth', '1', '--branch', ref, '--', url, targetDir], {
     stdio: 'pipe',
     encoding: 'utf-8',
     env: gitEnv(),
@@ -132,7 +141,7 @@ function gitCloneAtRef(url: string, targetDir: string, ref: string): void {
 
   // Fallback for commit hashes: clone without checkout, then checkout specific commit
   removeDirSync(targetDir);
-  const fullClone = spawnSync('git', ['clone', '--no-checkout', url, targetDir], {
+  const fullClone = spawnSync('git', ['clone', '--no-checkout', '--', url, targetDir], {
     stdio: 'pipe',
     encoding: 'utf-8',
     env: gitEnv(),
@@ -141,7 +150,7 @@ function gitCloneAtRef(url: string, targetDir: string, ref: string): void {
     throw new Error(fullClone.stderr || 'git clone failed');
   }
 
-  const checkout = spawnSync('git', ['checkout', ref], {
+  const checkout = spawnSync('git', ['checkout', ref, '--'], {
     cwd: targetDir,
     stdio: 'pipe',
     encoding: 'utf-8',
@@ -162,9 +171,11 @@ function gitGetCommit(repoDir: string): string {
 
 function gitCloneSparse(url: string, targetDir: string, sparsePath: string): void {
   assertGitAvailable();
+  assertSafeGitArg(url, 'repository URL');
+  assertSafeGitArg(sparsePath, 'sparse path');
   const cloneResult = spawnSync(
     'git',
-    ['clone', '--depth', '1', '--filter=blob:none', '--sparse', url, targetDir],
+    ['clone', '--depth', '1', '--filter=blob:none', '--sparse', '--', url, targetDir],
     { stdio: 'pipe', encoding: 'utf-8', env: gitEnv() }
   );
   if (cloneResult.status !== 0) {
@@ -172,7 +183,7 @@ function gitCloneSparse(url: string, targetDir: string, sparsePath: string): voi
     gitClone(url, targetDir);
     return;
   }
-  const sparseResult = spawnSync('git', ['sparse-checkout', 'set', sparsePath], {
+  const sparseResult = spawnSync('git', ['sparse-checkout', 'set', '--', sparsePath], {
     cwd: targetDir,
     stdio: 'pipe',
     encoding: 'utf-8',
@@ -895,10 +906,9 @@ function cmdPin(knowledgeDir: string, args: string[]): void {
 
       source.commit = gitGetCommit(cloneTarget);
       source.updatedAt = new Date().toISOString();
-    } catch {
-      console.warn(
-        `  Note: Could not checkout '${version}' from remote; locking current local files (${source.commit}) as '${version}'.`
-      );
+    } catch (e) {
+      console.error(`Error: Failed to checkout '${version}' for '${name}': ${e instanceof Error ? e.message : e}`);
+      process.exit(1);
     } finally {
       removeDirSync(cloneTarget);
     }
@@ -995,12 +1005,26 @@ function cmdExport(knowledgeDir: string, args: string[]): void {
   let format = 'zip';
 
   for (let i = 0; i < args.length; i++) {
-    if (args[i] === '--output' && i + 1 < args.length) {
+    if (args[i] === '--output') {
+      if (i + 1 >= args.length || args[i + 1].startsWith('-')) {
+        console.error('Error: --output requires a file path.');
+        process.exit(1);
+      }
       outputPath = args[++i];
-    } else if (args[i] === '--format' && i + 1 < args.length) {
+    } else if (args[i] === '--format') {
+      if (i + 1 >= args.length || args[i + 1].startsWith('-')) {
+        console.error('Error: --format requires a format (zip or tar).');
+        process.exit(1);
+      }
       format = args[++i];
+    } else if (args[i].startsWith('-')) {
+      console.error(`Error: Unknown option '${args[i]}' for 'export'.`);
+      process.exit(1);
     } else if (!name) {
       name = args[i];
+    } else {
+      console.error(`Error: Unexpected argument '${args[i]}'.`);
+      process.exit(1);
     }
   }
 

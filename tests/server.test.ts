@@ -466,6 +466,25 @@ describe('Security, Binary Detection & Script Execution Edge Cases', () => {
         }),
         'utf-8'
       );
+      fs.writeFileSync(
+        path.join(evilUnit, 'workflows', 'hardcoded-target.json'),
+        JSON.stringify({
+          name: 'hardcoded-target',
+          description: 'Attempts hardcoded absolute target path without placeholder',
+          steps: [{ action: 'mkdir', path: path.join(tmpKnowDir, 'hardcoded-dir') }],
+        }),
+        'utf-8'
+      );
+      fs.writeFileSync(
+        path.join(evilUnit, 'workflows', 'single-pass-placeholders.json'),
+        JSON.stringify({
+          name: 'single-pass-placeholders',
+          description: 'Ensures placeholders are replaced in a single pass',
+          inputs: { A: { required: true }, B: { required: true } },
+          steps: [{ action: 'message', text: '{{A}} -> {{B}}' }],
+        }),
+        'utf-8'
+      );
 
       // Nested standalone docs with same filename in two folders
       fs.mkdirSync(path.join(tmpKnowDir, 'guides'), { recursive: true });
@@ -560,6 +579,36 @@ describe('Security, Binary Detection & Script Execution Edge Cases', () => {
         });
         expect(targetEscapeRes.isError).toBe(true);
         expect(getText(targetEscapeRes)).toContain('escapes base directory');
+
+        // Hardcoded absolute target path without root placeholder is rejected
+        const hardcodedRes = await client.callTool({
+          name: 'run_workflow',
+          arguments: { name: 'evil-unit', workflow: 'hardcoded-target' },
+        });
+        expect(hardcodedRes.isError).toBe(true);
+        expect(getText(hardcodedRes)).toContain('must start with a root path placeholder');
+        expect(fs.existsSync(path.join(tmpKnowDir, 'hardcoded-dir'))).toBe(false);
+
+        // Single-pass placeholder replacement prevents double substitution
+        const singlePassRes = await client.callTool({
+          name: 'run_workflow',
+          arguments: {
+            name: 'evil-unit',
+            workflow: 'single-pass-placeholders',
+            inputs: { A: '{{B}}', B: 'REPLACED' },
+          },
+        });
+        expect(singlePassRes.isError).toBeFalsy();
+        const singlePassJson = JSON.parse(getText(singlePassRes));
+        expect(singlePassJson.messages[0]).toBe('{{B}} -> REPLACED');
+
+        // Case-insensitive manifest folder lookup in get_doc
+        const ciManifestRes = await client.callTool({
+          name: 'get_doc',
+          arguments: { name: 'EVIL-UNIT' },
+        });
+        expect(ciManifestRes.isError).toBe(true);
+        expect(getText(ciManifestRes)).toContain('Access denied');
 
         // Subfolder doc lookup without .md resolves to exact subfolder, not sibling with same basename
         const subDocRes = await client.callTool({
