@@ -21,9 +21,9 @@ export function getPackageVersion(): string {
   try {
     const pkgPath = new URL('../package.json', import.meta.url);
     const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf-8')) as { version?: string };
-    return pkg.version || '1.0.3';
+    return pkg.version || '0.0.0';
   } catch {
-    return '1.0.3';
+    return '0.0.0';
   }
 }
 
@@ -631,6 +631,17 @@ function executeCopyStep(
   results.files_created.push(targetPath);
 }
 
+/**
+ * cmd.exe cannot escape every metacharacter reliably: `%VAR%` is expanded even inside quotes,
+ * and a `"` ends the quoted section so the rest is parsed as commands. Batch scripts also
+ * re-expand `%~1` unquoted. Instead of trying to escape, accept only arguments free of these
+ * characters (BatBadBut class of issues).
+ */
+export function isSafeCmdArg(arg: string): boolean {
+  // eslint-disable-next-line no-control-regex
+  return !/["%!^&|<>\x00-\x1f]/.test(arg);
+}
+
 function executeRunStep(
   step: Record<string, unknown>,
   folder: string,
@@ -691,15 +702,23 @@ function executeRunStep(
     return;
   }
 
-  const quoteCmdArg = (arg: string): string => {
-    // Reject control characters and escape cmd.exe metacharacters outside/inside quotes
-    const clean = arg.replace(/[\r\n\0]/g, '');
-    return `"${clean.replace(/"/g, '""').replace(/%/g, '%%')}"`;
-  };
+  if (normalizedInterp === 'cmd') {
+    // eslint-disable-next-line no-control-regex
+    const scriptUnsafe = /["%\x00-\x1f]/.test(resolvedScript);
+    const unsafe = scriptUnsafe || args.some((a) => !isSafeCmdArg(a));
+    if (unsafe) {
+      results.errors.push(
+        `Refusing to run '${scriptRel}' with cmd.exe: the script path or an argument contains characters ` +
+          `cmd.exe cannot pass safely (one of " % ! ^ & | < > or a control character).`
+      );
+      return;
+    }
+  }
 
   const buildSpawnArgs = (interp: string): [string, string[], boolean] => {
     if (interp === 'cmd') {
-      const cmdLine = `"${[resolvedScript, ...args].map(quoteCmdArg).join(' ')}"`;
+      // Every argument was validated by isSafeCmdArg, so wrapping in double quotes is sufficient.
+      const cmdLine = `"${[resolvedScript, ...args].map((a) => `"${a}"`).join(' ')}"`;
       return ['cmd.exe', ['/d', '/s', '/c', cmdLine], true];
     }
     if (interp === 'pwsh' || interp === 'powershell') {

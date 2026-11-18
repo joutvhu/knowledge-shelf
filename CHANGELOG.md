@@ -2,9 +2,15 @@
 
 ## [Unreleased]
 
+### Added
+- Added `install <path> [--name <alias>] [--force] [--all]` CLI command to validate and install drafted knowledge units or standalone `.md` files from a local directory.
+- Added support for passing direct local paths to `validate` before installing into the knowledge directory.
+
 ### Security
-- Enforced strict path containment (`resolveInsideDir`) across `manifest.doc`, case-insensitive document lookups, workflow names, workflow `copy` sources, workflow `copy`/`mkdir` target paths, and all CLI commands (`remove`, `add`, `update`, `info`, `export`, `validate`).
-- Hardened Windows `.cmd`/`.bat` script execution with `windowsVerbatimArguments` and proper argument quoting to safely handle spaces in paths/arguments and prevent environment variable expansion.
+- Enforced strict path containment (`resolveInsideDir`) across `manifest.doc`, case-insensitive document lookups, workflow names, workflow `copy` sources, workflow `copy`/`mkdir` target paths, `.cache/` clone targets, and all CLI commands (`remove`, `add`, `update`, `info`, `export`, `validate`).
+- Sanitized repository names derived from git URLs (`deriveNameFromUrl`) and verified `.cache/` containment (`getCloneTarget`) so URLs ending in `..`, `.`, or `.git` cannot delete the knowledge directory.
+- Hardened Windows `.cmd`/`.bat` script execution (`isSafeCmdArg`) by rejecting arguments containing `cmd.exe` metacharacters (`" % ! ^ & | < >` or control characters) that could trigger command injection or environment variable expansion (BatBadBut class of issues).
+- Protected internal dot-prefixed paths (`.registry.json`, `.cache`, `.git`) from removal via `knowledge-shelf remove`.
 
 ### Fixed
 - Fixed data loss in `parseFrontmatter` where documents containing `---` horizontal rules in the body were truncated after the first rule.
@@ -12,15 +18,22 @@
 - Fixed binary file corruption in workflow `copy` steps (e.g., `.jar`, `.png`, `.woff2` files are now copied as raw buffers instead of UTF-8 text).
 - Fixed binary detection in `get_resource` by checking buffer bytes for `NUL` instead of relying on an unreachable UTF-8 read exception, and set standard MCP `isError: true` on all error tool responses.
 - Fixed `run_workflow` to apply `default` values defined in workflow input schemas when optional inputs are omitted.
-- Fixed `knowledge-shelf pin <name> <tag|commit>` to check out the requested git ref so on-disk files match the pinned version.
+- Fixed `knowledge-shelf pin <name> <tag|commit>` to check out the requested git ref so on-disk files match the pinned version, and report a clear error for `local:` sources without git history.
 - Fixed `findCaseInsensitive` when looking up subfolder documents without the `.md` extension (`guides/deploy` now resolves to `guides/deploy.md` instead of colliding with same-named files in other folders).
 - Fixed CLI entrypoint handling for `version`/`--version`/`-v`, `--dir` flag placement before subcommands, missing flag arguments, and unknown options.
+- Fixed non-atomic directory replacement during `update`, `install --force`, and `pin` by staging into `.cache/` and swapping via rename with automatic rollback on failure.
+- Fixed `loadRegistry` silently resetting `.registry.json` to empty on parse errors; it now exits with an error to prevent erasing existing entries.
+- Fixed `add --all` and `install --all` to detect duplicate unit folder names across subdirectories and skip nested child units inside parent manifest units.
+- Constrained `search_docs` `max_results` schema to integers between `1` and `100`.
 
 ### Changed
 - Extracted shared core logic into `src/core.ts` and MCP server factory into `src/server.ts`, unifying search scoring (with whole-token priority and section heading support) between the MCP server and CLI.
 - Updated `update` CLI command to use sparse checkout for subfolder sources (`--path`), and updated `validate` and `add --all` to discover nested manifest units recursively.
 - Replaced duplicated `tests/tool-helper.mjs` test harness with direct MCP SDK `Client` + `InMemoryTransport` and `StdioClientTransport` integration tests against the real server, and added GitHub Actions CI workflow (`.github/workflows/ci.yml`).
-- Updated `@modelcontextprotocol/sdk`, `zod`, and `vitest` to patch transitive dependency vulnerabilities.
+- Updated `@modelcontextprotocol/sdk`, `zod`, and `vitest` to patch transitive dependency vulnerabilities, and bumped `engines.node` to `>=20.0.0`.
+
+### Removed
+- Removed `install-skill` CLI command in favor of `npx skills add joutvhu/knowledge-shelf`.
 
 ## [1.0.3] - 2026-05-31
 

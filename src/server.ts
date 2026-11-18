@@ -81,7 +81,13 @@ export function createKnowledgeServer(knowledgeDir: string): McpServer {
         'Search knowledge base by keyword. Call this first before starting any task — it finds relevant documentation, code patterns, templates, and guides. Searches titles, tags, descriptions, module names, type, and aliases. Returns ranked results. Aliases and titles score highest; terms are space-separated.',
       inputSchema: z.object({
         query: z.string().describe('Search keywords (space-separated)'),
-        max_results: z.number().optional().describe('Maximum results to return (default: 10)'),
+        max_results: z
+          .number()
+          .int()
+          .min(1)
+          .max(100)
+          .optional()
+          .describe('Maximum results to return (1-100, default: 10)'),
       }),
     },
     async ({ query, max_results }) => toMcpResult(toolSearchDocs(knowledgeDir, query, max_results))

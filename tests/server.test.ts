@@ -643,6 +643,74 @@ describe('Security, Binary Detection & Script Execution Edge Cases', () => {
     }
   });
 
+  it('should reject out-of-range max_results at the schema level', async () => {
+    const { client, close } = await createConnectedClient(FIXTURES_DIR);
+    try {
+      for (const bad of [-1, 0, 1.5, 1000]) {
+        const res = await client
+          .callTool({ name: 'search_docs', arguments: { query: 'guide', max_results: bad } })
+          .catch((e) => ({ isError: true, content: [{ type: 'text', text: String(e) }] }));
+        expect(res.isError, `max_results=${bad}`).toBe(true);
+      }
+      const ok = await client.callTool({ name: 'search_docs', arguments: { query: 'guide', max_results: 1 } });
+      expect(ok.isError).toBeFalsy();
+    } finally {
+      await close();
+    }
+  });
+
+  it.skipIf(process.platform !== 'win32')(
+    'should refuse cmd.exe arguments that could inject commands or expand variables',
+    async () => {
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ks-cmd-inject-'));
+      try {
+        const unit = path.join(dir, 'cmd-unit');
+        fs.mkdirSync(path.join(unit, 'scripts'), { recursive: true });
+        fs.mkdirSync(path.join(unit, 'workflows'), { recursive: true });
+        fs.writeFileSync(path.join(unit, 'scripts', 'echo.cmd'), '@echo off\r\necho ARG=[%~1]\r\n', 'utf-8');
+        fs.writeFileSync(
+          path.join(unit, 'manifest.json'),
+          JSON.stringify({ name: 'cmd-unit', version: '1.0.0', type: 'toolkit', description: 'cmd test' }),
+          'utf-8'
+        );
+        fs.writeFileSync(
+          path.join(unit, 'workflows', 'echo.json'),
+          JSON.stringify({
+            name: 'echo',
+            inputs: { VALUE: { required: true } },
+            steps: [{ action: 'run', script: 'scripts/echo.cmd', args: ['{{VALUE}}'] }],
+          }),
+          'utf-8'
+        );
+
+        const { client, close } = await createConnectedClient(dir);
+        try {
+          const run = async (value: string) => {
+            const res = await client.callTool({
+              name: 'run_workflow',
+              arguments: { name: 'cmd-unit', workflow: 'echo', inputs: { VALUE: value } },
+            });
+            return { isError: res.isError, json: JSON.parse(getText(res)) };
+          };
+
+          for (const bad of ['x" & echo PWNED & "', '%USERNAME%', '50%', '!x!', 'a^b', 'a|b', 'a\nb']) {
+            const { isError, json } = await run(bad);
+            expect(isError, JSON.stringify(bad)).toBe(true);
+            expect(json.scripts_run).toHaveLength(0);
+            expect(json.errors[0]).toContain('cmd.exe');
+          }
+
+          const good = await run('plain value');
+          expect(good.isError).toBeFalsy();
+          expect(good.json.scripts_run[0].stdout).toContain('ARG=[plain value]');
+        } finally {
+          await close();
+        }
+      } finally {
+        fs.rmSync(dir, { recursive: true, force: true });
+      }
+    }
+  );
   it('should work end-to-end over StdioClientTransport with compiled dist/index.js', async () => {
     const transport = new StdioClientTransport({
       command: process.execPath,

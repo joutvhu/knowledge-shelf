@@ -432,4 +432,129 @@ describe('CLI Commands', () => {
       expect(unknownFlag.stderr).toContain('Unknown option');
     });
   });
-});
+  describe('safety regressions', () => {
+    const run = (args: string[], dir: string) =>
+      spawnSync(process.execPath, [CLI_PATH, ...args, '--dir', dir], {
+        encoding: 'utf-8',
+        timeout: 20_000,
+        env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },
+      });
+
+    const writeUnit = (dir: string, name: string, extra: Record<string, unknown> = {}) => {
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(path.join(dir, 'overview.md'), `# ${name}\n\nBody.`, 'utf-8');
+      fs.writeFileSync(
+        path.join(dir, 'manifest.json'),
+        JSON.stringify({ name, version: '1.0.0', type: 'cookbook', description: name, doc: 'overview.md', ...extra }),
+        'utf-8'
+      );
+    };
+
+    it('add must never delete the knowledge directory when the URL ends with ".." or ".git"', () => {
+      runCli('init', tmpDir);
+      const keep = path.join(tmpDir, 'precious-unit');
+      fs.mkdirSync(keep);
+      fs.writeFileSync(path.join(keep, 'data.md'), 'important', 'utf-8');
+
+      for (const url of ['https://invalid.invalid/..', 'https://invalid.invalid/.', 'https://invalid.invalid/.git']) {
+        run(['add', url], tmpDir);
+        expect(fs.existsSync(path.join(keep, 'data.md')), url).toBe(true);
+        expect(fs.existsSync(path.join(tmpDir, '.registry.json')), url).toBe(true);
+      }
+    });
+
+    it('should refuse to run when .registry.json is corrupt instead of resetting it', () => {
+      runCli('init', tmpDir);
+      const registryPath = path.join(tmpDir, '.registry.json');
+      const corrupt = '{ "version": "1.0", "sources": [ {oops';
+      fs.writeFileSync(registryPath, corrupt, 'utf-8');
+
+      const res = run(['list'], tmpDir);
+      expect(res.status).toBe(1);
+      expect(res.stderr).toContain('Cannot read registry');
+
+      const staged = path.join(tmpDir, 'staged');
+      writeUnit(staged, 'staged');
+      const install = run(['install', staged], tmpDir);
+      expect(install.status).toBe(1);
+      expect(fs.readFileSync(registryPath, 'utf-8')).toBe(corrupt);
+    });
+
+    it('remove must not delete internal files such as .registry.json or .cache', () => {
+      runCli('init', tmpDir);
+      for (const name of ['.registry.json', '.cache']) {
+        const res = run(['remove', name], tmpDir);
+        expect(res.status, name).toBe(1);
+        expect(res.stderr).toContain('reserved');
+      }
+      expect(fs.existsSync(path.join(tmpDir, '.registry.json'))).toBe(true);
+      expect(fs.existsSync(path.join(tmpDir, '.cache'))).toBe(true);
+    });
+
+    it('pin <name> <ref> must fail clearly for sources installed from a local path', () => {
+      runCli('init', tmpDir);
+      const staged = path.join(tmpDir, '..', `ks-local-pin-${Date.now()}`);
+      try {
+        writeUnit(staged, path.basename(staged));
+        runCli(`install "${staged}"`, tmpDir);
+        const name = path.basename(staged);
+
+        const res = run(['pin', name, 'v1.0.0'], tmpDir);
+        expect(res.status).toBe(1);
+        expect(res.stderr).toContain('local path');
+
+        const reg = JSON.parse(fs.readFileSync(path.join(tmpDir, '.registry.json'), 'utf-8'));
+        expect(reg.sources[0].pin).toBeUndefined();
+        expect(run(['pin', name], tmpDir).status).toBe(0);
+      } finally {
+        fs.rmSync(staged, { recursive: true, force: true });
+      }
+    });
+
+    it('install --all must report duplicate unit names and install nested units only once', () => {
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ks-all-'));
+      try {
+        runCli('init', tmpDir);
+
+        // Two different units that would both be installed as "core"
+        writeUnit(path.join(root, 'dupes', 'a', 'core'), 'core');
+        writeUnit(path.join(root, 'dupes', 'b', 'core'), 'core');
+        const dup = run(['install', path.join(root, 'dupes'), '--all'], tmpDir);
+        expect(dup.status).toBe(1);
+        expect(dup.stderr).toContain('share the same folder name');
+        expect(fs.existsSync(path.join(tmpDir, 'core'))).toBe(false);
+
+        // A unit nested inside another unit is part of the parent, not a separate install
+        writeUnit(path.join(root, 'nest', 'parent'), 'parent');
+        writeUnit(path.join(root, 'nest', 'parent', 'examples', 'child'), 'child');
+        const nested = run(['install', path.join(root, 'nest'), '--all'], tmpDir);
+        expect(nested.status).toBe(0);
+        expect(fs.existsSync(path.join(tmpDir, 'parent', 'manifest.json'))).toBe(true);
+        expect(fs.existsSync(path.join(tmpDir, 'child'))).toBe(false);
+        const reg = JSON.parse(fs.readFileSync(path.join(tmpDir, '.registry.json'), 'utf-8'));
+        expect(reg.sources.map((s: { name: string }) => s.name)).toEqual(['parent']);
+      } finally {
+        fs.rmSync(root, { recursive: true, force: true });
+      }
+    });
+
+    it('install --force replaces a unit atomically and leaves no staging leftovers', () => {
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ks-atomic-'));
+      try {
+        runCli('init', tmpDir);
+        const unit = path.join(root, 'unit-x');
+        writeUnit(unit, 'unit-x');
+        runCli(`install "${unit}"`, tmpDir);
+        fs.writeFileSync(path.join(tmpDir, 'unit-x', 'stale.md'), 'stale', 'utf-8');
+
+        fs.writeFileSync(path.join(unit, 'overview.md'), '# unit-x v2', 'utf-8');
+        runCli(`install "${unit}" --force`, tmpDir);
+
+        expect(fs.readFileSync(path.join(tmpDir, 'unit-x', 'overview.md'), 'utf-8')).toContain('v2');
+        expect(fs.existsSync(path.join(tmpDir, 'unit-x', 'stale.md'))).toBe(false);
+        expect(fs.readdirSync(path.join(tmpDir, '.cache')).filter((f) => f.startsWith('.stage') || f.startsWith('.backup'))).toEqual([]);
+      } finally {
+        fs.rmSync(root, { recursive: true, force: true });
+      }
+    });
+  });});

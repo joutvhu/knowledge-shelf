@@ -86,9 +86,16 @@ function loadRegistry(knowledgeDir: string): Registry {
   }
   try {
     const content = fs.readFileSync(registryPath, 'utf-8');
-    return JSON.parse(content) as Registry;
-  } catch {
-    return { version: '1.0', sources: [] };
+    const parsed = JSON.parse(content) as Registry;
+    if (!parsed || typeof parsed !== 'object' || !Array.isArray(parsed.sources)) {
+      throw new Error('expected an object with a "sources" array');
+    }
+    return parsed;
+  } catch (e) {
+    // Never fall back to an empty registry: the next save would silently erase every entry.
+    console.error(`Error: Cannot read registry ${registryPath}: ${e instanceof Error ? e.message : e}`);
+    console.error('Fix or delete the file manually, then retry.');
+    process.exit(1);
   }
 }
 
@@ -209,10 +216,51 @@ function assertGitAvailable(): void {
   _gitChecked = true;
 }
 
+/**
+ * Derives a filesystem-safe repository name from a git URL. The result is used as a directory
+ * name under `.cache/` that is deleted and re-created, so it must never be empty, `.`/`..`, or
+ * contain path separators (e.g. `https://host/..` must not resolve to the knowledge directory).
+ */
 function deriveNameFromUrl(url: string): string {
   const normalized = url.replace(/[\\/]+$/, '');
   const match = normalized.match(/[/:\\]([^/:\\]+?)(?:\.git)?$/);
-  return match ? match[1] : 'unknown';
+  const safe = (match ? match[1] : '').replace(/[^A-Za-z0-9._-]/g, '-').replace(/^\.+/, '');
+  return safe || 'unknown';
+}
+
+/**
+ * Finds installable units under `baseDir` for `--all` mode. Units nested inside another unit
+ * are part of that unit's files and are not installed separately. Units are installed under
+ * their folder name, so two units sharing a name are reported as conflicts instead of one
+ * being silently skipped.
+ */
+function collectUnitFolders(baseDir: string): { units: string[]; conflicts: string[] } {
+  const base = path.resolve(baseDir);
+  const all = findManifestFolders(baseDir)
+    .map((f) => path.resolve(f))
+    .filter((f) => f !== base);
+  const topLevel = all.filter((f) => !all.some((other) => other !== f && f.startsWith(other + path.sep)));
+
+  const byName = new Map<string, string[]>();
+  for (const folder of topLevel) {
+    const name = path.basename(folder);
+    byName.set(name, [...(byName.get(name) || []), folder]);
+  }
+  const conflicts = [...byName.entries()]
+    .filter(([, folders]) => folders.length > 1)
+    .map(([name, folders]) => `'${name}' (${folders.map((f) => path.relative(base, f) || f).join(', ')})`);
+
+  return { units: topLevel, conflicts };
+}
+
+/** Returns a clone directory strictly inside `.cache/`, or exits if the name would escape it. */
+function getCloneTarget(knowledgeDir: string, name: string): string {
+  const target = resolveInsideDir(getCacheDir(knowledgeDir), name, true);
+  if (!target) {
+    console.error(`Error: Refusing to use unsafe cache directory name '${name}'.`);
+    process.exit(1);
+  }
+  return target;
 }
 
 // ---------------------------------------------------------------------------
@@ -238,6 +286,40 @@ function removeDirSync(dir: string): void {
   if (fs.existsSync(dir)) {
     fs.rmSync(dir, { recursive: true, force: true });
   }
+}
+
+/**
+ * Replaces `destDir` with a copy of `srcDir` without ever leaving it half-written:
+ * the copy is staged under `.cache/`, then swapped in with renames. If anything fails,
+ * the previous contents of `destDir` are restored.
+ */
+function replaceDirSync(knowledgeDir: string, srcDir: string, destDir: string): void {
+  const cacheDir = getCacheDir(knowledgeDir);
+  fs.mkdirSync(cacheDir, { recursive: true });
+  const stamp = `${process.pid}-${Date.now()}`;
+  const staged = path.join(cacheDir, `.stage-${stamp}`);
+  const backup = path.join(cacheDir, `.backup-${stamp}`);
+
+  try {
+    copyDirSync(srcDir, staged);
+  } catch (e) {
+    removeDirSync(staged);
+    throw e;
+  }
+
+  const hadExisting = fs.existsSync(destDir);
+  try {
+    if (hadExisting) fs.renameSync(destDir, backup);
+    fs.mkdirSync(path.dirname(destDir), { recursive: true });
+    fs.renameSync(staged, destDir);
+  } catch (e) {
+    if (hadExisting && !fs.existsSync(destDir) && fs.existsSync(backup)) {
+      fs.renameSync(backup, destDir);
+    }
+    removeDirSync(staged);
+    throw e;
+  }
+  removeDirSync(backup);
 }
 
 function formatSize(bytes: number): string {
@@ -312,7 +394,7 @@ function cmdAdd(knowledgeDir: string, args: string[]): void {
 
   const repoName = deriveNameFromUrl(url);
   const cacheDir = getCacheDir(knowledgeDir);
-  const cloneTarget = path.join(cacheDir, repoName);
+  const cloneTarget = getCloneTarget(knowledgeDir, repoName);
 
   console.log(`Cloning ${url}...`);
   removeDirSync(cloneTarget);
@@ -339,7 +421,13 @@ function cmdAdd(knowledgeDir: string, args: string[]): void {
       process.exit(1);
     }
 
-    const manifestFolders = findManifestFolders(baseDir).filter((f) => path.resolve(f) !== path.resolve(baseDir));
+    const { units: manifestFolders, conflicts } = collectUnitFolders(baseDir);
+    if (conflicts.length > 0) {
+      console.error(`Error: Multiple units share the same folder name: ${conflicts.join('; ')}.`);
+      console.error('Use --path to install each one individually with --name.');
+      removeDirSync(cloneTarget);
+      process.exit(1);
+    }
     const registry = loadRegistry(knowledgeDir);
     let installed = 0;
     let skipped = 0;
@@ -491,8 +579,7 @@ function cmdUpdate(knowledgeDir: string, args: string[]): void {
           fs.copyFileSync(localPath, destFile);
         } else {
           const destDir = resolveSafeUnitDir(knowledgeDir, source.name);
-          removeDirSync(destDir);
-          copyDirSync(localPath, destDir);
+          replaceDirSync(knowledgeDir, localPath, destDir);
           if (fs.existsSync(path.join(destDir, 'manifest.json'))) {
             syncManifestName(destDir, source.name);
           }
@@ -510,7 +597,7 @@ function cmdUpdate(knowledgeDir: string, args: string[]): void {
     console.log(`Updating '${source.name}'...`);
 
     const repoName = deriveNameFromUrl(source.url);
-    const cloneTarget = path.join(cacheDir, repoName);
+    const cloneTarget = getCloneTarget(knowledgeDir, repoName);
 
     try {
       removeDirSync(cloneTarget);
@@ -537,8 +624,7 @@ function cmdUpdate(knowledgeDir: string, args: string[]): void {
       }
 
       const destDir = resolveSafeUnitDir(knowledgeDir, source.name);
-      removeDirSync(destDir);
-      copyDirSync(sourceDir, destDir);
+      replaceDirSync(knowledgeDir, sourceDir, destDir);
 
       source.commit = newCommit;
       source.updatedAt = new Date().toISOString();
@@ -570,6 +656,12 @@ function cmdRemove(knowledgeDir: string, args: string[]): void {
   const idx = registry.sources.findIndex((s) => s.name === name);
 
   if (idx === -1) {
+    // Never allow deleting internal files/folders (.registry.json, .cache, .git, ...) by name.
+    const topSegment = path.relative(knowledgeDir, destDir).split(path.sep)[0];
+    if (topSegment.startsWith('.')) {
+      console.error(`Error: '${name}' is a reserved path and cannot be removed.`);
+      process.exit(1);
+    }
     if (fs.existsSync(destDir)) {
       removeDirSync(destDir);
       console.log(`✓ Removed directory '${name}' (was not in registry)`);
@@ -1149,9 +1241,12 @@ function cmdInstall(knowledgeDir: string, args: string[]): void {
       process.exit(1);
     }
 
-    const manifestFolders = findManifestFolders(resolvedSource).filter(
-      (f) => path.resolve(f) !== resolvedSource
-    );
+    const { units: manifestFolders, conflicts } = collectUnitFolders(resolvedSource);
+    if (conflicts.length > 0) {
+      console.error(`Error: Multiple units share the same folder name: ${conflicts.join('; ')}.`);
+      console.error('Install each one individually with --name.');
+      process.exit(1);
+    }
     const topLevelMds = fs
       .readdirSync(resolvedSource, { withFileTypes: true })
       .filter((e) => e.isFile() && e.name.toLowerCase().endsWith('.md') && e.name.toLowerCase() !== 'readme.md')
@@ -1194,8 +1289,7 @@ function cmdInstall(knowledgeDir: string, args: string[]): void {
         skipped++;
         continue;
       }
-      removeDirSync(destDir);
-      copyDirSync(unitDir, destDir);
+      replaceDirSync(knowledgeDir, unitDir, destDir);
       upsertRegistryEntry(unitName, unitDir);
       console.log(`  ✓ Installed '${unitName}'`);
       installed++;
@@ -1253,8 +1347,7 @@ function cmdInstall(knowledgeDir: string, args: string[]): void {
     process.exit(1);
   }
 
-  removeDirSync(destDir);
-  copyDirSync(resolvedSource, destDir);
+  replaceDirSync(knowledgeDir, resolvedSource, destDir);
   if (customName) {
     syncManifestName(destDir, unitName);
   }
@@ -1297,10 +1390,16 @@ function cmdPin(knowledgeDir: string, args: string[]): void {
   // When a specific tag/commit is requested and differs from the installed commit,
   // attempt to check out that ref so on-disk files actually match the pinned version.
   if (version && version !== source.commit) {
-    const cacheDir = getCacheDir(knowledgeDir);
-    fs.mkdirSync(cacheDir, { recursive: true });
+    if (source.url.startsWith('local:')) {
+      console.error(
+        `Error: '${name}' was installed from a local path and has no git history; ` +
+          `cannot pin it to '${version}'. Run 'pin ${name}' without a version to lock it as-is.`
+      );
+      process.exit(1);
+    }
+    fs.mkdirSync(getCacheDir(knowledgeDir), { recursive: true });
     const repoName = deriveNameFromUrl(source.url);
-    const cloneTarget = path.join(cacheDir, `${repoName}-pin`);
+    const cloneTarget = getCloneTarget(knowledgeDir, `${repoName}-pin`);
 
     try {
       removeDirSync(cloneTarget);
@@ -1312,8 +1411,7 @@ function cmdPin(knowledgeDir: string, args: string[]): void {
       }
 
       const destDir = resolveSafeUnitDir(knowledgeDir, source.name);
-      removeDirSync(destDir);
-      copyDirSync(sourceDir, destDir);
+      replaceDirSync(knowledgeDir, sourceDir, destDir);
 
       source.commit = gitGetCommit(cloneTarget);
       source.updatedAt = new Date().toISOString();

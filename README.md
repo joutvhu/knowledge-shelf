@@ -109,7 +109,7 @@ Add the configuration below to your MCP client's configuration file. Here are th
 
 That's it. AI now has access to your knowledge.
 
-> **Note:** `run_workflow` is intentionally excluded from `autoApprove` because it has side effects (creates files, runs scripts). Add it only if you trust all installed knowledge workflows.
+> **Note:** `run_workflow` is intentionally excluded from `autoApprove` because it has side effects: it can write files under any absolute target directory passed via workflow inputs (e.g. `{{TARGET}}`) and execute bundled scripts (`node`, `python`, `pwsh`, `bash`, `cmd`). Only install knowledge from repositories you trust, and only add `run_workflow` to `autoApprove` if you trust every installed workflow.
 
 To use a custom knowledge path:
 
