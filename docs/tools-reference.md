@@ -88,7 +88,7 @@ Search knowledge base by keyword.  Returns ranked results.
 | Name | Type | Required | Description |
 |---|---|---|---|
 | `query` | string | ✅ | Search keywords (space-separated) |
-| `max_results` | number | ❌ | Maximum results to return (default: 10) |
+| `max_results` | number | ❌ | Maximum results to return (integer 1–100, default: 10) |
 
 **Scoring algorithm:**
 
@@ -105,7 +105,7 @@ Each query term is matched independently against document fields.  Scores accumu
 | section headings | +4 |
 | `description` | +2 |
 
-Matching is case-insensitive substring.  A document must score > 0 to appear in results.
+Matching is case-insensitive with whole-token priority (partial/prefix matches receive half weight; terms of 2 characters or fewer require a whole-token match).  A document must score > 0 to appear in results.
 
 **Example:**
 ```json

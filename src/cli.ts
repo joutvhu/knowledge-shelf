@@ -495,6 +495,9 @@ function cmdAdd(knowledgeDir: string, args: string[]): void {
 
   console.log(`Installing to ${name}/...`);
   copyDirSync(sourceDir, destDir);
+  if (customName) {
+    syncManifestName(destDir, name);
+  }
 
   const now = new Date().toISOString();
   registry.sources.push({
@@ -608,8 +611,9 @@ function cmdUpdate(knowledgeDir: string, args: string[]): void {
       }
 
       const newCommit = gitGetCommit(cloneTarget);
+      const destDir = resolveSafeUnitDir(knowledgeDir, source.name);
 
-      if (newCommit === source.commit) {
+      if (newCommit === source.commit && fs.existsSync(destDir)) {
         console.log(`  Already up to date (${newCommit})`);
         removeDirSync(cloneTarget);
         continue;
@@ -623,8 +627,8 @@ function cmdUpdate(knowledgeDir: string, args: string[]): void {
         continue;
       }
 
-      const destDir = resolveSafeUnitDir(knowledgeDir, source.name);
       replaceDirSync(knowledgeDir, sourceDir, destDir);
+      syncManifestName(destDir, source.name);
 
       source.commit = newCommit;
       source.updatedAt = new Date().toISOString();
@@ -933,6 +937,70 @@ function validateManifestUnitDir(unitDir: string, expectedUnitName?: string): Va
           const wfDef = JSON.parse(wfContent);
           if (!wfDef.steps || !Array.isArray(wfDef.steps)) {
             errors.push(`workflows/${wfName}.json: missing or invalid "steps" array`);
+          } else {
+            const allowedActions = new Set(['copy', 'run', 'mkdir', 'message']);
+            const allowedInterpreters = new Set([
+              'python',
+              'python3',
+              'node',
+              'pwsh',
+              'powershell',
+              'bash',
+              'sh',
+              'cmd',
+              'cmd /c',
+            ]);
+            const rootPlaceholderRe = /^\{\{[A-Za-z0-9_]+\}\}(?:[/\\].*)?$/;
+
+            for (let i = 0; i < wfDef.steps.length; i++) {
+              const step = wfDef.steps[i] as Record<string, unknown>;
+              const prefix = `workflows/${wfName}.json step ${i + 1}`;
+              const action = typeof step?.action === 'string' ? step.action : '';
+              if (!allowedActions.has(action)) {
+                errors.push(`${prefix}: unknown or missing action '${action}'`);
+                continue;
+              }
+              if (action === 'copy') {
+                const src = typeof step.source === 'string' ? step.source : '';
+                const tgt = typeof step.target === 'string' ? step.target.trim() : '';
+                if (!src) {
+                  errors.push(`${prefix} (copy): missing "source"`);
+                } else {
+                  const srcPath = resolveInsideDir(unitDir, src, true);
+                  if (!srcPath) {
+                    errors.push(`${prefix} (copy): source escapes unit folder: ${src}`);
+                  } else if (!fs.existsSync(srcPath)) {
+                    errors.push(`${prefix} (copy): source not found: ${src}`);
+                  }
+                }
+                if (!tgt || !rootPlaceholderRe.test(tgt)) {
+                  errors.push(`${prefix} (copy): target must start with a root placeholder (e.g. {{TARGET}}/...)`);
+                }
+              } else if (action === 'mkdir') {
+                const p = typeof step.path === 'string' ? step.path.trim() : '';
+                if (!p || !rootPlaceholderRe.test(p)) {
+                  errors.push(`${prefix} (mkdir): path must start with a root placeholder (e.g. {{TARGET}}/...)`);
+                }
+              } else if (action === 'run') {
+                const script = typeof step.script === 'string' ? step.script : '';
+                if (!script) {
+                  errors.push(`${prefix} (run): missing "script"`);
+                } else {
+                  const scriptPath = resolveInsideDir(unitDir, script, true);
+                  if (!scriptPath) {
+                    errors.push(`${prefix} (run): script escapes unit folder: ${script}`);
+                  } else if (!fs.existsSync(scriptPath)) {
+                    errors.push(`${prefix} (run): script not found: ${script}`);
+                  }
+                }
+                if (typeof step.interpreter === 'string' && step.interpreter.trim()) {
+                  const interp = step.interpreter.trim().toLowerCase();
+                  if (!allowedInterpreters.has(interp)) {
+                    errors.push(`${prefix} (run): interpreter '${step.interpreter}' is not allowed`);
+                  }
+                }
+              }
+            }
           }
         } catch (e) {
           errors.push(`workflows/${wfName}.json: invalid JSON: ${e}`);
@@ -1208,6 +1276,10 @@ function cmdInstall(knowledgeDir: string, args: string[]): void {
         ? customName
         : `${customName}.md`
       : path.basename(resolvedSource);
+    if (path.basename(baseName).toLowerCase() === 'readme.md') {
+      console.error('Error: Standalone doc cannot be named README.md (ignored by knowledge scanner).');
+      process.exit(1);
+    }
     console.log(`Validating '${baseName}'...`);
     const { errors, warnings } = validateStandaloneMdFile(resolvedSource);
     printValidationResults(baseName, errors, warnings);
@@ -1563,9 +1635,10 @@ function cmdExport(knowledgeDir: string, args: string[]): void {
   console.log(`Exporting '${name}' to ${outputPath}...`);
 
   try {
+    fs.mkdirSync(path.dirname(outputPath), { recursive: true });
     let result: ReturnType<typeof spawnSync>;
     if (format === 'tar') {
-      result = spawnSync('tar', ['-czf', outputPath, '-C', knowledgeDir, name], {
+      result = spawnSync('tar', ['-czf', outputPath, '-C', knowledgeDir, '--', name], {
         stdio: 'pipe',
         encoding: 'utf-8',
       });
@@ -1582,7 +1655,10 @@ function cmdExport(knowledgeDir: string, args: string[]): void {
         { stdio: 'pipe', encoding: 'utf-8' }
       );
     } else {
-      result = spawnSync('zip', ['-r', outputPath, name], {
+      if (fs.existsSync(outputPath)) {
+        fs.unlinkSync(outputPath);
+      }
+      result = spawnSync('zip', ['-r', outputPath, '--', name], {
         cwd: knowledgeDir,
         stdio: 'pipe',
         encoding: 'utf-8',

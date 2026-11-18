@@ -27,6 +27,14 @@ export function getPackageVersion(): string {
   }
 }
 
+function expandHome(p: string): string {
+  if (p === '~' || p.startsWith('~/') || p.startsWith('~\\')) {
+    const home = process.env.HOME || process.env.USERPROFILE || os.homedir() || '';
+    return path.join(home, p.slice(1));
+  }
+  return p;
+}
+
 /**
  * Resolve the knowledge directory. Priority:
  * 1. Explicit directory argument (--dir <path> or server CLI path arg)
@@ -36,11 +44,11 @@ export function getPackageVersion(): string {
  */
 export function resolveKnowledgeDir(explicitDir?: string): string {
   if (explicitDir) {
-    return path.resolve(explicitDir);
+    return path.resolve(expandHome(explicitDir));
   }
 
   if (process.env.KNOWLEDGE_DIR) {
-    return path.resolve(process.env.KNOWLEDGE_DIR);
+    return path.resolve(expandHome(process.env.KNOWLEDGE_DIR));
   }
 
   let current = process.cwd();
@@ -754,8 +762,8 @@ function executeRunStep(
     });
   }
 
-  const stdout = (result.stdout || '').slice(0, 2000);
-  const stderr = (result.stderr || (result.error ? result.error.message : '')).slice(0, 1000);
+  const stdout = (result.stdout || '').slice(-2000);
+  const stderr = (result.stderr || (result.error ? result.error.message : '')).slice(-1000);
   const exitCode = result.error ? 1 : (result.status ?? 1);
 
   results.scripts_run.push({ script: scriptRel, exit_code: exitCode, stdout, stderr });
@@ -763,7 +771,7 @@ function executeRunStep(
   if (result.error) {
     results.errors.push(`Failed to execute '${bin}' for '${scriptRel}': ${result.error.message}`);
   } else if (exitCode !== 0) {
-    results.errors.push(`Script '${scriptRel}' exited with code ${exitCode}: ${stderr.slice(0, 200)}`);
+    results.errors.push(`Script '${scriptRel}' exited with code ${exitCode}: ${stderr.slice(-200)}`);
   }
 }
 
@@ -938,6 +946,20 @@ export function toolGetDocSection(knowledgeDir: string, name: string, section: s
   const sections = extractSections(body);
   const sectionLower = section.toLowerCase().trim();
 
+  if (!sectionLower) {
+    return {
+      text: JSON.stringify(
+        {
+          error: 'Section name cannot be empty.',
+          available_sections: sections.map((s) => s.title),
+        },
+        null,
+        2
+      ),
+      isError: true,
+    };
+  }
+
   // Match priority: 1) exact match -> 2) heading contains query -> 3) query contains heading (>=3 chars)
   const matched =
     sections.find((s) => s.title.toLowerCase() === sectionLower) ||
@@ -1040,15 +1062,20 @@ export function toolGetResource(knowledgeDir: string, name: string): ToolRespons
 }
 
 export function toolGetManifest(knowledgeDir: string, name: string): ToolResponse {
-  const folder = resolveInsideDir(knowledgeDir, name, true);
-  if (!folder) {
+  const resolvedTarget = resolveInsideDir(knowledgeDir, name, true);
+  if (!resolvedTarget) {
     return {
       text: JSON.stringify({ error: 'Access denied. Path outside knowledge directory.' }, null, 2),
       isError: true,
     };
   }
 
-  if (!fs.existsSync(folder) || !fs.statSync(folder).isDirectory()) {
+  const folder =
+    fs.existsSync(resolvedTarget) && fs.statSync(resolvedTarget).isDirectory()
+      ? resolvedTarget
+      : findManifestFolderCaseInsensitive(knowledgeDir, name);
+
+  if (!folder) {
     return {
       text: JSON.stringify(
         {
@@ -1087,15 +1114,20 @@ export function toolRunWorkflow(
   workflow: string,
   inputsArg: unknown
 ): ToolResponse {
-  const folder = resolveInsideDir(knowledgeDir, name, true);
-  if (!folder) {
+  const resolvedTarget = resolveInsideDir(knowledgeDir, name, true);
+  if (!resolvedTarget) {
     return {
       text: JSON.stringify({ error: 'Access denied. Path outside knowledge directory.' }, null, 2),
       isError: true,
     };
   }
 
-  if (!fs.existsSync(folder) || !fs.statSync(folder).isDirectory()) {
+  const folder =
+    fs.existsSync(resolvedTarget) && fs.statSync(resolvedTarget).isDirectory()
+      ? resolvedTarget
+      : findManifestFolderCaseInsensitive(knowledgeDir, name);
+
+  if (!folder) {
     return {
       text: JSON.stringify({ error: `Knowledge folder '${name}' not found.` }, null, 2),
       isError: true,
@@ -1195,6 +1227,7 @@ export function toolRunWorkflow(
   for (let i = 0; i < steps.length; i++) {
     const step = steps[i];
     const action = String(step.action || '');
+    const prevErrors = results.errors.length;
     try {
       if (action === 'copy') {
         executeCopyStep(step, folder, inputValues, results);
@@ -1212,6 +1245,9 @@ export function toolRunWorkflow(
       results.errors.push(`Step ${i + 1} (${action}): ${e}`);
     }
     results.steps_executed++;
+    if (results.errors.length > prevErrors && !step.continue_on_error) {
+      break;
+    }
   }
 
   results.summary =

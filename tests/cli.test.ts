@@ -557,4 +557,94 @@ describe('CLI Commands', () => {
         fs.rmSync(root, { recursive: true, force: true });
       }
     });
-  });});
+
+    it('add --name and update keep manifest.name synced so validate passes', () => {
+      const repoDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ks-sync-name-'));
+      try {
+        const git = (args: string[]) =>
+          execSync(`git ${args.join(' ')}`, { cwd: repoDir, stdio: 'pipe', encoding: 'utf-8' });
+        git(['init']);
+        git(['config', 'user.email', 'test@example.com']);
+        git(['config', 'user.name', 'Test User']);
+        fs.writeFileSync(
+          path.join(repoDir, 'manifest.json'),
+          JSON.stringify({ name: 'orig-name', version: '1.0.0', type: 'cookbook', description: 'v1' }),
+          'utf-8'
+        );
+        git(['add', '.']);
+        git(['commit', '-m', '"v1"']);
+
+        runCli('init', tmpDir);
+        runCli(`add "${repoDir}" --name custom-alias`, tmpDir);
+        expect(runCli('validate custom-alias', tmpDir)).toContain('custom-alias — OK');
+
+        fs.writeFileSync(
+          path.join(repoDir, 'manifest.json'),
+          JSON.stringify({ name: 'orig-name', version: '2.0.0', type: 'cookbook', description: 'v2' }),
+          'utf-8'
+        );
+        git(['add', '.']);
+        git(['commit', '-m', '"v2"']);
+
+        runCli('update custom-alias', tmpDir);
+        expect(runCli('validate custom-alias', tmpDir)).toContain('custom-alias — OK');
+      } finally {
+        fs.rmSync(repoDir, { recursive: true, force: true });
+      }
+    });
+
+    it('validate catches invalid workflow steps and install blocks --name README', () => {
+      runCli('init', tmpDir);
+      const badUnit = path.join(tmpDir, 'bad-wf-unit');
+      fs.mkdirSync(path.join(badUnit, 'workflows'), { recursive: true });
+      fs.writeFileSync(
+        path.join(badUnit, 'manifest.json'),
+        JSON.stringify({
+          name: 'bad-wf-unit',
+          version: '1.0.0',
+          type: 'toolkit',
+          description: 'Bad workflow',
+          workflows: { broken: { description: 'Broken' } },
+        }),
+        'utf-8'
+      );
+      fs.writeFileSync(
+        path.join(badUnit, 'workflows', 'broken.json'),
+        JSON.stringify({
+          name: 'broken',
+          steps: [
+            { action: 'copy', source: 'missing.txt', target: 'relative/path.txt' },
+            { action: 'run', script: 'missing.sh', interpreter: 'ruby' },
+          ],
+        }),
+        'utf-8'
+      );
+
+      const valRes = run(['validate', 'bad-wf-unit'], tmpDir);
+      expect(valRes.status).toBe(1);
+      expect(valRes.stdout).toContain('source not found: missing.txt');
+      expect(valRes.stdout).toContain('must start with a root placeholder');
+      expect(valRes.stdout).toContain("interpreter 'ruby' is not allowed");
+
+      const mdFile = path.join(tmpDir, '..', `ks-readme-test-${Date.now()}.md`);
+      try {
+        fs.writeFileSync(mdFile, '# Doc\n\nBody.', 'utf-8');
+        const instRes = run(['install', mdFile, '--name', 'README'], tmpDir);
+        expect(instRes.status).toBe(1);
+        expect(instRes.stderr).toContain('README.md');
+      } finally {
+        if (fs.existsSync(mdFile)) fs.unlinkSync(mdFile);
+      }
+    });
+
+    it('export creates missing parent directories for --output', () => {
+      runCli('init', tmpDir);
+      const unitDir = path.join(tmpDir, 'exp-unit');
+      fs.mkdirSync(unitDir);
+      fs.writeFileSync(path.join(unitDir, 'doc.md'), '# Export', 'utf-8');
+      const nestedOut = path.join(tmpDir, 'nested', 'dir', 'out.zip');
+      runCli(`export exp-unit --output "${nestedOut}"`, tmpDir);
+      expect(fs.existsSync(nestedOut)).toBe(true);
+    });
+  });
+});

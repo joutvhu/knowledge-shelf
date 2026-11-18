@@ -711,6 +711,65 @@ describe('Security, Binary Detection & Script Execution Edge Cases', () => {
       }
     }
   );
+  it('should support case-insensitive unit names in get_manifest and run_workflow, reject empty section, and stop workflow on step error', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ks-wf-behavior-'));
+    try {
+      const unit = path.join(dir, 'My-Unit');
+      fs.mkdirSync(path.join(unit, 'workflows'), { recursive: true });
+      fs.writeFileSync(
+        path.join(unit, 'manifest.json'),
+        JSON.stringify({
+          name: 'My-Unit',
+          version: '1.0.0',
+          type: 'toolkit',
+          description: 'Case and fail-fast test',
+          doc: 'overview.md',
+          workflows: { 'fail-fast': { description: 'Stops on error' } },
+        }),
+        'utf-8'
+      );
+      fs.writeFileSync(path.join(unit, 'overview.md'), '# Overview\n\n## First\n\nText.', 'utf-8');
+      fs.writeFileSync(
+        path.join(unit, 'workflows', 'fail-fast.json'),
+        JSON.stringify({
+          name: 'fail-fast',
+          inputs: { TARGET: { required: true } },
+          steps: [
+            { action: 'copy', source: 'missing.txt', target: '{{TARGET}}/out.txt' },
+            { action: 'message', text: 'SHOULD_NOT_RUN' },
+          ],
+        }),
+        'utf-8'
+      );
+
+      const { client, close } = await createConnectedClient(dir);
+      try {
+        const manRes = await client.callTool({ name: 'get_manifest', arguments: { name: 'my-unit' } });
+        expect(manRes.isError).toBeFalsy();
+        expect(JSON.parse(getText(manRes)).name).toBe('My-Unit');
+
+        const wfRes = await client.callTool({
+          name: 'run_workflow',
+          arguments: { name: 'my-unit', workflow: 'fail-fast', inputs: { TARGET: path.join(dir, 'out') } },
+        });
+        expect(wfRes.isError).toBe(true);
+        const wfJson = JSON.parse(getText(wfRes));
+        expect(wfJson.steps_executed).toBe(1);
+        expect(wfJson.messages).toEqual([]);
+
+        const emptySec = await client.callTool({
+          name: 'get_doc_section',
+          arguments: { name: 'my-unit', section: '   ' },
+        });
+        expect(emptySec.isError).toBe(true);
+        expect(getText(emptySec)).toContain('cannot be empty');
+      } finally {
+        await close();
+      }
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
   it('should work end-to-end over StdioClientTransport with compiled dist/index.js', async () => {
     const transport = new StdioClientTransport({
       command: process.execPath,
