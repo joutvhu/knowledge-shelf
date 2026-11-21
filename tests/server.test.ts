@@ -123,7 +123,7 @@ describe('MCP Server Tools (Real McpServer + Client)', () => {
     await closeConn();
   });
 
-  it('should expose all 7 registered tools', async () => {
+  it('should expose all 8 registered tools', async () => {
     const { tools } = await client.listTools();
     const names = tools.map((t) => t.name);
     expect(names).toEqual([
@@ -133,6 +133,7 @@ describe('MCP Server Tools (Real McpServer + Client)', () => {
       'get_doc_section',
       'get_resource',
       'get_manifest',
+      'get_module',
       'run_workflow',
     ]);
   });

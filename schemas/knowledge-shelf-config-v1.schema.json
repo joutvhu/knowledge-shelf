@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/joutvhu/knowledge-shelf/main/schemas/knowledge-shelf-config-v1.schema.json",
+  "title": "Knowledge Shelf Team Sync Config",
+  "description": "Declarative knowledge dependency list (knowledge-shelf.json) for 'knowledge-shelf sync'.",
+  "type": "object",
+  "required": ["version", "sources"],
+  "additionalProperties": true,
+  "properties": {
+    "$schema": { "type": "string" },
+    "version": { "type": "string", "enum": ["1.0"] },
+    "sources": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name", "url"],
+        "additionalProperties": true,
+        "properties": {
+          "name": { "type": "string" },
+          "url": { "type": "string" },
+          "path": { "type": "string" },
+          "ref": { "type": "string" },
+          "branch": { "type": "string" },
+          "pin": { "type": "string" }
+        }
+      }
+    }
+  }
+}

@@ -18,13 +18,18 @@ Complete schema for `manifest.json` — the metadata definition of a manifest-ba
 | `doc` | string | Relative path to main overview Markdown file (e.g., `"overview.md"`). Returned by `get_doc`. |
 | `aliases` | string[] | High-priority alternate names, artifact IDs, or abbreviations. (**Highest search weight: 12 pts**). |
 | `tags` | string[] | 8–12 search keywords covering language, framework, domain, and pattern. (**8 pts** in search). |
-| `requires` | string[] | Other knowledge unit names this unit depends on. |
+| `status` | string | Lifecycle status: `"active"` (default), `"deprecated"`, or `"draft"`. Deprecated units are down-ranked in search and display a warning banner in `get_doc`. |
+| `superseded_by` | string \| null | Replacement unit name when `status` is `"deprecated"`. |
+| `verified_at` | string | ISO date (`YYYY-MM-DD`) when the unit was last verified. |
+| `applies_to` | object | Compatibility metadata (`languages`, `frameworks`, `detect_files`) indexed by search. |
+| `source` | object | Provenance metadata (`repository`, `upstream_repo`, `upstream_ref`, `license`, `maintainers`). |
+| `requires` | string[] | Other knowledge unit names this unit depends on (checked by `validate`). |
 | `enhances` | string[] | Other knowledge unit names this unit complements. |
-| `modules` | object | Named reusable code/doc modules with `files`, `dependencies`, `guide`, and `tags`. (Module keys score **6 pts**). |
-| `scripts` | object | Named automation scripts with `file`, `interpreter`, `description`, and `args`. |
-| `workflows` | object | Named workflows (`{ "<name>": { "description": "..." } }`). Full definition lives in `workflows/<name>.json`. |
-| `references` | object | Named on-demand reference docs (`{ "<name>": { "file": "references/<file>.md", "description": "..." } }`). |
-| `placeholders` | object | Named template variables (`{{UPPER_SNAKE_CASE}}`) with `description` and `example`. |
+| `modules` | object | Named reusable code/doc modules with `files` (supports globs like `src/**/*.java`), `exclude`, `dependencies`, `guide`, and `tags`. (Module keys score **6 pts**). |
+| `scripts` | object | Named automation scripts with `file`, `interpreter`, `timeout_ms`, `description`, and `args`. |
+| `workflows` | object | Named workflows (`{ "<name>": { "description": "...", "file": "optional/path.json" } }`). Full definition lives in `workflows/<name>.json` by default. |
+| `references` | object | Named on-demand reference docs (`{ "<name>": { "file": "references/<file>.md", "description": "...", "tags": [...] } }`). Reference headings and tags are indexed in search. |
+| `placeholders` | object | Named template variables (`{{UPPER_SNAKE_CASE}}`) with `type`, `required`, `pattern`, `description`, and `example`. |
 
 ## Modules (`modules`)
 

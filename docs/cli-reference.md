@@ -290,11 +290,42 @@ Deletes the directory and removes the entry from `.registry.json`.  If the unit 
 
 ---
 
+## Additional Git, Sync & Sharing Commands
+
+### `catalog <url> [--ref <ref>]`
+Inspect available units and packs inside a remote repository (via `shelf.json` or `manifest.json` auto-discovery) before installing.
+
+### `sync [--file <knowledge-shelf.json>] [--frozen] [--force]`
+Install and synchronize all sources declared in `knowledge-shelf.json` (or remote entries in `.registry.json`), deduplicating monorepo clones and honoring pinned refs.
+
+### `outdated` / `status`
+Check remote commit status and detect local file modifications (`[modified-locally]`) for installed sources.
+
+### `scaffold <name> [--type boilerplate|template|toolkit|cookbook|repo] [--output <dir>]`
+Generate a starter knowledge unit or a shareable monorepo skeleton (including `shelf.json` and `.github/workflows/validate-knowledge.yml`).
+
+### `index [dir] [--output <shelf.json>]`
+Scan a directory of knowledge units and generate or update `shelf.json`.
+
+### `publish <unit-path> --to <git-url> [--path <subpath>] [--branch <branch>] [--push] [--force]`
+Validate and hygiene-check a unit, commit it to a branch in the target repository, update `shelf.json` if present, and optionally push for PR review.
+
+### `import <archive.zip|.tar.gz> [--name <alias>] [--force]`
+Extract, validate, and install a packaged knowledge unit or standalone `.md` file from a `.zip` or `.tar.gz` archive.
+
+### `trust <name>` / `untrust <name>`
+Manage per-unit script execution trust when running the MCP server with `--strict-trust`.
+
+---
+
 ## Environment Variables
 
 | Variable | Description |
 |---|---|
-| `KNOWLEDGE_DIR` | Override knowledge directory path (priority 2, after --dir) |
+| `KNOWLEDGE_DIRS` | Delimited list (`;` on Windows, `:` on Unix) of layered knowledge directories (highest priority first) |
+| `KNOWLEDGE_DIR` | Override single knowledge directory path (priority 2, after `--dir`) |
+| `KNOWLEDGE_READ_ONLY` | Set `1` or `true` to disable side-effecting workflow execution (`dry_run: true` remains allowed) |
+| `KNOWLEDGE_STRICT_TRUST` | Set `1` or `true` to block workflow `run` steps in untrusted remote units |
 
 ### How to Set KNOWLEDGE_DIR Permanently
 

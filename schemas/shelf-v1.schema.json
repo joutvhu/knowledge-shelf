@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/joutvhu/knowledge-shelf/main/schemas/shelf-v1.schema.json",
+  "title": "Knowledge Shelf Repository Catalog",
+  "description": "Optional root catalog (shelf.json) for a Git repository sharing multiple knowledge units and packs.",
+  "type": "object",
+  "required": ["units"],
+  "additionalProperties": true,
+  "properties": {
+    "$schema": { "type": "string" },
+    "name": { "type": "string" },
+    "description": { "type": "string" },
+    "homepage": { "type": "string" },
+    "units": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name", "path"],
+        "additionalProperties": true,
+        "properties": {
+          "name": { "type": "string" },
+          "path": { "type": "string" },
+          "type": { "type": "string" },
+          "version": { "type": "string" },
+          "description": { "type": "string" },
+          "tags": { "type": "array", "items": { "type": "string" } }
+        }
+      }
+    },
+    "packs": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "required": ["units"],
+        "additionalProperties": true,
+        "properties": {
+          "description": { "type": "string" },
+          "units": { "type": "array", "items": { "type": "string" } }
+        }
+      }
+    }
+  }
+}

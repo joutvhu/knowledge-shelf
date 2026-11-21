@@ -30,7 +30,7 @@ Complete schema and runtime constraints for workflow JSON files (`workflows/<nam
     }
   },
   "steps": [
-    { "action": "mkdir|copy|run|message", ... }
+    { "action": "mkdir|copy|copy_dir|patch|run|message", ... }
   ]
 }
 ```
@@ -38,14 +38,17 @@ Complete schema and runtime constraints for workflow JSON files (`workflows/<nam
 ## Security & Placeholder Rules (Enforced by MCP Server)
 
 1. **Placeholder format**: `{{KEY}}` where `KEY` matches `/[A-Za-z0-9_]+/`.
-2. **Root Path Containment for `copy.target` and `mkdir.path`**:
-   - Every `target` (in `copy`) and `path` (in `mkdir`) **MUST** start with a root placeholder prefix `{{ROOT_KEY}}` (or `{{ROOT_KEY}}/...`, e.g., `{{TARGET}}/src/...`).
+2. **Root Path Containment for `copy.target`, `copy_dir.target`, `patch.target`, `mkdir.path`, and `run.cwd`**:
+   - Every target/path/cwd **MUST** start with a root placeholder prefix `{{ROOT_KEY}}` (or `{{ROOT_KEY}}/...`, e.g., `{{TARGET}}/src/...`).
    - At runtime, the input value for `ROOT_KEY` **MUST** be an absolute path (`path.isAbsolute(inputs[ROOT_KEY]) === true`).
    - The rendered destination must not contain any unresolved `{{...}}` placeholders and must resolve strictly inside `inputs[ROOT_KEY]` (any `..` or symlink escape is blocked).
 3. **Source & Script Containment**:
-   - `copy.source` and `run.script` are resolved relative to the knowledge unit folder root and must stay strictly inside that unit folder.
-4. **Binary-safe `copy`**:
+   - `copy.source`, `copy_dir.source`, and `run.script` are resolved relative to the knowledge unit folder root and must stay strictly inside that unit folder.
+4. **Binary-safe `copy` / `copy_dir`**:
    - Text files have `{{KEY}}` placeholders replaced with `inputs[KEY]`. Binary files (detected via null byte in first 8 KB) are copied byte-for-byte without placeholder replacement.
+5. **Conditional execution (`when`) & Preview (`dry_run`)**:
+   - Any step may specify `"when": { "input": "FLAG", "equals": "true" }` (`equals`, `not_equals`, `in`, `exists`, `not_exists`).
+   - `run_workflow` accepts `dry_run: true` to preview file creations, patches, and script commands without modifying disk.
 
 ## Step Actions
 
@@ -65,6 +68,48 @@ Complete schema and runtime constraints for workflow JSON files (`workflows/<nam
 | `source` | ✅ | Relative file path inside the knowledge unit folder |
 | `target` | ✅ | Destination path starting with `{{ROOT_KEY}}/...` |
 | `skip_if_exists` | Optional | If `true`, skips overwriting when destination file already exists (recommended for idempotency). Default: `false`. |
+
+### `copy_dir` — Recursively copy and render a template directory
+
+```json
+{
+  "action": "copy_dir",
+  "source": "templates/service",
+  "target": "{{TARGET}}/src/{{PACKAGE_PATH}}",
+  "exclude": ["**/*.bak"],
+  "skip_if_exists": true,
+  "render_filenames": true
+}
+```
+
+| Field | Required | Description |
+|---|---|---|
+| `source` | ✅ | Relative directory path inside the knowledge unit folder |
+| `target` | ✅ | Destination directory starting with `{{ROOT_KEY}}/...` |
+| `exclude` | Optional | Glob patterns to skip |
+| `skip_if_exists` | Optional | Skip files that already exist at target |
+| `render_filenames` | Optional | Replace `{{KEY}}` in relative file/folder names (default: `true`) |
+
+### `patch` — Idempotently patch an existing file
+
+```json
+{
+  "action": "patch",
+  "target": "{{TARGET}}/src/app.config.ts",
+  "mode": "insert_before",
+  "anchor": "// [providers]",
+  "content": "  provideAgGrid(),",
+  "skip_if_contains": "provideAgGrid()"
+}
+```
+
+| Field | Required | Description |
+|---|---|---|
+| `target` | ✅ | File path starting with `{{ROOT_KEY}}/...` |
+| `mode` | Optional | `insert_before`, `insert_after`, `replace`, `append` (default), or `prepend` |
+| `anchor` | Conditional | Required for `insert_before`, `insert_after`, and `replace` |
+| `content` | ✅ | Content string (`{{KEY}}` placeholders supported) |
+| `skip_if_contains` | Optional | Skip patch if file already contains this substring (idempotency) |
 
 ### `mkdir` — Create target directory
 
@@ -86,18 +131,20 @@ Complete schema and runtime constraints for workflow JSON files (`workflows/<nam
   "action": "run",
   "script": "scripts/validate.py",
   "args": ["--target", "{{TARGET}}"],
-  "interpreter": "python"
+  "interpreter": "python",
+  "cwd": "{{TARGET}}",
+  "timeout_ms": 60000
 }
 ```
 
 | Field | Required | Description |
 |---|---|---|
-| `script` | ✅ | Script path relative to knowledge unit folder root |
+| `script` | Conditional | Script path relative to unit root (required unless `script_ref` is given) |
+| `script_ref` | Conditional | Key in `manifest.scripts` to inherit `file`, `interpreter`, and `timeout_ms` |
 | `args` | Optional | Array of string arguments (`{{KEY}}` placeholders are replaced) |
-| `interpreter` | Optional | One of: `python`, `python3`, `node`, `pwsh`, `powershell`, `bash`, `sh`, `cmd`. Auto-detected from file extension (`.py`, `.js`, `.mjs`, `.cjs`, `.ps1`, `.sh`, `.cmd`, `.bat`) if omitted. |
-
-- Runs with `cwd` set to the knowledge unit folder and a 120-second timeout.
-- On Windows, `.ps1` with default `pwsh` automatically falls back to `powershell` if `pwsh` is not installed.
+| `interpreter` | Optional | One of: `python`, `python3`, `node`, `pwsh`, `powershell`, `bash`, `sh`, `cmd`. Auto-detected from file extension if omitted. |
+| `cwd` | Optional | Working directory starting with `{{ROOT_KEY}}` (defaults to unit folder) |
+| `timeout_ms` | Optional | Timeout in milliseconds (default: `120000`, max: `600000`) |
 
 ### `message` — Emit progress message
 

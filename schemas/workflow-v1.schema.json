@@ -1,0 +1,55 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/joutvhu/knowledge-shelf/main/schemas/workflow-v1.schema.json",
+  "title": "Knowledge Shelf Workflow",
+  "description": "Schema for Knowledge Shelf workflow definitions (workflows/<name>.json).",
+  "type": "object",
+  "required": ["steps"],
+  "additionalProperties": true,
+  "properties": {
+    "$schema": { "type": "string" },
+    "name": { "type": "string" },
+    "description": { "type": "string" },
+    "inputs": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": true,
+        "properties": {
+          "required": { "type": "boolean" },
+          "type": { "type": "string" },
+          "description": { "type": "string" },
+          "default": {},
+          "pattern": { "type": "string" }
+        }
+      }
+    },
+    "steps": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["action"],
+        "additionalProperties": true,
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": ["mkdir", "copy", "copy_dir", "patch", "run", "message"]
+          },
+          "continue_on_error": { "type": "boolean" },
+          "when": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "input": { "type": "string" },
+              "equals": { "type": "string" },
+              "not_equals": { "type": "string" },
+              "in": { "type": "array", "items": { "type": "string" } },
+              "exists": { "type": "string" },
+              "not_exists": { "type": "string" }
+            }
+          }
+        }
+      }
+    }
+  }
+}

@@ -208,6 +208,50 @@ This file should be committed to version control if you want to share the same k
 
 ---
 
+## Team Sync (`knowledge-shelf.json`)
+
+For teams sharing a fixed set of knowledge units across a project repository, commit a declarative `knowledge-shelf.json` instead of `.registry.json`:
+
+```json
+{
+  "$schema": "https://raw.githubusercontent.com/joutvhu/knowledge-shelf/main/schemas/knowledge-shelf-config-v1.schema.json",
+  "version": "1.0",
+  "sources": [
+    {
+      "name": "cucumber-boilerplate",
+      "url": "https://github.com/team/shared-knowledge.git",
+      "path": "cucumber-boilerplate",
+      "pin": "v2.1.0"
+    }
+  ]
+}
+```
+
+Teammates then run:
+```bash
+npx knowledge-shelf sync
+```
+
+## Catalog Index (`shelf.json`) & Publishing
+
+Monorepos can include an optional `shelf.json` at the repo root (generated via `knowledge-shelf index .`) to list available units and `packs`:
+
+```bash
+# Preview available units & packs before installing
+knowledge-shelf catalog https://github.com/team/shared-knowledge.git
+
+# Install a curated pack
+knowledge-shelf add https://github.com/team/shared-knowledge.git --pack qa-starter
+
+# Scaffold a new shareable knowledge repo with GitHub Actions CI validation
+knowledge-shelf scaffold team-knowledge --type repo
+
+# Validate, hygiene-check, and push a unit branch to a shared repo
+knowledge-shelf publish ./my-unit --to https://github.com/team/shared-knowledge.git --push
+```
+
+---
+
 ## Private Repos
 
 For private/enterprise repos, ensure git credentials are configured:

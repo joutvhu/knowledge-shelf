@@ -2,17 +2,20 @@
  * Knowledge Shelf MCP Server factory.
  */
 
-import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { McpServer, ResourceTemplate } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import {
   getPackageVersion,
+  scanDocuments,
   toolGetDoc,
   toolGetDocSection,
   toolGetManifest,
+  toolGetModule,
   toolGetResource,
   toolListDocs,
   toolRunWorkflow,
   toolSearchDocs,
+  type ServerToolOptions,
   type ToolResponse,
 } from './core.js';
 
@@ -23,33 +26,37 @@ function toMcpResult(res: ToolResponse) {
   };
 }
 
-export function createKnowledgeServer(knowledgeDir: string): McpServer {
+export function createKnowledgeServer(
+  knowledgeDirs: string | string[],
+  options: ServerToolOptions = {}
+): McpServer {
   const server = new McpServer(
     {
       name: 'knowledge-shelf',
       version: getPackageVersion(),
     },
     {
-      capabilities: { tools: {} },
+      capabilities: { tools: {}, resources: {} },
       instructions: `You have access to a personal knowledge base via the knowledge-shelf tools. Use these tools proactively to find relevant documentation, code patterns, templates, and workflows before answering questions or starting implementation tasks.
 
 ## When to use these tools
 
 - **Starting a task**: search_docs first to find relevant knowledge units, patterns, or guides.
 - **Unfamiliar library or framework**: search_docs for docs, then get_doc or get_doc_section for details.
-- **Scaffolding or boilerplate**: search_docs for templates/boilerplate, then run_workflow to automate setup.
+- **Scaffolding or boilerplate**: search_docs for templates/boilerplate, then inspect with get_module or run_workflow (use dry_run: true to preview).
 - **Coding standards or conventions**: search_docs for team guides before writing code.
 - **Unsure what's available**: list_docs to see everything in the knowledge base.
 
 ## Recommended workflow
 
-1. **search_docs** — find relevant units by keyword (title, tags, type, modules, aliases all scored).
-2. **get_manifest** — inspect a manifest-based unit to see its modules, workflows, scripts, and references.
-3. **get_doc** — read the main documentation of a unit or standalone .md file.
-4. **get_doc_section** — read a specific section when you only need part of a document.
-5. **get_resource** — retrieve a code file, template, config, or reference doc by path.
-6. **run_workflow** — execute a predefined workflow to scaffold files, run scripts, or automate setup. Always call get_manifest first to discover available workflows and their required inputs.
-7. **list_docs** — enumerate all available documents and units when you need a full overview.
+1. **search_docs** — find relevant units by keyword (aliases, title, tags, type, modules, references, and optional filters/content search).
+2. **get_manifest** — inspect a manifest-based unit to see its modules, workflows, scripts, references, compatibility, and placeholders.
+3. **get_module** — resolve a specific module's files, guides, and transitive dependencies in topological order.
+4. **get_doc** — read the main documentation of a unit or standalone .md file.
+5. **get_doc_section** — read a specific section when you only need part of a document.
+6. **get_resource** — retrieve a code file, template, config, or reference doc by path (supports offset/limit line slicing or section extraction).
+7. **run_workflow** — execute a predefined workflow to scaffold files, patch host files, or run scripts. Always call get_manifest first, and consider dry_run: true to preview changes.
+8. **list_docs** — enumerate all available documents and units when you need a full overview.
 
 ## Two knowledge formats
 
@@ -59,9 +66,9 @@ export function createKnowledgeServer(knowledgeDir: string): McpServer {
 ## Tips
 
 - Search terms are space-separated; aliases and titles score highest.
-- get_doc_section is more efficient than get_doc when you only need one section of a large document.
-- run_workflow has side effects (creates files, runs scripts) — confirm required inputs with get_manifest before calling it.
-- Paths passed to get_resource, get_doc, and get_manifest are relative to the knowledge directory root.`,
+- get_doc_section and get_resource (with offset/limit or section) save context on large files.
+- run_workflow has side effects (creates/patches files, runs scripts) — use dry_run: true first if unsure.
+- Paths passed to get_resource, get_doc, get_manifest, and get_module are relative to the knowledge directory root.`,
     }
   );
 
@@ -69,7 +76,7 @@ export function createKnowledgeServer(knowledgeDir: string): McpServer {
     'list_docs',
     {
       description:
-        'List all available knowledge base documents and units. Returns manifest-based knowledge units (with modules, workflows, scripts) and standalone .md documents. Use when you need a full overview of what knowledge is available.',
+        'List all available knowledge base documents and units across configured layers. Returns manifest-based knowledge units (with modules, workflows, scripts, status, compatibility) and standalone .md documents.',
       annotations: {
         readOnlyHint: true,
         destructiveHint: false,
@@ -77,14 +84,14 @@ export function createKnowledgeServer(knowledgeDir: string): McpServer {
         openWorldHint: false,
       },
     },
-    async () => toMcpResult(toolListDocs(knowledgeDir))
+    async () => toMcpResult(toolListDocs(knowledgeDirs))
   );
 
   server.registerTool(
     'search_docs',
     {
       description:
-        'Search knowledge base by keyword. Call this first before starting any task — it finds relevant documentation, code patterns, templates, and guides. Searches titles, tags, descriptions, module names, type, and aliases. Returns ranked results. Aliases and titles score highest; terms are space-separated.',
+        'Search knowledge base by keyword. Call this first before starting any task — it finds relevant documentation, code patterns, templates, and guides. Searches aliases, titles, tags, type, modules, references, compatibility, and headings. Optional filters: type, tags, unit, and include_content for full-text snippet search.',
       inputSchema: z.object({
         query: z.string().describe('Search keywords (space-separated)'),
         max_results: z
@@ -94,6 +101,22 @@ export function createKnowledgeServer(knowledgeDir: string): McpServer {
           .max(100)
           .optional()
           .describe('Maximum results to return (1-100, default: 10)'),
+        type: z
+          .enum(['boilerplate', 'template', 'toolkit', 'cookbook', 'standalone'])
+          .optional()
+          .describe('Optional filter by knowledge type'),
+        tags: z
+          .array(z.string())
+          .optional()
+          .describe('Optional tags filter (document must contain all specified tags)'),
+        unit: z
+          .string()
+          .optional()
+          .describe('Optional unit name filter to search within a single knowledge unit'),
+        include_content: z
+          .boolean()
+          .optional()
+          .describe('Also search full document & reference bodies and return matching snippets'),
       }),
       annotations: {
         readOnlyHint: true,
@@ -102,7 +125,15 @@ export function createKnowledgeServer(knowledgeDir: string): McpServer {
         openWorldHint: false,
       },
     },
-    async ({ query, max_results }) => toMcpResult(toolSearchDocs(knowledgeDir, query, max_results))
+    async ({ query, max_results, type, tags, unit, include_content }) =>
+      toMcpResult(
+        toolSearchDocs(knowledgeDirs, query, max_results, {
+          type,
+          tags,
+          unit,
+          includeContent: include_content,
+        })
+      )
   );
 
   server.registerTool(
@@ -122,7 +153,7 @@ export function createKnowledgeServer(knowledgeDir: string): McpServer {
         openWorldHint: false,
       },
     },
-    async ({ name }) => toMcpResult(toolGetDoc(knowledgeDir, name))
+    async ({ name }) => toMcpResult(toolGetDoc(knowledgeDirs, name))
   );
 
   server.registerTool(
@@ -141,18 +172,35 @@ export function createKnowledgeServer(knowledgeDir: string): McpServer {
         openWorldHint: false,
       },
     },
-    async ({ name, section }) => toMcpResult(toolGetDocSection(knowledgeDir, name, section))
+    async ({ name, section }) => toMcpResult(toolGetDocSection(knowledgeDirs, name, section))
   );
 
   server.registerTool(
     'get_resource',
     {
       description:
-        'Retrieve any file from a knowledge unit as text — code files, templates, configs, reference docs, scripts. Use get_manifest first to discover available file paths within a unit. Path is relative to the knowledge directory root (e.g. "my-unit/src/BasePage.java").',
+        'Retrieve any file from a knowledge unit as text — code files, templates, configs, reference docs, scripts. Supports optional line slicing (offset/limit) for large files or section extraction for Markdown references. Path is relative to the knowledge directory root (e.g. "my-unit/src/BasePage.java").',
       inputSchema: z.object({
         name: z
           .string()
           .describe('File path relative to knowledge directory root (e.g. "my-unit/references/guide.md")'),
+        offset: z
+          .number()
+          .int()
+          .min(1)
+          .optional()
+          .describe('Optional 1-based starting line number for large files'),
+        limit: z
+          .number()
+          .int()
+          .min(1)
+          .max(2000)
+          .optional()
+          .describe('Optional maximum number of lines to return (default when offset set: 200)'),
+        section: z
+          .string()
+          .optional()
+          .describe('Optional Markdown heading to extract from a .md reference resource'),
       }),
       annotations: {
         readOnlyHint: true,
@@ -161,14 +209,15 @@ export function createKnowledgeServer(knowledgeDir: string): McpServer {
         openWorldHint: false,
       },
     },
-    async ({ name }) => toMcpResult(toolGetResource(knowledgeDir, name))
+    async ({ name, offset, limit, section }) =>
+      toMcpResult(toolGetResource(knowledgeDirs, name, { offset, limit, section }))
   );
 
   server.registerTool(
     'get_manifest',
     {
       description:
-        'Retrieve the manifest.json of a manifest-based knowledge unit. Returns structured metadata: modules (with files and dependencies), workflows, scripts, references, and placeholders. Always call this before run_workflow to discover available workflows and their required inputs.',
+        'Retrieve the manifest.json of a manifest-based knowledge unit. Returns structured metadata: modules (with files and dependencies), workflows, scripts, references, compatibility, and placeholders. Always call this before run_workflow to discover available workflows and their required inputs.',
       inputSchema: z.object({
         name: z.string().describe('Knowledge unit folder name (relative to knowledge directory root)'),
       }),
@@ -179,14 +228,38 @@ export function createKnowledgeServer(knowledgeDir: string): McpServer {
         openWorldHint: false,
       },
     },
-    async ({ name }) => toMcpResult(toolGetManifest(knowledgeDir, name))
+    async ({ name }) => toMcpResult(toolGetManifest(knowledgeDirs, name))
+  );
+
+  server.registerTool(
+    'get_module',
+    {
+      description:
+        'Resolve a specific module inside a manifest-based knowledge unit, expanding file globs and transitive module dependencies in topological order along with wiring guides and placeholders.',
+      inputSchema: z.object({
+        name: z.string().describe('Knowledge unit folder name'),
+        module: z.string().describe('Module key from manifest.json "modules"'),
+        include_dependencies: z
+          .boolean()
+          .optional()
+          .describe('Include transitive module dependencies in topological order (default: true)'),
+      }),
+      annotations: {
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false,
+      },
+    },
+    async ({ name, module, include_dependencies }) =>
+      toMcpResult(toolGetModule(knowledgeDirs, name, module, include_dependencies ?? true))
   );
 
   server.registerTool(
     'run_workflow',
     {
       description:
-        'Execute a predefined workflow from a knowledge unit. Workflows automate multi-step tasks: copying templates, running scripts, creating directories. Has side effects — creates files and runs scripts. Always call get_manifest first to discover available workflows and their required inputs before calling this tool.',
+        'Execute a predefined workflow from a knowledge unit. Workflows automate multi-step tasks: creating directories, copying templates/directories, patching files, and running scripts. Supports dry_run: true to preview all operations safely without side effects. Always call get_manifest first to discover available workflows and required inputs.',
       inputSchema: z.object({
         name: z.string().describe('Knowledge unit folder name'),
         workflow: z.string().describe('Workflow name (from manifest workflows keys)'),
@@ -196,6 +269,10 @@ export function createKnowledgeServer(knowledgeDir: string): McpServer {
           .describe(
             'Input values for workflow placeholders (e.g. {"TARGET": "/path/to/project", "NAME": "my-app"})'
           ),
+        dry_run: z
+          .boolean()
+          .optional()
+          .describe('Preview planned file creations, patches, and script commands without making changes'),
       }),
       annotations: {
         readOnlyHint: false,
@@ -204,7 +281,84 @@ export function createKnowledgeServer(knowledgeDir: string): McpServer {
         openWorldHint: true,
       },
     },
-    async ({ name, workflow, inputs }) => toMcpResult(await toolRunWorkflow(knowledgeDir, name, workflow, inputs))
+    async ({ name, workflow, inputs, dry_run }) => {
+      if (options.readOnly && !dry_run) {
+        return toMcpResult({
+          text: JSON.stringify(
+            {
+              error: 'Workflow execution is disabled in read-only mode. Pass dry_run: true to preview.',
+            },
+            null,
+            2
+          ),
+          isError: true,
+        });
+      }
+      return toMcpResult(
+        await toolRunWorkflow(knowledgeDirs, name, workflow, inputs, {
+          ...options,
+          dryRun: dry_run,
+        })
+      );
+    }
+  );
+
+  // Register MCP Resources (`knowledge://<path>`) for @-mention and direct client browsing
+  server.registerResource(
+    'knowledge-item',
+    new ResourceTemplate('knowledge://{+path}', {
+      list: async () => {
+        const docs = scanDocuments(knowledgeDirs);
+        return {
+          resources: docs.map((d) => ({
+            uri: `knowledge://${d.name}`,
+            name: d.title || d.name,
+            description: d.description || undefined,
+            mimeType: 'text/markdown',
+          })),
+        };
+      },
+    }),
+    {
+      title: 'Knowledge Shelf Document / Resource',
+      description: 'Read a knowledge unit overview or file resource by relative path.',
+      mimeType: 'text/markdown',
+    },
+    async (uri, variables) => {
+      const rawPath = Array.isArray(variables.path)
+        ? variables.path.join('/')
+        : String(variables.path || '');
+      const relPath = decodeURIComponent(rawPath).replace(/^\/+/, '');
+      const resDoc = toolGetDoc(knowledgeDirs, relPath);
+      if (!resDoc.isError) {
+        return {
+          contents: [
+            {
+              uri: uri.href,
+              mimeType: 'text/markdown',
+              text: resDoc.text,
+            },
+          ],
+        };
+      }
+      const resFile = toolGetResource(knowledgeDirs, relPath);
+      if (!resFile.isError) {
+        return {
+          contents: [
+            {
+              uri: uri.href,
+              mimeType: relPath.endsWith('.json')
+                ? 'application/json'
+                : relPath.endsWith('.md')
+                  ? 'text/markdown'
+                  : 'text/plain',
+              text: resFile.text,
+            },
+          ],
+        };
+      }
+      throw new Error(resFile.text);
+    }
   );
 
   return server;

@@ -1,0 +1,217 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/joutvhu/knowledge-shelf/main/schemas/manifest-v1.schema.json",
+  "title": "Knowledge Shelf Manifest",
+  "description": "Metadata schema for a Knowledge Shelf manifest-based knowledge unit (v1.0 / v1.1).",
+  "type": "object",
+  "required": ["name", "version", "type", "description"],
+  "additionalProperties": true,
+  "properties": {
+    "$schema": {
+      "type": "string",
+      "description": "Schema identifier or URL (e.g. 'knowledge-manifest/1.1')."
+    },
+    "name": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Unit identifier; must match the unit folder name (or installed alias)."
+    },
+    "version": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Semantic version (e.g. '1.0.0')."
+    },
+    "type": {
+      "type": "string",
+      "enum": ["boilerplate", "template", "toolkit", "cookbook"],
+      "description": "Knowledge unit category."
+    },
+    "doc": {
+      "type": "string",
+      "description": "Relative path to the main overview Markdown file returned by get_doc."
+    },
+    "description": {
+      "type": "string",
+      "minLength": 1,
+      "description": "1-2 sentence summary for search matching."
+    },
+    "aliases": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "High-priority alternate names, abbreviations, or artifact IDs."
+    },
+    "tags": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Search keywords covering language, framework, domain, and pattern."
+    },
+    "status": {
+      "type": "string",
+      "enum": ["active", "deprecated", "draft"],
+      "default": "active",
+      "description": "Lifecycle status. Deprecated units are down-ranked in search results."
+    },
+    "superseded_by": {
+      "type": ["string", "null"],
+      "description": "Replacement knowledge unit name if status is 'deprecated'."
+    },
+    "verified_at": {
+      "type": "string",
+      "description": "ISO date (YYYY-MM-DD) when the knowledge unit was last verified."
+    },
+    "applies_to": {
+      "type": "object",
+      "description": "Target project compatibility metadata.",
+      "additionalProperties": true,
+      "properties": {
+        "languages": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "frameworks": {
+          "type": "object",
+          "additionalProperties": { "type": "string" }
+        },
+        "detect_files": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      }
+    },
+    "source": {
+      "type": "object",
+      "description": "Provenance and maintainer metadata.",
+      "additionalProperties": true,
+      "properties": {
+        "repository": { "type": "string" },
+        "upstream_repo": { "type": "string" },
+        "upstream_ref": { "type": "string" },
+        "license": { "type": "string" },
+        "maintainers": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      }
+    },
+    "requires": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Other knowledge unit names this unit depends on."
+    },
+    "enhances": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Complementary knowledge unit names."
+    },
+    "modules": {
+      "type": "object",
+      "description": "Named reusable code/doc modules.",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": true,
+        "properties": {
+          "description": { "type": "string" },
+          "guide": { "type": "string" },
+          "files": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "Relative file paths or glob patterns (e.g. 'src/**/*.java')."
+          },
+          "exclude": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "Glob patterns to exclude when files uses globs."
+          },
+          "dependencies": {
+            "type": "array",
+            "items": { "type": "string" }
+          },
+          "tags": {
+            "type": "array",
+            "items": { "type": "string" }
+          }
+        }
+      }
+    },
+    "scripts": {
+      "type": "object",
+      "description": "Named automation scripts.",
+      "additionalProperties": {
+        "type": "object",
+        "required": ["file"],
+        "additionalProperties": true,
+        "properties": {
+          "file": { "type": "string" },
+          "interpreter": {
+            "type": "string",
+            "enum": ["python", "python3", "node", "pwsh", "powershell", "bash", "sh", "cmd"]
+          },
+          "description": { "type": "string" },
+          "timeout_ms": {
+            "type": "integer",
+            "minimum": 1000,
+            "maximum": 600000
+          },
+          "args": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "object",
+              "additionalProperties": true,
+              "properties": {
+                "required": { "type": "boolean" },
+                "type": { "type": "string" },
+                "description": { "type": "string" },
+                "default": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "workflows": {
+      "type": "object",
+      "description": "Named workflows (definitions live in workflows/<name>.json unless 'file' overrides it).",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": true,
+        "properties": {
+          "description": { "type": "string" },
+          "file": { "type": "string" }
+        }
+      }
+    },
+    "references": {
+      "type": "object",
+      "description": "Named on-demand reference documents.",
+      "additionalProperties": {
+        "type": "object",
+        "required": ["file"],
+        "additionalProperties": true,
+        "properties": {
+          "file": { "type": "string" },
+          "description": { "type": "string" },
+          "tags": {
+            "type": "array",
+            "items": { "type": "string" }
+          }
+        }
+      }
+    },
+    "placeholders": {
+      "type": "object",
+      "description": "Template placeholders ({{KEY}}) used across files and workflows.",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": true,
+        "properties": {
+          "type": { "type": "string" },
+          "required": { "type": "boolean" },
+          "description": { "type": "string" },
+          "example": { "type": "string" },
+          "pattern": { "type": "string" },
+          "default": {}
+        }
+      }
+    }
+  }
+}

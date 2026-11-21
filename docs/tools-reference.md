@@ -372,6 +372,19 @@ Retrieve the `manifest.json` of a knowledge folder.
 
 ---
 
+## get_module
+
+Resolve a manifest module along with its transitive dependencies in topological order, expanded file globs, wiring guides, and placeholders.
+
+**Parameters:**
+| Name | Type | Required | Description |
+|---|---|---|---|
+| `name` | string | ✅ | Knowledge unit folder name |
+| `module` | string | ✅ | Module key from `manifest.json` |
+| `include_dependencies` | boolean | ❌ | Include transitive dependencies (default: `true`) |
+
+---
+
 ## run_workflow
 
 Execute a predefined workflow from a knowledge folder.
