@@ -88,8 +88,7 @@ export function cmdInit(knowledgeDir: string): void {
   console.log(`✓ Initialized knowledge directory: ${knowledgeDir}`);
 }
 
-export function cmdList(knowledgeDirs: string[]): void {
-  const primaryDir = knowledgeDirs[0];
+export function cmdList(primaryDir: string, knowledgeDirs: string[]): void {
   const registry = loadRegistry(primaryDir);
   const trackedNames = new Set(registry.sources.map((s) => s.name));
 

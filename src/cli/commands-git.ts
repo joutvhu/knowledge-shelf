@@ -168,20 +168,21 @@ export function cmdAdd(knowledgeDir: string, args: string[]): void {
   const commit = gitGetCommit(cloneTarget);
   const branch = gitGetBranch(cloneTarget);
 
+  let stageSeq = 0;
   const installUnitFromSource = (
     unitName: string,
     sourceDir: string,
     sourceSubPath: string | undefined,
     registry: ReturnType<typeof loadRegistry>,
     syncName: boolean
-  ): boolean => {
+  ): 'installed' | 'skipped' | 'invalid' => {
     const destDir = resolveSafeUnitDir(knowledgeDir, unitName);
     const existing = registry.sources.find((s) => s.name === unitName);
     if ((existing || fs.existsSync(destDir)) && !force) {
-      return false;
+      return 'skipped';
     }
 
-    const stageDir = getCloneTarget(knowledgeDir, `.add-stage-${process.pid}-${Date.now()}`);
+    const stageDir = getCloneTarget(knowledgeDir, `.add-stage-${process.pid}-${Date.now()}-${++stageSeq}`);
     removeDirSync(stageDir);
     try {
       copyDirSync(sourceDir, stageDir);
@@ -191,7 +192,7 @@ export function cmdAdd(knowledgeDir: string, args: string[]): void {
       if (!validateStagedDirectory(stageDir, unitName, noVerify)) {
         console.error(`Error: Validation failed for '${unitName}'. Use --no-verify to bypass.`);
         removeDirSync(stageDir);
-        return false;
+        return 'invalid';
       }
       replaceDirSync(knowledgeDir, stageDir, destDir);
     } finally {
@@ -219,7 +220,7 @@ export function cmdAdd(knowledgeDir: string, args: string[]): void {
       registry.sources.push(entry);
     }
     printSecurityNotice(unitName, destDir);
-    return true;
+    return 'installed';
   };
 
   // Pack mode (--pack <name> via shelf.json)
@@ -234,6 +235,7 @@ export function cmdAdd(knowledgeDir: string, args: string[]): void {
     const registry = loadRegistry(knowledgeDir);
     let installed = 0;
     let skipped = 0;
+    let invalid = 0;
 
     for (const uName of unitNames) {
       const unitMeta = catalog.units.find((u) => u.name === uName);
@@ -241,21 +243,25 @@ export function cmdAdd(knowledgeDir: string, args: string[]): void {
       const sourceDir = resolveInsideDir(cloneTarget, unitRelPath, true);
       if (!sourceDir || !fs.existsSync(sourceDir)) {
         console.error(`  ✗ Pack unit '${uName}' path '${unitRelPath}' not found.`);
-        skipped++;
+        invalid++;
         continue;
       }
-      if (installUnitFromSource(uName, sourceDir, unitRelPath, registry, true)) {
+      const status = installUnitFromSource(uName, sourceDir, unitRelPath, registry, true);
+      if (status === 'installed') {
         console.log(`  ✓ Installed '${uName}'`);
         installed++;
+      } else if (status === 'invalid') {
+        invalid++;
       } else {
-        console.log(`  Skipping '${uName}' (already exists or failed validation)`);
+        console.log(`  Skipping '${uName}' (already exists)`);
         skipped++;
       }
     }
 
     saveRegistry(knowledgeDir, registry);
     removeDirSync(cloneTarget);
-    console.log(`\nDone. ${installed} installed, ${skipped} skipped.`);
+    console.log(`\nDone. ${installed} installed, ${skipped} skipped${invalid ? `, ${invalid} failed` : ''}.`);
+    if (invalid > 0) process.exit(1);
     return;
   }
 
@@ -289,15 +295,19 @@ export function cmdAdd(knowledgeDir: string, args: string[]): void {
     const registry = loadRegistry(knowledgeDir);
     let installed = 0;
     let skipped = 0;
+    let invalid = 0;
 
     for (const sourceDir of manifestFolders) {
       const unitName = path.basename(sourceDir);
       const sourcePath = path.relative(cloneTarget, sourceDir).replace(/\\/g, '/');
-      if (installUnitFromSource(unitName, sourceDir, sourcePath, registry, false)) {
+      const status = installUnitFromSource(unitName, sourceDir, sourcePath, registry, false);
+      if (status === 'installed') {
         console.log(`  ✓ Installed '${unitName}'`);
         installed++;
+      } else if (status === 'invalid') {
+        invalid++;
       } else {
-        console.log(`  Skipping '${unitName}' (already installed or invalid)`);
+        console.log(`  Skipping '${unitName}' (already installed)`);
         skipped++;
       }
     }
@@ -315,7 +325,7 @@ export function cmdAdd(knowledgeDir: string, args: string[]): void {
         const { errors, warnings } = validateStandaloneMdFile(mdFile);
         printValidationResults(docName, errors, warnings);
         if (errors.length > 0) {
-          skipped++;
+          invalid++;
           continue;
         }
       }
@@ -342,7 +352,8 @@ export function cmdAdd(knowledgeDir: string, args: string[]): void {
 
     saveRegistry(knowledgeDir, registry);
     removeDirSync(cloneTarget);
-    console.log(`\nDone. ${installed} installed, ${skipped} skipped.`);
+    console.log(`\nDone. ${installed} installed, ${skipped} skipped${invalid ? `, ${invalid} failed` : ''}.`);
+    if (invalid > 0) process.exit(1);
     return;
   }
 
@@ -983,6 +994,7 @@ export function cmdCatalog(knowledgeDir: string, args: string[]): void {
 export function cmdIndex(args: string[]): void {
   let targetDir = process.cwd();
   let outputPath = '';
+  let repoName = '';
 
   for (let i = 0; i < args.length; i++) {
     if (args[i] === '--output' || args[i] === '-o') {
@@ -991,6 +1003,12 @@ export function cmdIndex(args: string[]): void {
         process.exit(1);
       }
       outputPath = args[++i];
+    } else if (args[i] === '--name') {
+      if (i + 1 >= args.length || args[i + 1].startsWith('-')) {
+        console.error('Error: --name requires a catalog name.');
+        process.exit(1);
+      }
+      repoName = args[++i];
     } else if (args[i].startsWith('-')) {
       console.error(`Error: Unknown option '${args[i]}' for 'index'.`);
       process.exit(1);
@@ -1023,7 +1041,7 @@ export function cmdIndex(args: string[]): void {
 
   const catalog: ShelfCatalog = {
     $schema: 'https://raw.githubusercontent.com/joutvhu/knowledge-shelf/main/schemas/shelf-v1.schema.json',
-    name: existing?.name || path.basename(targetDir),
+    name: repoName || existing?.name || path.basename(targetDir),
     description: existing?.description || 'Shared Knowledge Shelf repository',
     ...(existing?.homepage ? { homepage: existing.homepage } : {}),
     units,
@@ -1332,7 +1350,12 @@ export function cmdPublish(knowledgeDir: string, args: string[]): void {
 
     // Update shelf.json if it exists at target repo root
     if (fs.existsSync(path.join(workClone, 'shelf.json'))) {
-      cmdIndex([workClone]);
+      const existingShelf = loadShelfCatalog(workClone);
+      const indexArgs = [workClone];
+      if (!existingShelf?.name) {
+        indexArgs.push('--name', deriveNameFromUrl(toRepo));
+      }
+      cmdIndex(indexArgs);
     }
 
     const addRes = spawnSync('git', ['add', '--all'], { cwd: workClone, stdio: 'pipe', encoding: 'utf-8' });

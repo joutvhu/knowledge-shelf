@@ -355,6 +355,10 @@ function executePatchStep(
       return;
     }
     existing = fs.readFileSync(targetPath, 'utf-8');
+  } else if (dryRun && results.files_created.includes(targetPath)) {
+    if (!results.files_patched) results.files_patched = [];
+    results.files_patched.push(targetPath);
+    return;
   } else if (createIfMissing && (mode === 'append' || mode === 'prepend')) {
     existing = '';
   } else {

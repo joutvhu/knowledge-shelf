@@ -164,7 +164,7 @@ export function runCli(rawArgs: string[]): void {
       break;
     case 'list':
     case 'ls':
-      cmdList(allDirs);
+      cmdList(primaryDir, allDirs);
       break;
     case 'outdated':
     case 'status':
