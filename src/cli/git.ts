@@ -131,6 +131,60 @@ export function gitGetFullCommit(repoDir: string): string {
   return (result.stdout || '').trim();
 }
 
+export const getCloneFullCommit = gitGetFullCommit;
+
+export function isHexRef(s: string): boolean {
+  return /^[0-9a-f]{7,40}$/i.test(s);
+}
+
+export function shaMatches(a?: string, b?: string): boolean {
+  if (!a || !b) return false;
+  const la = a.toLowerCase();
+  const lb = b.toLowerCase();
+  if (la === lb) return true;
+  if (la.length >= 7 && lb.startsWith(la)) return true;
+  if (lb.length >= 7 && la.startsWith(lb)) return true;
+  return false;
+}
+
+/**
+ * Resolves a tag or branch name on the remote to a full 40-character SHA.
+ * Tags resolve to the peeled commit (^{}) when present.
+ */
+export function gitResolveRemoteRef(url: string, ref: string): string | null {
+  assertGitAvailable();
+  assertSafeGitArg(url, 'repository URL');
+  assertSafeGitArg(ref, 'git ref');
+  const res = spawnSync('git', ['ls-remote', '--tags', '--heads', '--', url], {
+    stdio: 'pipe',
+    encoding: 'utf-8',
+    env: gitEnv(),
+  });
+  if (res.status !== 0 || !res.stdout) return null;
+  const lines = res.stdout.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+
+  const cleanRef = ref.replace(/^refs\/(tags|heads)\//, '').replace(/\^{}$/, '');
+  const targets = [
+    `refs/tags/${cleanRef}^{}`,
+    `refs/tags/${cleanRef}`,
+    `refs/heads/${cleanRef}`,
+  ];
+  if (ref !== cleanRef) {
+    targets.unshift(`${ref}^{}`);
+    targets.unshift(ref);
+  }
+
+  for (const target of targets) {
+    for (const line of lines) {
+      const [sha, name] = line.split(/\s+/);
+      if (name === target && /^[0-9a-f]{40}$/i.test(sha)) return sha;
+    }
+  }
+  return null;
+}
+
+export const resolveRemoteRef = gitResolveRemoteRef;
+
 export function gitGetBranch(repoDir: string): string | undefined {
   const result = spawnSync('git', ['symbolic-ref', '--short', 'HEAD'], {
     cwd: repoDir,

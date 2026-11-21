@@ -36,6 +36,12 @@
             "enum": ["mkdir", "copy", "copy_dir", "patch", "run", "message"]
           },
           "continue_on_error": { "type": "boolean" },
+          "timeout_ms": {
+            "type": "integer",
+            "minimum": 1000,
+            "maximum": 600000,
+            "description": "Step execution timeout in milliseconds (1000..600000, applies to run action)."
+          },
           "when": {
             "type": "object",
             "additionalProperties": false,

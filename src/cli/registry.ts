@@ -3,9 +3,9 @@
  */
 
 import * as crypto from 'node:crypto';
-import * as fs from 'node:fs';
+import fs from 'node:fs';
 import * as path from 'node:path';
-import { resolveInsideDir, walkDir } from '../core.js';
+import { resolveInsideDir, walkDir, walkUnitFiles } from '../core.js';
 
 export interface RegistryEntry {
   name: string;
@@ -13,11 +13,25 @@ export interface RegistryEntry {
   path?: string;
   branch?: string;
   commit: string;
+  fullCommit?: string;
   pin?: string;
   checksum?: string;
   trusted?: boolean;
   installedAt: string;
   updatedAt: string;
+}
+
+export interface RegistrySource extends RegistryEntry {}
+
+export function recordInstalledSource(registry: Registry, entry: RegistryEntry): RegistryEntry {
+  const existing = registry.sources.find((s) => s.name === entry.name);
+  if (existing) {
+    Object.assign(existing, entry);
+    return existing;
+  } else {
+    registry.sources.push(entry);
+    return entry;
+  }
 }
 
 export interface Registry {
@@ -104,20 +118,101 @@ export function loadRegistry(knowledgeDir: string): Registry {
   }
 }
 
+function renameWithRetry(source: string, destination: string): void {
+  const maxAttempts = 5;
+  const retryCodes = new Set(['EPERM', 'EBUSY', 'EACCES']);
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      fs.renameSync(source, destination);
+      return;
+    } catch (err: any) {
+      if (
+        attempt < maxAttempts &&
+        err &&
+        retryCodes.has(err.code) &&
+        !(fs.existsSync(destination) && fs.statSync(destination).isDirectory())
+      ) {
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20);
+        continue;
+      }
+      throw err;
+    }
+  }
+}
+
 export function saveRegistry(knowledgeDir: string, registry: Registry): void {
   const registryPath = getRegistryPath(knowledgeDir);
-  fs.writeFileSync(registryPath, JSON.stringify(registry, null, 2), 'utf-8');
+  const dir = path.dirname(registryPath);
+  fs.mkdirSync(dir, { recursive: true });
+
+  const base = path.basename(registryPath);
+  const prefix = base.startsWith('.') ? base : '.' + base;
+  const tmp = path.join(
+    dir,
+    `${prefix}.${process.pid}.${Date.now()}.${crypto.randomBytes(4).toString('hex')}.tmp`
+  );
+
+  try {
+    fs.writeFileSync(tmp, JSON.stringify(registry, null, 2), 'utf-8');
+    renameWithRetry(tmp, registryPath);
+  } catch (e) {
+    if (fs.existsSync(tmp)) {
+      try {
+        fs.unlinkSync(tmp);
+      } catch {
+        /* best effort */
+      }
+    }
+    throw e;
+  }
+}
+
+function hashFiles(root: string, files: string[]): string {
+  const sorted = [...files].sort((a, b) =>
+    path.relative(root, a).replace(/\\/g, '/').localeCompare(path.relative(root, b).replace(/\\/g, '/'))
+  );
+  const hash = crypto.createHash('sha256');
+  for (const fp of sorted) {
+    const rel = path.relative(root, fp).replace(/\\/g, '/');
+    const content = fs.readFileSync(fp);
+    hash.update(rel + '\0');
+    hash.update(content);
+    hash.update('\0');
+  }
+  return hash.digest('hex').slice(0, 16);
 }
 
 /**
  * Computes a deterministic SHA-256 content checksum for an installed unit directory or standalone file.
+ * Uses walkUnitFiles to cover the full copy set (including dot files and node_modules).
  */
 export function computeUnitChecksum(targetPath: string): string {
   if (!fs.existsSync(targetPath)) return '';
-  const hash = crypto.createHash('sha256');
   const stat = fs.statSync(targetPath);
 
   if (stat.isFile()) {
+    const hash = crypto.createHash('sha256');
+    hash.update(path.basename(targetPath));
+    hash.update('\0');
+    hash.update(fs.readFileSync(targetPath));
+    return hash.digest('hex').slice(0, 16);
+  }
+
+  const files: string[] = [];
+  walkUnitFiles(targetPath, (fp) => files.push(fp));
+  return hashFiles(targetPath, files);
+}
+
+/**
+ * Computes the legacy checksum using walkDir (which skips dot files and node_modules).
+ * Used for fallback compatibility with older installations.
+ */
+export function computeLegacyUnitChecksum(targetPath: string): string {
+  if (!fs.existsSync(targetPath)) return '';
+  const stat = fs.statSync(targetPath);
+
+  if (stat.isFile()) {
+    const hash = crypto.createHash('sha256');
     hash.update(path.basename(targetPath));
     hash.update('\0');
     hash.update(fs.readFileSync(targetPath));
@@ -126,18 +221,22 @@ export function computeUnitChecksum(targetPath: string): string {
 
   const files: string[] = [];
   walkDir(targetPath, (fp) => files.push(fp));
-  files.sort((a, b) =>
-    path.relative(targetPath, a).replace(/\\/g, '/').localeCompare(path.relative(targetPath, b).replace(/\\/g, '/'))
-  );
+  return hashFiles(targetPath, files);
+}
 
-  for (const fp of files) {
-    const rel = path.relative(targetPath, fp).replace(/\\/g, '/');
-    hash.update(rel);
-    hash.update('\0');
-    hash.update(fs.readFileSync(fp));
-    hash.update('\0');
-  }
-  return hash.digest('hex').slice(0, 16);
+/**
+ * Checks whether a unit has local modifications against a stored checksum.
+ * Returns false if !stored or !fs.existsSync(targetPath).
+ * Returns false if modern checksum or legacy checksum equals stored.
+ * Returns true otherwise.
+ */
+export function hasLocalModifications(targetPath: string, stored?: string): boolean {
+  if (!stored || !fs.existsSync(targetPath)) return false;
+  const modern = computeUnitChecksum(targetPath);
+  if (modern === stored) return false;
+  const legacy = computeLegacyUnitChecksum(targetPath);
+  if (legacy === stored) return false;
+  return true;
 }
 
 export function loadShelfCatalog(repoDir: string): ShelfCatalog | null {

@@ -102,9 +102,10 @@ export function createKnowledgeServer(
           .optional()
           .describe('Maximum results to return (1-100, default: 10)'),
         type: z
-          .enum(['boilerplate', 'template', 'toolkit', 'cookbook', 'standalone'])
+          .string()
+          .min(1)
           .optional()
-          .describe('Optional filter by knowledge type'),
+          .describe('Optional filter by knowledge type: any unit type, or "standalone"'),
         tags: z
           .array(z.string())
           .optional()

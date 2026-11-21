@@ -23,8 +23,10 @@
     },
     "type": {
       "type": "string",
-      "enum": ["boilerplate", "template", "toolkit", "cookbook"],
-      "description": "Knowledge unit category."
+      "minLength": 1,
+      "pattern": "\\S",
+      "examples": ["boilerplate", "template", "toolkit", "cookbook"],
+      "description": "Knowledge unit category. Any non-empty string; documented values: boilerplate, template, toolkit, cookbook."
     },
     "doc": {
       "type": "string",

@@ -8,6 +8,7 @@ import {
   ALLOWED_INTERPRETERS,
   ALLOWED_WORKFLOW_ACTIONS,
   MAX_WORKFLOW_TIMEOUT_MS,
+  MIN_WORKFLOW_TIMEOUT_MS,
   ROOT_PLACEHOLDER_RE,
   resolveInsideDir,
 } from './config.js';
@@ -18,6 +19,7 @@ import {
   parseFrontmatter,
   resolveUnitFiles,
   walkDir,
+  walkUnitFiles,
 } from './parser.js';
 
 export interface ValidationResult {
@@ -39,8 +41,17 @@ export interface UnitSecuritySummary {
 const VALID_LIFECYCLE_STATUS = new Set(['active', 'deprecated', 'draft']);
 const VALID_PATCH_MODES = new Set(['insert_before', 'insert_after', 'append', 'prepend', 'replace']);
 
-function isRecord(v: unknown): v is Record<string, unknown> {
+export function isRecord(v: unknown): v is Record<string, unknown> {
   return Boolean(v) && typeof v === 'object' && !Array.isArray(v);
+}
+
+export function isValidTimeoutMs(v: unknown): v is number {
+  return (
+    typeof v === 'number' &&
+    Number.isInteger(v) &&
+    v >= MIN_WORKFLOW_TIMEOUT_MS &&
+    v <= MAX_WORKFLOW_TIMEOUT_MS
+  );
 }
 
 /**
@@ -72,6 +83,38 @@ function collectPlaceholders(str: string, out: Set<string>): void {
   let m: RegExpExecArray | null;
   while ((m = re.exec(str)) !== null) {
     out.add(m[1]);
+  }
+}
+
+/** Collects {{KEY}} names from the step fields validateManifestUnitDir already inspects. */
+export function collectStepPlaceholders(step: Record<string, unknown>, out: Set<string>): void {
+  if (!isRecord(step)) return;
+  const w = isRecord(step.when) ? step.when : null;
+  if (w) {
+    if (typeof w.exists === 'string') collectPlaceholders(w.exists, out);
+    if (typeof w.not_exists === 'string') collectPlaceholders(w.not_exists, out);
+  }
+  switch (step.action) {
+    case 'copy':
+    case 'copy_dir':
+      if (typeof step.target === 'string') collectPlaceholders(step.target, out);
+      break;
+    case 'patch':
+      if (typeof step.target === 'string') collectPlaceholders(step.target, out);
+      if (typeof step.content === 'string') collectPlaceholders(step.content, out);
+      break;
+    case 'mkdir':
+      if (typeof step.path === 'string') collectPlaceholders(step.path, out);
+      break;
+    case 'run':
+      if (typeof step.cwd === 'string') collectPlaceholders(step.cwd, out);
+      if (Array.isArray(step.args)) {
+        for (const arg of step.args) collectPlaceholders(String(arg), out);
+      }
+      break;
+    case 'message':
+      if (typeof step.text === 'string') collectPlaceholders(step.text, out);
+      break;
   }
 }
 
@@ -110,7 +153,11 @@ export function validateManifestUnitDir(
 
   if (!manifest.name) errors.push('Missing required field: name');
   if (!manifest.version) errors.push('Missing required field: version');
-  if (!manifest.type) errors.push('Missing required field: type');
+  if (manifest.type === undefined || manifest.type === null) {
+    errors.push('Missing required field: type');
+  } else if (typeof manifest.type !== 'string' || manifest.type.trim().length === 0) {
+    errors.push('Field "type" must be a non-empty string');
+  }
   if (!manifest.description) errors.push('Missing required field: description');
 
   if (manifest.name && manifest.name !== expectedName && manifest.name !== folderBase) {
@@ -277,14 +324,32 @@ export function validateManifestUnitDir(
         }
       }
       if (rawScript.timeout_ms !== undefined) {
-        if (
-          typeof rawScript.timeout_ms !== 'number' ||
-          rawScript.timeout_ms <= 0 ||
-          rawScript.timeout_ms > MAX_WORKFLOW_TIMEOUT_MS
-        ) {
+        if (!isValidTimeoutMs(rawScript.timeout_ms)) {
           errors.push(
-            `scripts.${scriptName}.timeout_ms: must be a positive number <= ${MAX_WORKFLOW_TIMEOUT_MS}`
+            `scripts.${scriptName}.timeout_ms must be an integer between ${MIN_WORKFLOW_TIMEOUT_MS} and ${MAX_WORKFLOW_TIMEOUT_MS}`
           );
+        }
+      }
+      if (rawScript.args !== undefined) {
+        if (typeof rawScript.args !== 'object' || rawScript.args === null || Array.isArray(rawScript.args)) {
+          errors.push(`scripts.${scriptName}.args must be an object`);
+        } else {
+          for (const [argName, argDef] of Object.entries(rawScript.args)) {
+            if (typeof argDef !== 'object' || argDef === null || Array.isArray(argDef)) {
+              errors.push(`scripts.${scriptName}.args.${argName} must be an object`);
+            } else {
+              const def = argDef as Record<string, unknown>;
+              if (def.required !== undefined && typeof def.required !== 'boolean') {
+                errors.push(`scripts.${scriptName}.args.${argName}.required must be a boolean`);
+              }
+              if (def.type !== undefined && typeof def.type !== 'string') {
+                errors.push(`scripts.${scriptName}.args.${argName}.type must be a string`);
+              }
+              if (def.description !== undefined && typeof def.description !== 'string') {
+                errors.push(`scripts.${scriptName}.args.${argName}.description must be a string`);
+              }
+            }
+          }
         }
       }
     }
@@ -355,6 +420,8 @@ export function validateManifestUnitDir(
             continue;
           }
 
+          collectStepPlaceholders(step, usedPlaceholders);
+
           if (step.when !== undefined) {
             if (!isRecord(step.when)) {
               errors.push(`${prefix}: "when" must be an object`);
@@ -371,9 +438,6 @@ export function validateManifestUnitDir(
                   `${prefix}: "when" must specify input + (equals|not_equals|in) or exists/not_exists`
                 );
               }
-              if (typeof step.when.exists === 'string') collectPlaceholders(step.when.exists, usedPlaceholders);
-              if (typeof step.when.not_exists === 'string')
-                collectPlaceholders(step.when.not_exists, usedPlaceholders);
             }
           }
 
@@ -392,8 +456,6 @@ export function validateManifestUnitDir(
             }
             if (!tgt || !ROOT_PLACEHOLDER_RE.test(tgt)) {
               errors.push(`${prefix} (copy): target must start with a root placeholder (e.g. {{TARGET}}/...)`);
-            } else {
-              collectPlaceholders(tgt, usedPlaceholders);
             }
           } else if (action === 'copy_dir') {
             const src = typeof step.source === 'string' ? step.source : '';
@@ -412,24 +474,18 @@ export function validateManifestUnitDir(
               errors.push(
                 `${prefix} (copy_dir): target must start with a root placeholder (e.g. {{TARGET}}/...)`
               );
-            } else {
-              collectPlaceholders(tgt, usedPlaceholders);
             }
           } else if (action === 'patch') {
             const tgt = typeof step.target === 'string' ? step.target.trim() : '';
             const mode = typeof step.mode === 'string' ? step.mode : 'append';
             if (!tgt || !ROOT_PLACEHOLDER_RE.test(tgt)) {
               errors.push(`${prefix} (patch): target must start with a root placeholder (e.g. {{TARGET}}/...)`);
-            } else {
-              collectPlaceholders(tgt, usedPlaceholders);
             }
             if (!VALID_PATCH_MODES.has(mode)) {
               errors.push(`${prefix} (patch): invalid mode '${mode}'`);
             }
             if (typeof step.content !== 'string') {
               errors.push(`${prefix} (patch): missing string "content"`);
-            } else {
-              collectPlaceholders(step.content, usedPlaceholders);
             }
             if (
               (mode === 'insert_before' || mode === 'insert_after' || mode === 'replace') &&
@@ -441,8 +497,6 @@ export function validateManifestUnitDir(
             const p = typeof step.path === 'string' ? step.path.trim() : '';
             if (!p || !ROOT_PLACEHOLDER_RE.test(p)) {
               errors.push(`${prefix} (mkdir): path must start with a root placeholder (e.g. {{TARGET}}/...)`);
-            } else {
-              collectPlaceholders(p, usedPlaceholders);
             }
           } else if (action === 'run') {
             const scriptRef = typeof step.script_ref === 'string' ? step.script_ref.trim() : '';
@@ -479,29 +533,14 @@ export function validateManifestUnitDir(
               const cwdTemplate = step.cwd.trim();
               if (!ROOT_PLACEHOLDER_RE.test(cwdTemplate)) {
                 errors.push(`${prefix} (run): cwd must start with a root placeholder (e.g. {{TARGET}})`);
-              } else {
-                collectPlaceholders(cwdTemplate, usedPlaceholders);
               }
             }
             if (step.timeout_ms !== undefined) {
-              if (
-                typeof step.timeout_ms !== 'number' ||
-                step.timeout_ms <= 0 ||
-                step.timeout_ms > MAX_WORKFLOW_TIMEOUT_MS
-              ) {
+              if (!isValidTimeoutMs(step.timeout_ms)) {
                 errors.push(
-                  `${prefix} (run): timeout_ms must be a positive number <= ${MAX_WORKFLOW_TIMEOUT_MS}`
+                  `${prefix} (run): timeout_ms must be an integer between ${MIN_WORKFLOW_TIMEOUT_MS} and ${MAX_WORKFLOW_TIMEOUT_MS}`
                 );
               }
-            }
-            if (Array.isArray(step.args)) {
-              for (const arg of step.args) {
-                collectPlaceholders(String(arg), usedPlaceholders);
-              }
-            }
-          } else if (action === 'message') {
-            if (typeof step.text === 'string') {
-              collectPlaceholders(step.text, usedPlaceholders);
             }
           }
         }
@@ -731,39 +770,81 @@ export function inspectUnitSecurity(unitDir: string): UnitSecuritySummary {
   };
 }
 
+export interface HygieneRule {
+  kind: string;
+  re: RegExp;
+}
+
+export const SENSITIVE_NAME_RE = /^(?:\.env(?:\..*)?|\.npmrc|\.netrc|\.pypirc|\.secret.*)$/i;
+
+export const TOKEN_RULES: HygieneRule[] = [
+  { kind: 'GitHub token', re: /\b(?:gh[pousr]_[A-Za-z0-9]{36,}|github_pat_\w{22,})/ },
+  { kind: 'AWS access key id', re: /\bAKIA[0-9A-Z]{16}\b/ },
+  { kind: 'Slack token', re: /\bxox[baprs]-[A-Za-z0-9-]{10,}/ },
+];
+
+export const SECRET_ASSIGN_RE =
+  /(password|secret|api_key|apikey)[A-Za-z0-9_-]*["']?[^\S\r\n]*[:=][^\S\r\n]*(?:"([^"\r\n]*)"|'([^'\r\n]*)'|([^\s"',;]+))/gi;
+
+export function isPlaceholderValue(v: string): boolean {
+  const t = v.trim();
+  return t === '' || /^(?:\{\{|\$|<|%)/.test(t);
+}
+
+export function hasLiteralSecretAssignment(text: string): boolean {
+  for (const m of text.matchAll(SECRET_ASSIGN_RE)) {
+    const value = m[2] ?? m[3] ?? m[4] ?? '';
+    if (isPlaceholderValue(value)) continue;
+    if (value.replace(/\s/g, '').length >= 4) return true;
+  }
+  return false;
+}
+
+const privateKeyRe = /-----BEGIN [A-Z ]*PRIVATE KEY-----/;
+const absUserPathRe = /(?:[A-Za-z]:\\Users\\[^\\\s"']+|\/(?:Users|home)\/[^/\s"']+)/;
+
+export function scanTextForHygiene(text: string, rel: string, out: string[]): void {
+  if (privateKeyRe.test(text)) out.push(`Potential private key detected in '${rel}'`);
+  if (absUserPathRe.test(text)) out.push(`Hardcoded local home directory path detected in '${rel}'`);
+  for (const r of TOKEN_RULES) {
+    if (r.re.test(text)) out.push(`Potential ${r.kind} detected in '${rel}'`);
+  }
+  if (hasLiteralSecretAssignment(text)) {
+    out.push(`Possible hardcoded secret assignment detected in '${rel}'`);
+  }
+}
+
+export function scanFileForHygiene(fp: string, rel: string, out: string[]): void {
+  if (SENSITIVE_NAME_RE.test(path.basename(fp))) {
+    out.push(`Sensitive file found: ${rel}`);
+  }
+  try {
+    const buf = fs.readFileSync(fp);
+    if (buf.subarray(0, 8192).includes(0)) return;
+    scanTextForHygiene(buf.toString('utf-8'), rel, out);
+  } catch {
+    /* unreadable: skip */
+  }
+}
+
 /**
  * Checks a unit directory before publishing to Git for accidental secrets or hardcoded user paths.
  */
 export function checkUnitPublishHygiene(unitDir: string): string[] {
-  const warnings: string[] = [];
-  const entries = fs.readdirSync(unitDir, { withFileTypes: true });
-  for (const e of entries) {
-    if (e.name === '.env' || e.name.startsWith('.env.')) {
-      warnings.push(`Sensitive file found in unit root: ${e.name}`);
-    }
-  }
-
-  const privateKeyRe = /-----BEGIN [A-Z ]*PRIVATE KEY-----/;
-  const absUserPathRe = /(?:[A-Za-z]:\\Users\\[^\\\s"']+|\/(?:Users|home)\/[^/\s"']+)/;
-
-  walkDir(unitDir, (fp) => {
-    const rel = path.relative(unitDir, fp).replace(/\\/g, '/');
-    try {
-      const buf = fs.readFileSync(fp);
-      if (buf.subarray(0, 8192).includes(0)) return;
-      const text = buf.toString('utf-8');
-      if (privateKeyRe.test(text)) {
-        warnings.push(`Potential private key detected in '${rel}'`);
-      }
-      if (absUserPathRe.test(text)) {
-        warnings.push(`Hardcoded local home directory path detected in '${rel}'`);
-      }
-    } catch {
-      /* skip */
-    }
+  const out: string[] = [];
+  walkUnitFiles(unitDir, (fp) => {
+    scanFileForHygiene(fp, path.relative(unitDir, fp).replace(/\\/g, '/'), out);
   });
+  return out;
+}
 
-  return warnings;
+/**
+ * Checks a standalone file before publishing for accidental secrets or hardcoded user paths.
+ */
+export function checkFilePublishHygiene(filePath: string): string[] {
+  const out: string[] = [];
+  scanFileForHygiene(filePath, path.basename(filePath), out);
+  return out;
 }
 
 export { normalizeListField, parseFrontmatter };

@@ -217,13 +217,20 @@ knowledge-shelf validate ./.agents/knowledges/<name>      # Validate a drafted u
 Pull latest changes from remote repositories.
 
 ```bash
-knowledge-shelf update            # Update all sources
-knowledge-shelf update <name>     # Update specific source
+knowledge-shelf update [name] [--force] [--no-verify]
 ```
+
+| Option | Description |
+|---|---|
+| `[name]` | Specific source name to update (updates all sources if omitted) |
+| `--force`, `-f` | Overwrite local modifications |
+| `--no-verify` | Skip validation of fetched content before installing |
 
 **Behavior:**
 - Skips pinned sources (shows "Skipping ... (pinned to ...)")
-- Fresh shallow clone → compare commit hash → replace if changed
+- Skips locally modified units unless `--force` is passed
+- Stages fetched content into a temporary directory and validates it (`validateManifestUnitDir` for manifest units, `validateStandaloneMdFile` for `.md` files) before replacing the installed unit
+- If validation fails, the existing installed version and registry entry remain untouched, the unit is counted as failed, and the command exits with code 1 (unless `--no-verify` is passed)
 - Reports: updated count, failed count, already-up-to-date
 
 ---
@@ -233,11 +240,19 @@ knowledge-shelf update <name>     # Update specific source
 Lock a source to prevent updates.
 
 ```bash
-knowledge-shelf pin <name>              # Pin to current commit
-knowledge-shelf pin <name> <version>    # Pin to specific tag/commit
+knowledge-shelf pin <name> [version] [--no-verify]
 ```
 
-Pinned sources are skipped during `update`.  The pin value is stored in `.registry.json`.
+| Option | Description |
+|---|---|
+| `<name>` | Installed source name |
+| `[version]` | Specific tag or commit SHA to pin (pins to current commit if omitted) |
+| `--no-verify` | Skip validation of checked-out ref content before replacing |
+
+**Behavior:**
+- Checks out the specified git ref into a staging directory and validates it before replacing installed files.
+- On validation error, keeps the installed version and registry unchanged, does not set `pin`, and exits with code 1 (unless `--no-verify` is used).
+- Pinned sources are skipped during `update`. The pin value is stored in `.registry.json`.
 
 ---
 
@@ -295,8 +310,13 @@ Deletes the directory and removes the entry from `.registry.json`.  If the unit 
 ### `catalog <url> [--ref <ref>]`
 Inspect available units and packs inside a remote repository (via `shelf.json` or `manifest.json` auto-discovery) before installing.
 
-### `sync [--file <knowledge-shelf.json>] [--frozen] [--force]`
+### `sync [--file <knowledge-shelf.json>] [--frozen] [--force] [--no-verify]`
 Install and synchronize all sources declared in `knowledge-shelf.json` (or remote entries in `.registry.json`), deduplicating monorepo clones and honoring pinned refs.
+
+- **Local modification check:** If an installed unit's current checksum differs from `registry.checksum` (local edits), `sync` skips that unit with a message naming the unit and a hint to use `--force`. It does not overwrite files and leaves the registry untouched unless `--force` is provided.
+- **Frozen mode (`--frozen`):** Verifies that installed sources match expected versions without network operations. Accepts full 40-character commit SHAs, short SHAs (matching by prefix for hex strings of at least 7 characters), and git tags/branches (matching `regEntry.pin` or resolving remotely to matching commit SHAs). Exits with code 1 if a mismatch or missing unit is found.
+- **Staging & Validation:** Fetched content is staged and validated before replacing existing units; invalid manifests abort the unit update and count as failed unless `--no-verify` is used.
+- `--no-verify`: Skip validation of fetched content before installing.
 
 ### `outdated` / `status`
 Check remote commit status and detect local file modifications (`[modified-locally]`) for installed sources.
@@ -307,8 +327,14 @@ Generate a starter knowledge unit or a shareable monorepo skeleton (including `s
 ### `index [dir] [--output <shelf.json>]`
 Scan a directory of knowledge units and generate or update `shelf.json`.
 
-### `publish <unit-path> --to <git-url> [--path <subpath>] [--branch <branch>] [--push] [--force]`
-Validate and hygiene-check a unit, commit it to a branch in the target repository, update `shelf.json` if present, and optionally push for PR review.
+### `publish <path> --to <git-url> [--path <dest-path>] [--branch <branch>] [--push] [--force]`
+Validate, hygiene-check, and publish a knowledge unit folder or a standalone `.md` file to a target git repository.
+
+- **Standalone `.md` publishing:** Accepts either a manifest-based unit directory or a standalone `.md` file. Validates markdown frontmatter and copies the file to the target repo at `--path` if given, or at the repo root under its own filename if omitted.
+- **Path destination (`--path <dest-path>`):** For a directory unit, specifies the destination subfolder in the target repo. For a standalone `.md` file, specifies the destination path/file in the target repo.
+- **Default branch:** If `--branch` is omitted, defaults to `knowledge/<name>` (where `<name>` is the unit name or markdown basename).
+- **Fast-forward onto existing remote branches:** If the target branch exists on the remote, `publish` fetches and bases the working branch on the remote branch tip, applying the unit content as a new commit on top of it.
+- **Never force-pushes:** `publish` pushes strictly as a fast-forward and never uses `--force` on git push. `--force` on the command line only overrides pre-publish hygiene check warnings (e.g., detected secrets, sensitive files). If push is rejected by the remote, `publish` fails with exit code 1 without altering remote history. If the unit already matches the branch content, it prints "No changes to publish" and exits 0.
 
 ### `import <archive.zip|.tar.gz> [--name <alias>] [--force]`
 Extract, validate, and install a packaged knowledge unit or standalone `.md` file from a `.zip` or `.tar.gz` archive.

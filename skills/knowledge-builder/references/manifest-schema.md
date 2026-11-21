@@ -8,7 +8,7 @@ Complete schema for `manifest.json` — the metadata definition of a manifest-ba
 |---|---|---|
 | `name` | string | Must match the unit folder name exactly. Lowercase letters, numbers, and hyphens only. (Scored at **10 pts** in search). |
 | `version` | string | Semantic version (e.g., `"1.0.0"`). |
-| `type` | string | One of: `boilerplate`, `template`, `toolkit`, `cookbook`. (Scored at **7 pts** in search). |
+| `type` | string | Any non-empty string; documented values: `boilerplate`, `template`, `toolkit`, `cookbook`. (Scored at **7 pts** in search). |
 | `description` | string | 1–2 sentence summary containing key search nouns. (Scored at **2 pts** in search). |
 
 ## Optional Fields
@@ -26,7 +26,7 @@ Complete schema for `manifest.json` — the metadata definition of a manifest-ba
 | `requires` | string[] | Other knowledge unit names this unit depends on (checked by `validate`). |
 | `enhances` | string[] | Other knowledge unit names this unit complements. |
 | `modules` | object | Named reusable code/doc modules with `files` (supports globs like `src/**/*.java`), `exclude`, `dependencies`, `guide`, and `tags`. (Module keys score **6 pts**). |
-| `scripts` | object | Named automation scripts with `file`, `interpreter`, `timeout_ms`, `description`, and `args`. |
+| `scripts` | object | Named automation scripts with `file`, `interpreter`, `timeout_ms` (integer 1000..600000), `description`, and `args`. `scripts.*.args` is informational (validated for shape, not applied when a script runs). |
 | `workflows` | object | Named workflows (`{ "<name>": { "description": "...", "file": "optional/path.json" } }`). Full definition lives in `workflows/<name>.json` by default. |
 | `references` | object | Named on-demand reference docs (`{ "<name>": { "file": "references/<file>.md", "description": "...", "tags": [...] } }`). Reference headings and tags are indexed in search. |
 | `placeholders` | object | Named template variables (`{{UPPER_SNAKE_CASE}}`) with `type`, `required`, `pattern`, `description`, and `example`. |
@@ -69,6 +69,8 @@ Complete schema for `manifest.json` — the metadata definition of a manifest-ba
 
 - `file` is required and must exist inside the knowledge unit folder.
 - `interpreter` is optional if the file uses a standard extension (`.py`, `.js`, `.mjs`, `.cjs`, `.ps1`, `.sh`, `.cmd`, `.bat`). Allowed values: `python`, `python3`, `node`, `pwsh`, `powershell`, `bash`, `sh`, `cmd`.
+- `timeout_ms` is optional; if specified, it must be an integer between 1000 and 600000 (defaults to 120000).
+- `args` is informational (validated for shape with `required` boolean, optional `type` and `description` strings, but not applied when a script runs).
 
 ## Workflows (`workflows`)
 

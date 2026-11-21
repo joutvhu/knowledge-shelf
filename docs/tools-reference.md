@@ -18,7 +18,7 @@ List all available knowledge base documents and units.
 | `name` | string | Folder name relative to knowledge dir |
 | `title` | string | From manifest `name` field |
 | `description` | string | From manifest `description` field |
-| `type` | string | boilerplate, template, toolkit, cookbook |
+| `type` | string | any non-empty string; documented values boilerplate, template, toolkit, cookbook |
 | `version` | string | Semantic version |
 | `tags` | string[] | From manifest `tags` |
 | `has_manifest` | boolean | Always `true` |
@@ -90,6 +90,10 @@ Search knowledge base by keyword.  Returns ranked results.
 |---|---|---|---|
 | `query` | string | ✅ | Search keywords (space-separated) |
 | `max_results` | number | ❌ | Maximum results to return (integer 1–100, default: 10) |
+| `type` | string | ❌ | Optional filter by knowledge type: any non-empty unit type, or `"standalone"` |
+| `tags` | string[] | ❌ | Optional filter requiring matching documents to contain all specified tags |
+| `unit` | string | ❌ | Optional unit name filter to search within a single knowledge unit |
+| `include_content` | boolean | ❌ | Also search full document & reference bodies and return matching snippets |
 
 **Scoring algorithm:**
 
@@ -305,6 +309,8 @@ Retrieve the `manifest.json` of a knowledge folder.
 
 **Returns:**  Full manifest JSON with an added `_directory` field.
 
+> **Note:** `scripts.*.args` is informational (validated for shape, not applied when a script runs).
+
 **Example response:**
 ```json
 {
@@ -407,7 +413,8 @@ Execute a predefined workflow from a knowledge folder.
 | `mkdir` | Create directory (recursive) |
 | `message` | Output progress text (no side effects) |
 
-**Placeholder replacement:**  All `{{KEY}}` patterns in step fields and file content are replaced with values from `inputs`.
+**Placeholder replacement & enforcement:**  All `{{KEY}}` patterns in step fields and file content are replaced with values from `inputs`.
+Workflow execution dynamically computes the set of placeholders used by the workflow (including `when.input` expressions). For each used placeholder, the definition is resolved from `workflow.inputs[key]` if present, falling back to `manifest.placeholders[key]`. If an input is omitted, its `default` value is applied. If a required placeholder is missing, execution is blocked with an error. If a placeholder or workflow input defines a `pattern`, the value is validated against that regular expression before running any step. Unused placeholders defined in the manifest do not block workflow execution.
 
 **Example request:**
 ```json

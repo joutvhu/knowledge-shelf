@@ -30,6 +30,7 @@ export const ALLOWED_INTERPRETERS = new Set([
 
 export const ROOT_PLACEHOLDER_RE = /^\{\{[A-Za-z0-9_]+\}\}(?:[/\\].*)?$/;
 
+export const MIN_WORKFLOW_TIMEOUT_MS = 1_000;
 export const DEFAULT_WORKFLOW_TIMEOUT_MS = 120_000;
 export const MAX_WORKFLOW_TIMEOUT_MS = 600_000;
 

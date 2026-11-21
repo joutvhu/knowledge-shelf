@@ -245,10 +245,42 @@ knowledge-shelf add https://github.com/team/shared-knowledge.git --pack qa-start
 
 # Scaffold a new shareable knowledge repo with GitHub Actions CI validation
 knowledge-shelf scaffold team-knowledge --type repo
-
-# Validate, hygiene-check, and push a unit branch to a shared repo
-knowledge-shelf publish ./my-unit --to https://github.com/team/shared-knowledge.git --push
 ```
+
+### Publishing Units and Standalone Documents (`publish`)
+
+The `publish` command validates, hygiene-checks, and pushes a knowledge unit or standalone `.md` file to a target git repository:
+
+```bash
+# Publish a manifest-based unit
+knowledge-shelf publish ./my-unit --to https://github.com/team/shared-knowledge.git --push
+
+# Publish a standalone markdown file directly
+knowledge-shelf publish ./guides/deploy.md --to https://github.com/team/shared-knowledge.git --push
+
+# Publish to a specific subfolder path and custom branch
+knowledge-shelf publish ./my-unit --to https://github.com/team/shared-knowledge.git --path knowledge/my-unit --branch feature/my-unit --push
+```
+
+#### Standalone `.md` Publishing
+`publish` accepts either a manifest-based unit directory or a standalone `.md` file. When publishing a standalone `.md` file:
+- It is validated with `validateStandaloneMdFile` (checks YAML frontmatter and content structure).
+- If `--path` is not provided, the file is placed at the target repository root under its own filename.
+- If `--path` is provided, it is copied to the specified destination path within the repository.
+
+#### Branch Handling & Fast-Forward
+- If `--branch` is omitted, `publish` defaults to `knowledge/<name>` (where `<name>` is the unit folder name or markdown basename).
+- **Existing remote branches:** When publishing to a branch that already exists on the remote repository, `publish` checks out the remote branch tip and applies the new version as a clean commit directly on top of it.
+- **Fast-forward only:** `publish` pushes only as a fast-forward and **never force-pushes** to remote git branches (`--force` on the CLI only overrides hygiene warnings, never git push). If the remote branch cannot be fast-forwarded, the push is rejected and the command exits with an error without overwriting remote history. If the unit content matches the remote branch tip exactly, it reports "No changes to publish".
+
+#### Extended Pre-Publish Hygiene Checks
+Before committing, `publish` recursively scans all files in the unit (including dot-prefixed folders and files):
+1. **Sensitive files at any depth:** Detects `.env`, `.env.*` (including `.env.example`), `.npmrc`, `.netrc`, `.pypirc`, and `.secret*`.
+2. **Credential & token patterns:** Detects GitHub tokens (`ghp_`, `gho_`, `ghu_`, `ghs_`, `ghr_`, `github_pat_`), AWS access key IDs (`AKIA...`), Slack tokens (`xoxb-`, `xoxp-`, `xoxa-`, `xoxr-`, `xoxs-`), and PEM private keys.
+3. **Secret assignments:** Detects literal variable assignments (`=` or `:`) of 4 or more characters to `password`, `secret`, `api_key`, or `apikey` (case-insensitive, e.g., `DB_PASSWORD="abc12345"`). Placeholders (starting with `{{`, `${`, `$`, `<`, `%`) and empty values are allowed.
+4. **Home directory leaks:** Detects paths containing user home directories.
+
+Hygiene warnings block publication by default. Pass `--force` to intentionally bypass hygiene warnings (for example, when publishing a sanitized `.env.example`).
 
 ---
 

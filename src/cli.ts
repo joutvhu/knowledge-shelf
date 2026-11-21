@@ -42,7 +42,7 @@ Commands:
   install <path> [--name <alias>] [--force] [--all]
       Validate and install drafted knowledge from a local path (e.g. ./.agents/knowledges/<name>).
 
-  sync [--file <knowledge-shelf.json>] [--frozen] [--force]
+  sync [--file <knowledge-shelf.json>] [--frozen] [--force] [--no-verify]
       Synchronize all knowledge sources declared in knowledge-shelf.json (or .registry.json).
 
   catalog <url> [--ref <ref>]
@@ -72,10 +72,10 @@ Commands:
   validate [name|path]
       Validate knowledge unit structure (manifest, globs, workflows, or standalone .md).
 
-  update [name] [--force]
+  update [name] [--force] [--no-verify]
       Update all installed sources (or a specific one) from their remote repos.
 
-  pin <name> [tag|commit]
+  pin <name> [tag|commit] [--no-verify]
       Lock a source to its current version (or checkout & lock a specific tag/commit).
 
   unpin <name>

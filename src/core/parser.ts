@@ -85,6 +85,19 @@ export interface Manifest {
 // File System Helpers
 // ---------------------------------------------------------------------------
 
+/** Visits exactly what copyDirSync copies: regular files at any depth, skipping entries named '.git'. */
+export function walkUnitFiles(dir: string, callback: (filePath: string) => void): void {
+  if (!fs.existsSync(dir)) return;
+  const entries = fs.readdirSync(dir, { withFileTypes: true })
+    .sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+  for (const entry of entries) {
+    if (entry.name === '.git') continue;
+    const full = path.join(dir, entry.name);
+    if (entry.isDirectory()) walkUnitFiles(full, callback);
+    else if (entry.isFile()) callback(full);
+  }
+}
+
 export function walkDir(dir: string, callback: (filePath: string) => void): void {
   if (!fs.existsSync(dir)) return;
   const entries = fs.readdirSync(dir, { withFileTypes: true });

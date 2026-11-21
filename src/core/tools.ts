@@ -6,7 +6,12 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { isReservedPath, resolveInsideDir } from './config.js';
 import { scanDocuments } from './index-cache.js';
-import { resolveModuleDetails, resolveWorkflowFilePath } from './manifest.js';
+import {
+  isRecord,
+  collectStepPlaceholders,
+  resolveModuleDetails,
+  resolveWorkflowFilePath,
+} from './manifest.js';
 import {
   extractSections,
   findManifestFolders,
@@ -668,19 +673,47 @@ export async function toolRunWorkflow(
     };
   }
 
-  // Apply defaults before validating required inputs
-  const workflowInputs = (workflowDef.inputs || {}) as Record<
-    string,
-    { required?: boolean; default?: unknown }
-  >;
-  for (const [k, def] of Object.entries(workflowInputs)) {
-    if (!(k in inputValues) && def && def.default !== undefined) {
-      inputValues[k] = String(def.default);
+  const workflowInputs = isRecord(workflowDef.inputs) ? workflowDef.inputs : {};
+  const manifestPh = isRecord(manifest?.placeholders) ? manifest!.placeholders : {};
+
+  const steps = (Array.isArray(workflowDef.steps) ? workflowDef.steps : []) as Array<Record<string, unknown>>;
+  const used = new Set<string>();
+  for (const raw of steps) {
+    if (!isRecord(raw)) continue;
+    collectStepPlaceholders(raw, used);
+    if (isRecord(raw.when) && typeof raw.when.input === 'string') used.add(raw.when.input);
+  }
+
+  interface PlaceholderDef {
+    required?: boolean;
+    default?: unknown;
+    pattern?: string;
+    description?: string;
+    type?: string;
+    [key: string]: unknown;
+  }
+
+  // keys considered: everything workflow.inputs declares (today's behavior) + used manifest placeholders
+  const defs: Record<string, PlaceholderDef> = {};
+  const manifestDerived: Record<string, PlaceholderDef> = {};
+  for (const k of [...Object.keys(workflowInputs), ...[...used].sort()]) {
+    if (k in defs) continue;
+    if (isRecord(workflowInputs[k])) {
+      defs[k] = workflowInputs[k] as PlaceholderDef;
+    } else if (isRecord(manifestPh[k])) {
+      defs[k] = manifestPh[k] as PlaceholderDef;
+      manifestDerived[k] = defs[k];
     }
   }
 
-  const missing = Object.entries(workflowInputs)
-    .filter(([, v]) => v?.required)
+  for (const [k, d] of Object.entries(defs)) {
+    if (!(k in inputValues) && d.default !== undefined) {
+      inputValues[k] = String(d.default);
+    }
+  }
+
+  const missing = Object.entries(defs)
+    .filter(([, d]) => d.required)
     .map(([k]) => k)
     .filter((k) => !(k in inputValues));
 
@@ -689,13 +722,30 @@ export async function toolRunWorkflow(
       text: JSON.stringify(
         {
           error: `Missing required inputs: ${JSON.stringify(missing)}`,
-          workflow_inputs: workflowInputs,
+          workflow_inputs: { ...manifestDerived, ...workflowInputs },
         },
         null,
         2
       ),
       isError: true,
     };
+  }
+
+  function patternError(msg: string): ToolResponse {
+    return { text: JSON.stringify({ error: msg }, null, 2), isError: true };
+  }
+
+  for (const [k, d] of Object.entries(defs)) {
+    if (typeof d.pattern !== 'string') continue;
+    let re: RegExp;
+    try {
+      re = new RegExp(d.pattern);
+    } catch (err: any) {
+      return patternError(`Input '${k}' has an invalid pattern '${d.pattern}': ${err?.message || err}`);
+    }
+    if (k in inputValues && !re.test(inputValues[k])) {
+      return patternError(`Input '${k}' does not match pattern '${d.pattern}'.`);
+    }
   }
 
   let blockRunReason: string | undefined;
@@ -707,7 +757,6 @@ export async function toolRunWorkflow(
     }
   }
 
-  const steps = (workflowDef.steps || []) as Array<Record<string, unknown>>;
   const results = await executeWorkflowSteps(workflow, folder, steps, inputValues, {
     dryRun: options.dryRun,
     readOnly: options.readOnly,

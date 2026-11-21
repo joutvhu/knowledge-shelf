@@ -148,10 +148,24 @@ Best for reusable code patterns and automation. A folder with `manifest.json`:
   "type": "boilerplate",
   "description": "Page objects and step definitions for Angular testing",
   "tags": ["cucumber", "selenium", "angular"],
-  "modules": { "base": { "files": ["pages/BasePage.java"], ... } },
+  "modules": { "base": { "files": ["pages/BasePage.java"] } },
+  "scripts": {
+    "validate": {
+      "file": "scripts/validate.py",
+      "interpreter": "python",
+      "timeout_ms": 60000,
+      "args": {
+        "--target": { "required": true, "type": "path", "description": "Target directory" }
+      }
+    }
+  },
   "workflows": { "setup": { "description": "Scaffold new project" } }
 }
 ```
+
+- **`type`**: Accepts any non-empty string (`boilerplate`, `template`, `toolkit`, `cookbook`, or custom categories like `playbook`).
+- **`scripts.*.args`**: Informational schema specifying arguments with shape: `required: boolean`, `type: string`, `description: string`, and optional `default?: string | number | boolean`. Validated for correct structure, but not applied at script runtime.
+- **`timeout_ms`**: Bounds for scripts and workflow `run` steps are constrained to an integer between `1000` and `600000` ms (1s to 10m, default: `120000`).
 
 ### Standalone markdown (for documentation)
 
@@ -180,21 +194,32 @@ npm install -g knowledge-shelf
 ```
 
 ```bash
-knowledge-shelf init                              # Initialize ~/.knowledge
-knowledge-shelf add <url>                         # Install from git repo
-knowledge-shelf add <url> --all                   # Install all units from monorepo
-knowledge-shelf add <url> --path <dir>            # Install specific subfolder (sparse checkout)
-knowledge-shelf install <path> [--force] [--all]  # Validate & install drafted knowledge from local path
-knowledge-shelf search <keywords>                 # Search installed knowledge
-knowledge-shelf info <name>                       # Show unit details
-knowledge-shelf validate [name|path]              # Check structure integrity (installed or local draft)
-knowledge-shelf list                              # Show installed sources
-knowledge-shelf update [name]                     # Pull latest from remotes / local sources
-knowledge-shelf pin <name> [version]              # Lock version (skip updates)
-knowledge-shelf unpin <name>                      # Unlock
-knowledge-shelf export <name>                     # Package as zip for sharing
-knowledge-shelf remove <name>                     # Uninstall
+knowledge-shelf init                                    # Initialize ~/.knowledge
+knowledge-shelf add <url>                               # Install from git repo
+knowledge-shelf add <url> --all                         # Install all units from monorepo
+knowledge-shelf add <url> --path <dir>                  # Install specific subfolder (sparse checkout)
+knowledge-shelf install <path> [--force] [--all]        # Validate & install drafted knowledge from local path
+knowledge-shelf search <keywords>                       # Search installed knowledge
+knowledge-shelf info <name>                             # Show unit details
+knowledge-shelf validate [name|path]                    # Check structure integrity (installed or local draft)
+knowledge-shelf list                                    # Show installed sources
+knowledge-shelf update [name] [--no-verify] [--force]   # Pull latest changes (stages & validates; honors --no-verify)
+knowledge-shelf pin <name> [version] [--no-verify]      # Lock version (validates checkout; honors --no-verify)
+knowledge-shelf unpin <name>                            # Unlock
+knowledge-shelf sync [--frozen] [--force] [--no-verify] # Synchronize declared sources (skips local edits unless --force)
+knowledge-shelf publish <path> --to <url> [--push]      # Publish unit or standalone .md directly to git repo
+knowledge-shelf export <name>                           # Package as zip for sharing
+knowledge-shelf remove <name>                           # Uninstall
 ```
+
+### Key CLI Features & Integrity Protections
+
+- **`publish <path> --to <url> [--push]`**: Supports publishing a manifest unit folder or a standalone `.md` file directly into a remote target repo (`knowledge-shelf publish docs/guide.md --to <repo> --push`).
+  - Fast-forwards when updating an existing remote branch based on the remote branch tip (never force-pushes; `--force` overrides hygiene warnings only).
+  - Automatically reports "No changes to publish" and exits cleanly without creating an empty commit if remote branch content already matches.
+- **`update`**, **`sync`**, and **`pin`**:
+  - Stage and validate fetched content before updating installed units. Pass the `--no-verify` flag to bypass staging validation.
+  - `sync` detects local modifications via checksums and skips edited units without overwriting unless `--force` is specified. In frozen mode (`--frozen`), accepts full 40-character SHAs, prefix SHAs, and remote tags.
 
 See [docs/cli-reference.md](docs/cli-reference.md) for full command documentation.
 
@@ -211,7 +236,13 @@ knowledge-shelf add https://github.com/team/shared-knowledge.git --all
 
 # Specific subfolder
 knowledge-shelf add https://github.com/team/project.git --path knowledge/api-patterns --name api-patterns
+
+# Publish a manifest unit or standalone .md file directly to a remote repository
+knowledge-shelf publish ./my-unit --to https://github.com/team/shared-knowledge.git --push
+knowledge-shelf publish ./docs/deploy.md --to https://github.com/team/shared-knowledge.git --push
 ```
+
+The `publish` command supports both manifest units and standalone `.md` files directly into a remote target repo (`knowledge-shelf publish docs/guide.md --to <repo>`). It verifies content hygiene (detecting credentials, secrets, and sensitive files), fast-forwards when updating an existing remote branch based on the remote branch tip (never force-pushes; `--force` overrides hygiene warnings only), and automatically reports "No changes to publish" and exits cleanly without creating an empty commit if remote branch content already matches.
 
 See [docs/publishing-knowledge.md](docs/publishing-knowledge.md) for repo layout conventions.
 

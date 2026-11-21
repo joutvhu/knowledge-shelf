@@ -1,5 +1,25 @@
 # Changelog
 
+## [1.1.1]
+
+### Added
+- Added `--no-verify` flag to `update`, `sync`, and `pin` commands to bypass validation of fetched content.
+- Added `fullCommit` field to `.registry.json` source entries to store full 40-character commit SHAs for exact comparisons during frozen sync.
+
+### Fixed
+- **B1, B2**: Hygiene scanner enhancements: scanned copy set across dot-prefixed folders and `node_modules`, detecting sensitive files (`.env`, `.env.*`, `.npmrc`, `.netrc`, `.pypirc`, `.secret*`), token patterns (GitHub tokens `ghp_`/`gho_`/`github_pat_`, AWS access key IDs `AKIA...`, Slack tokens `xoxb-`/`xoxp-`, PEM private keys), and hardcoded secret assignments, while safely ignoring placeholder expressions.
+- **B3**: Fast-forward publish on existing remote branches based on the remote branch tip (never force-pushes), with clean no-op handling reporting "No changes to publish" without creating empty commits if remote branch content already matches.
+- **B4**: Direct publishing of standalone `.md` files into a remote target repo with frontmatter validation and hygiene checks.
+- **B5**: Fixed `sync --frozen` to support 40-character full commit SHAs (prefix matching for hex SHAs >= 7 characters) and resolved git tags/branches against `regEntry.pin` and remote commits.
+- **B6**: Fixed `sync` to detect local modifications via checksum comparison and skip modified units without overwriting unless `--force` is specified.
+- **B7**: Staging validation and `--no-verify` flag on `update`, `sync`, and `pin` to stage and validate incoming content before replacing installed units, preventing broken remote versions from overwriting working local units.
+- **B8**: Checksum coverage across dot-files and `node_modules` with backward-compatible legacy fallback for older checksums.
+- **B9**: Atomic registry writes via tempfile + rename in `saveRegistry` to prevent corrupted `.registry.json` on unexpected process termination.
+- **B10**: Support for custom `type` categories (any non-empty string) in manifests, schema, and MCP `search_docs` search filter in addition to built-in types.
+- **B11**: Manifest placeholders resolution and enforcement (`default`, `required`, and regex `pattern` validation) in `toolRunWorkflow` for used placeholders.
+- **B12**: Strict shape validation for `scripts.*.args` (`required: boolean`, string `type` and `description`, optional `default`) and documented the field as informational.
+- **B13**: Integer range validation for `timeout_ms` (1000..600000 ms) in scripts and workflows.
+
 ## [1.1.0] - 2026-11-19
 
 ### Added

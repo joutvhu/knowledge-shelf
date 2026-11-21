@@ -8,6 +8,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import {
+  checkFilePublishHygiene,
   checkUnitPublishHygiene,
   expandHome,
   findManifestFolders,
@@ -34,9 +35,13 @@ import {
   gitEnv,
   gitGetBranch,
   gitGetCommit,
+  gitGetFullCommit,
   gitLsRemote,
+  gitResolveRemoteRef,
+  isHexRef,
   removeDirSync,
   replaceDirSync,
+  shaMatches,
   syncManifestName,
 } from './git.js';
 import {
@@ -46,9 +51,11 @@ import {
   TeamSourceEntry,
   computeUnitChecksum,
   getCacheDir,
+  hasLocalModifications,
   loadRegistry,
   loadShelfCatalog,
   loadTeamConfig,
+  recordInstalledSource,
   resolveSafeUnitDir,
   saveRegistry,
 } from './registry.js';
@@ -57,19 +64,187 @@ function isSafeUnitSegment(name: string): boolean {
   return Boolean(name) && !name.startsWith('.') && !name.includes('/') && !name.includes('\\') && name !== '..';
 }
 
+export function validateStaged(
+  stagedPath: string,
+  isDirectory: boolean
+): { ok: boolean; errors: string[] };
+export function validateStaged(
+  stagedPath: string,
+  unitName: string,
+  noVerify?: boolean
+): boolean;
+export function validateStaged(
+  stagedPath: string,
+  arg2: boolean | string,
+  arg3?: boolean
+): { ok: boolean; errors: string[] } | boolean {
+  if (typeof arg2 === 'string') {
+    const unitName = arg2;
+    const noVerify = Boolean(arg3);
+    if (noVerify) return true;
+    const isDir = fs.existsSync(stagedPath) && fs.statSync(stagedPath).isDirectory();
+    if (!isDir) {
+      const { errors, warnings } = validateStandaloneMdFile(stagedPath);
+      printValidationResults(unitName, errors, warnings);
+      return errors.length === 0;
+    }
+    const manifestPath = path.join(stagedPath, 'manifest.json');
+    if (fs.existsSync(manifestPath)) {
+      const { errors, warnings } = validateManifestUnitDir(stagedPath, unitName);
+      printValidationResults(unitName, errors, warnings);
+      return errors.length === 0;
+    }
+    return true;
+  }
+
+  const isDirectory = arg2;
+  if (!isDirectory) {
+    const result = validateStandaloneMdFile(stagedPath);
+    const ok = (result as any).valid ?? (result.errors.length === 0);
+    return { ok, errors: result.errors };
+  } else {
+    const manifestPath = path.join(stagedPath, 'manifest.json');
+    if (fs.existsSync(manifestPath)) {
+      let expectedName: string | undefined = undefined;
+      try {
+        const m = JSON.parse(fs.readFileSync(manifestPath, 'utf-8'));
+        if (typeof m.name === 'string') expectedName = m.name;
+      } catch {
+        // validateManifestUnitDir will catch invalid JSON
+      }
+      const result = validateManifestUnitDir(stagedPath, expectedName);
+      const ok = (result as any).valid ?? (result.errors.length === 0);
+      return { ok, errors: result.errors };
+    }
+    return { ok: true, errors: [] };
+  }
+}
+
 function validateStagedDirectory(
   stagedDir: string,
   unitName: string,
   noVerify: boolean
 ): boolean {
-  if (noVerify) return true;
-  const manifestPath = path.join(stagedDir, 'manifest.json');
-  if (fs.existsSync(manifestPath)) {
-    const { errors, warnings } = validateManifestUnitDir(stagedDir, unitName);
-    printValidationResults(unitName, errors, warnings);
-    return errors.length === 0;
+  return validateStaged(stagedDir, unitName, noVerify);
+}
+
+export interface InstallValidatedOptions {
+  incomingSourcePath: string;
+  destDir: string;
+  isDirectory?: boolean;
+  noVerify?: boolean;
+  onSuccess?: () => void;
+  knowledgeDir?: string;
+  unitName?: string;
+}
+
+let stageSeq = 0;
+
+export function installValidated(
+  knowledgeDir: string,
+  srcPath: string,
+  destPath: string,
+  unitName: string,
+  noVerify?: boolean
+): boolean;
+export function installValidated(options: InstallValidatedOptions): boolean;
+export function installValidated(
+  firstArg: string | InstallValidatedOptions,
+  srcPathArg?: string,
+  destPathArg?: string,
+  unitNameArg?: string,
+  noVerifyArg?: boolean
+): boolean {
+  let knowledgeDir: string;
+  let srcPath: string;
+  let destPath: string;
+  let unitName: string;
+  let isDirectory: boolean;
+  let noVerify: boolean;
+  let onSuccess: (() => void) | undefined;
+
+  if (typeof firstArg === 'object') {
+    srcPath = firstArg.incomingSourcePath;
+    destPath = firstArg.destDir;
+    isDirectory =
+      firstArg.isDirectory !== undefined
+        ? firstArg.isDirectory
+        : fs.existsSync(srcPath) && fs.statSync(srcPath).isDirectory();
+    noVerify = Boolean(firstArg.noVerify);
+    onSuccess = firstArg.onSuccess;
+    knowledgeDir = firstArg.knowledgeDir || path.dirname(destPath);
+    unitName = firstArg.unitName || path.basename(destPath);
+  } else {
+    knowledgeDir = firstArg;
+    srcPath = srcPathArg!;
+    destPath = destPathArg!;
+    unitName = unitNameArg || path.basename(destPath);
+    noVerify = Boolean(noVerifyArg);
+    isDirectory = fs.existsSync(srcPath) && fs.statSync(srcPath).isDirectory();
+    onSuccess = undefined;
   }
-  return true;
+
+  const cacheDir = getCacheDir(knowledgeDir);
+  fs.mkdirSync(cacheDir, { recursive: true });
+  const stageRoot = getCloneTarget(
+    knowledgeDir,
+    `.vstage-${process.pid}-${Date.now()}-${++stageSeq}`
+  );
+  removeDirSync(stageRoot);
+
+  try {
+    if (!isDirectory) {
+      fs.mkdirSync(stageRoot, { recursive: true });
+      const staged = path.join(stageRoot, path.basename(destPath));
+      fs.copyFileSync(srcPath, staged);
+
+      if (!noVerify) {
+        const vRes = validateStaged(staged, false);
+        const { errors, warnings } = validateStandaloneMdFile(staged);
+        printValidationResults(unitName, errors, warnings);
+        if (!vRes.ok || errors.length > 0) {
+          console.error(
+            `Error: Validation failed for '${unitName}'; keeping the installed version (use --no-verify to bypass).`
+          );
+          return false;
+        }
+      }
+
+      fs.mkdirSync(path.dirname(destPath), { recursive: true });
+      fs.copyFileSync(staged, destPath);
+    } else {
+      copyDirSync(srcPath, stageRoot);
+      syncManifestName(stageRoot, unitName);
+
+      if (!noVerify) {
+        const vRes = validateStaged(stageRoot, true);
+        const manifestPath = path.join(stageRoot, 'manifest.json');
+        let errors: string[] = [];
+        let warnings: string[] = [];
+        if (fs.existsSync(manifestPath)) {
+          const res = validateManifestUnitDir(stageRoot, unitName);
+          errors = res.errors;
+          warnings = res.warnings;
+          printValidationResults(unitName, errors, warnings);
+        }
+        if (!vRes.ok || errors.length > 0) {
+          console.error(
+            `Error: Validation failed for '${unitName}'; keeping the installed version (use --no-verify to bypass).`
+          );
+          return false;
+        }
+      }
+
+      replaceDirSync(knowledgeDir, stageRoot, destPath);
+    }
+
+    if (onSuccess) {
+      onSuccess();
+    }
+    return true;
+  } finally {
+    removeDirSync(stageRoot);
+  }
 }
 
 export function cmdAdd(knowledgeDir: string, args: string[]): void {
@@ -166,6 +341,7 @@ export function cmdAdd(knowledgeDir: string, args: string[]): void {
   }
 
   const commit = gitGetCommit(cloneTarget);
+  const fullCommit = gitGetFullCommit(cloneTarget);
   const branch = gitGetBranch(cloneTarget);
 
   let stageSeq = 0;
@@ -207,6 +383,7 @@ export function cmdAdd(knowledgeDir: string, args: string[]): void {
       path: sourceSubPath || undefined,
       ...(branch ? { branch } : {}),
       commit,
+      ...(fullCommit ? { fullCommit } : {}),
       ...(pinAfter || (ref && !branch) ? { pin: ref || commit } : {}),
       checksum,
       ...(trusted ? { trusted: true } : {}),
@@ -214,11 +391,7 @@ export function cmdAdd(knowledgeDir: string, args: string[]): void {
       updatedAt: now,
     };
 
-    if (existing) {
-      Object.assign(existing, entry);
-    } else {
-      registry.sources.push(entry);
-    }
+    recordInstalledSource(registry, entry);
     printSecurityNotice(unitName, destDir);
     return 'installed';
   };
@@ -339,13 +512,13 @@ export function cmdAdd(knowledgeDir: string, args: string[]): void {
         path: sourcePath,
         ...(branch ? { branch } : {}),
         commit,
+        ...(fullCommit ? { fullCommit } : {}),
         ...(pinAfter || (ref && !branch) ? { pin: ref || commit } : {}),
         checksum,
         installedAt: existing?.installedAt || now,
         updatedAt: now,
       };
-      if (existing) Object.assign(existing, entry);
-      else registry.sources.push(entry);
+      recordInstalledSource(registry, entry);
       console.log(`  ✓ Installed '${docName}'`);
       installed++;
     }
@@ -416,6 +589,7 @@ export function cmdAdd(knowledgeDir: string, args: string[]): void {
     path: subPath || undefined,
     ...(branch ? { branch } : {}),
     commit,
+    ...(fullCommit ? { fullCommit } : {}),
     ...(pinAfter || (ref && !branch) ? { pin: ref || commit } : {}),
     checksum,
     ...(trusted ? { trusted: true } : {}),
@@ -423,11 +597,7 @@ export function cmdAdd(knowledgeDir: string, args: string[]): void {
     updatedAt: now,
   };
 
-  if (existing) {
-    Object.assign(existing, entry);
-  } else {
-    registry.sources.push(entry);
-  }
+  recordInstalledSource(registry, entry);
   saveRegistry(knowledgeDir, registry);
   removeDirSync(cloneTarget);
   console.log(`✓ Installed '${name}' (${commit})`);
@@ -437,10 +607,13 @@ export function cmdAdd(knowledgeDir: string, args: string[]): void {
 export function cmdUpdate(knowledgeDir: string, args: string[]): void {
   let targetName = '';
   let force = false;
+  let noVerify = false;
 
   for (const arg of args) {
     if (arg === '--force' || arg === '-f') {
       force = true;
+    } else if (arg === '--no-verify') {
+      noVerify = true;
     } else if (arg.startsWith('-')) {
       console.error(`Error: Unknown option '${arg}' for 'update'.`);
       process.exit(1);
@@ -487,20 +660,13 @@ export function cmdUpdate(knowledgeDir: string, args: string[]): void {
         continue;
       }
       try {
-        const stat = fs.statSync(localPath);
-        if (stat.isFile()) {
-          const destFile = resolveSafeUnitDir(knowledgeDir, source.name);
-          fs.mkdirSync(path.dirname(destFile), { recursive: true });
-          fs.copyFileSync(localPath, destFile);
-          source.checksum = computeUnitChecksum(destFile);
-        } else {
-          const destDir = resolveSafeUnitDir(knowledgeDir, source.name);
-          replaceDirSync(knowledgeDir, localPath, destDir);
-          if (fs.existsSync(path.join(destDir, 'manifest.json'))) {
-            syncManifestName(destDir, source.name);
-          }
-          source.checksum = computeUnitChecksum(destDir);
+        const destDir = resolveSafeUnitDir(knowledgeDir, source.name);
+        const ok = installValidated(knowledgeDir, localPath, destDir, source.name, noVerify);
+        if (!ok) {
+          failed++;
+          continue;
         }
+        source.checksum = computeUnitChecksum(destDir);
         source.updatedAt = new Date().toISOString();
         updated++;
         console.log('  ✓ Updated from local path');
@@ -564,14 +730,11 @@ export function cmdUpdate(knowledgeDir: string, args: string[]): void {
           continue;
         }
 
-        if (source.checksum && fs.existsSync(destDir) && !force) {
-          const currentChecksum = computeUnitChecksum(destDir);
-          if (currentChecksum && currentChecksum !== source.checksum) {
-            console.log(
-              `  ⚠ Skipping '${source.name}' (local modifications detected; pass --force to overwrite)`
-            );
-            continue;
-          }
+        if (!force && hasLocalModifications(destDir, source.checksum)) {
+          console.log(
+            `  ⚠ Skipping '${source.name}' (local modifications detected; pass --force to overwrite)`
+          );
+          continue;
         }
 
         const sourceDir = source.path ? resolveInsideDir(cloneTarget, source.path, true) : cloneTarget;
@@ -581,15 +744,14 @@ export function cmdUpdate(knowledgeDir: string, args: string[]): void {
           continue;
         }
 
-        if (fs.statSync(sourceDir).isFile()) {
-          fs.mkdirSync(path.dirname(destDir), { recursive: true });
-          fs.copyFileSync(sourceDir, destDir);
-        } else {
-          replaceDirSync(knowledgeDir, sourceDir, destDir);
-          syncManifestName(destDir, source.name);
+        const ok = installValidated(knowledgeDir, sourceDir, destDir, source.name, noVerify);
+        if (!ok) {
+          failed++;
+          continue;
         }
 
         source.commit = newCommit;
+        source.fullCommit = gitGetFullCommit(cloneTarget) || undefined;
         source.checksum = computeUnitChecksum(destDir);
         source.updatedAt = new Date().toISOString();
         updated++;
@@ -613,9 +775,11 @@ export function cmdUpdate(knowledgeDir: string, args: string[]): void {
 }
 
 export function cmdPin(knowledgeDir: string, args: string[]): void {
-  rejectUnknownFlags(args, 'pin');
-  const name = args[0];
-  const version = args[1];
+  const noVerify = args.includes('--no-verify');
+  const cleanArgs = args.filter((a) => a !== '--no-verify');
+  rejectUnknownFlags(cleanArgs, 'pin');
+  const name = cleanArgs[0];
+  const version = cleanArgs[1];
 
   if (!name) {
     console.error('Error: Name is required.\nUsage: knowledge-shelf pin <name> [tag|commit]');
@@ -641,6 +805,7 @@ export function cmdPin(knowledgeDir: string, args: string[]): void {
     fs.mkdirSync(getCacheDir(knowledgeDir), { recursive: true });
     const repoName = deriveNameFromUrl(source.url);
     const cloneTarget = getCloneTarget(knowledgeDir, `${repoName}-pin`);
+    let installFailed = false;
 
     try {
       removeDirSync(cloneTarget);
@@ -652,17 +817,24 @@ export function cmdPin(knowledgeDir: string, args: string[]): void {
       }
 
       const destDir = resolveSafeUnitDir(knowledgeDir, source.name);
-      replaceDirSync(knowledgeDir, sourceDir, destDir);
-      syncManifestName(destDir, source.name);
-
-      source.commit = gitGetCommit(cloneTarget);
-      source.checksum = computeUnitChecksum(destDir);
-      source.updatedAt = new Date().toISOString();
+      const ok = installValidated(knowledgeDir, sourceDir, destDir, source.name, noVerify);
+      if (!ok) {
+        installFailed = true;
+      } else {
+        source.commit = gitGetCommit(cloneTarget);
+        source.fullCommit = gitGetFullCommit(cloneTarget) || undefined;
+        source.checksum = computeUnitChecksum(destDir);
+        source.updatedAt = new Date().toISOString();
+      }
     } catch (e) {
       console.error(`Error: Failed to checkout '${version}' for '${name}': ${e instanceof Error ? e.message : e}`);
       process.exit(1);
     } finally {
       removeDirSync(cloneTarget);
+    }
+
+    if (installFailed) {
+      process.exit(1);
     }
   }
 
@@ -712,7 +884,7 @@ export function cmdOutdated(knowledgeDir: string, args: string[]): void {
     const destDir = resolveSafeUnitDir(knowledgeDir, s.name);
     const exists = fs.existsSync(destDir);
     const drift =
-      exists && s.checksum && computeUnitChecksum(destDir) !== s.checksum ? ' [modified-locally]' : '';
+      hasLocalModifications(destDir, s.checksum) ? ' [modified-locally]' : '';
 
     if (!exists) {
       console.log(`  ${s.name}: missing on disk`);
@@ -742,6 +914,7 @@ export function cmdSync(knowledgeDir: string, args: string[]): void {
   let fileArg = '';
   let frozen = false;
   let force = false;
+  let noVerify = false;
 
   for (let i = 0; i < args.length; i++) {
     if (args[i] === '--file' || args[i] === '-f') {
@@ -754,6 +927,8 @@ export function cmdSync(knowledgeDir: string, args: string[]): void {
       frozen = true;
     } else if (args[i] === '--force') {
       force = true;
+    } else if (args[i] === '--no-verify') {
+      noVerify = true;
     } else if (args[i].startsWith('-')) {
       console.error(`Error: Unknown option '${args[i]}' for 'sync'.`);
       process.exit(1);
@@ -809,11 +984,34 @@ export function cmdSync(knowledgeDir: string, args: string[]): void {
         process.exit(1);
       }
       const targetRef = s.pin || s.ref;
-      if (targetRef && regEntry.commit !== targetRef && regEntry.pin !== targetRef) {
-        console.error(
-          `Error (--frozen): '${s.name}' version mismatch (installed: ${regEntry.commit}, expected: ${targetRef}).`
-        );
-        process.exit(1);
+      if (targetRef) {
+        const installed = regEntry.fullCommit || regEntry.commit;
+        const matchedOffline =
+          regEntry.commit === targetRef ||
+          regEntry.pin === targetRef ||
+          shaMatches(targetRef, regEntry.commit) ||
+          shaMatches(targetRef, regEntry.fullCommit);
+
+        if (!matchedOffline) {
+          let matchedRemote = false;
+          let couldNotResolve = false;
+          if (!isHexRef(targetRef)) {
+            const remoteSha = gitResolveRemoteRef(s.url, targetRef);
+            if (remoteSha && (shaMatches(remoteSha, regEntry.commit) || shaMatches(remoteSha, regEntry.fullCommit))) {
+              matchedRemote = true;
+            } else if (!remoteSha) {
+              couldNotResolve = true;
+            }
+          }
+
+          if (!matchedRemote) {
+            const extra = couldNotResolve ? ` (could not resolve '${targetRef}' on the remote)` : '';
+            console.error(
+              `Error (--frozen): '${s.name}' version mismatch (installed: ${regEntry.commit}, expected: ${targetRef})${extra}.`
+            );
+            process.exit(1);
+          }
+        }
       }
     }
     console.log(`✓ All ${sources.length} source(s) verified (--frozen).`);
@@ -830,6 +1028,7 @@ export function cmdSync(knowledgeDir: string, args: string[]): void {
 
   let synced = 0;
   let failed = 0;
+  let skipped = 0;
 
   for (const [, group] of groups) {
     const sample = group[0];
@@ -846,6 +1045,7 @@ export function cmdSync(knowledgeDir: string, args: string[]): void {
       }
 
       const commit = gitGetCommit(cloneTarget);
+      const fullCommit = gitGetFullCommit(cloneTarget);
       const branch = gitGetBranch(cloneTarget);
 
       for (const s of group) {
@@ -863,6 +1063,14 @@ export function cmdSync(knowledgeDir: string, args: string[]): void {
           continue;
         }
 
+        if (!force && existing && fs.existsSync(destDir) && hasLocalModifications(destDir, existing.checksum)) {
+          console.log(
+            `  ⚠ Skipping '${s.name}' (local modifications detected; pass --force to overwrite)`
+          );
+          skipped++;
+          continue;
+        }
+
         const sourceDir = s.path ? resolveInsideDir(cloneTarget, s.path, true) : cloneTarget;
         if (!sourceDir || !fs.existsSync(sourceDir)) {
           console.error(`  Error: Path '${s.path}' not found in repo for '${s.name}'.`);
@@ -870,12 +1078,10 @@ export function cmdSync(knowledgeDir: string, args: string[]): void {
           continue;
         }
 
-        if (fs.statSync(sourceDir).isFile()) {
-          fs.mkdirSync(path.dirname(destDir), { recursive: true });
-          fs.copyFileSync(sourceDir, destDir);
-        } else {
-          replaceDirSync(knowledgeDir, sourceDir, destDir);
-          syncManifestName(destDir, s.name);
+        const ok = installValidated(knowledgeDir, sourceDir, destDir, s.name, noVerify);
+        if (!ok) {
+          failed++;
+          continue;
         }
 
         const now = new Date().toISOString();
@@ -886,14 +1092,14 @@ export function cmdSync(knowledgeDir: string, args: string[]): void {
           path: s.path,
           ...(branch ? { branch } : {}),
           commit,
+          ...(fullCommit ? { fullCommit } : {}),
           ...(s.pin ? { pin: s.pin } : {}),
           checksum,
           ...(existing?.trusted ? { trusted: true } : {}),
           installedAt: existing?.installedAt || now,
           updatedAt: now,
         };
-        if (existing) Object.assign(existing, updatedEntry);
-        else registry.sources.push(updatedEntry);
+        recordInstalledSource(registry, updatedEntry);
 
         console.log(`  ✓ Synced '${s.name}' (${commit})`);
         synced++;
@@ -909,7 +1115,8 @@ export function cmdSync(knowledgeDir: string, args: string[]): void {
   }
 
   saveRegistry(knowledgeDir, registry);
-  console.log(`\nDone. ${synced} synced, ${failed} failed.`);
+  const skippedStr = skipped > 0 ? `, ${skipped} skipped` : '';
+  console.log(`\nDone. ${synced} synced, ${failed} failed${skippedStr}.`);
   if (failed > 0) process.exit(1);
 }
 
@@ -1227,6 +1434,179 @@ export function cmdScaffold(args: string[]): void {
   console.log(`✓ Scaffolded ${type} unit: ${targetDir}`);
 }
 
+export function buildPublishPushArgs(branch: string, isFirstPublish: boolean = true): string[] {
+  return isFirstPublish ? ['push', '-u', 'origin', branch] : ['push', 'origin', branch];
+}
+
+export function resolvePublishTarget(
+  raw: string,
+  knowledgeDir: string
+): { kind: 'unit' | 'file'; path: string } | null {
+  if (!raw) return null;
+
+  // 1. Direct path check (with ~ expanded)
+  const expanded = path.resolve(expandHome(raw));
+  if (fs.existsSync(expanded)) {
+    const stat = fs.statSync(expanded);
+    if (stat.isDirectory()) {
+      return { kind: 'unit', path: expanded };
+    }
+    if (stat.isFile()) {
+      if (raw.toLowerCase().endsWith('.md')) {
+        return { kind: 'file', path: expanded };
+      }
+      return null;
+    }
+  }
+
+  // 2. Relative to knowledgeDir: check as-is
+  const relInside = resolveInsideDir(knowledgeDir, raw, true);
+  if (relInside && fs.existsSync(relInside)) {
+    const stat = fs.statSync(relInside);
+    if (stat.isDirectory()) {
+      return { kind: 'unit', path: relInside };
+    }
+    if (stat.isFile()) {
+      if (raw.toLowerCase().endsWith('.md')) {
+        return { kind: 'file', path: relInside };
+      }
+      return null;
+    }
+  }
+
+  // 3. If !raw.endsWith('.md'), check knowledgeDir/<raw>.md
+  if (!raw.toLowerCase().endsWith('.md')) {
+    const mdRelInside = resolveInsideDir(knowledgeDir, `${raw}.md`, true);
+    if (mdRelInside && fs.existsSync(mdRelInside)) {
+      const stat = fs.statSync(mdRelInside);
+      if (stat.isFile()) {
+        return { kind: 'file', path: mdRelInside };
+      }
+    }
+  }
+
+  return null;
+}
+
+export interface PublishViaCloneOptions {
+  toRepo: string;
+  targetBranch: string;
+  targetRelPath?: string;
+  populateClone: (dest: string) => void;
+  commitMsg: string;
+  push: boolean;
+  label?: string;
+  updateShelf?: boolean;
+}
+
+export function publishViaClone(opts: PublishViaCloneOptions): void {
+  const { toRepo, targetBranch, targetRelPath, populateClone, commitMsg, push, label, updateShelf } = opts;
+  assertGitAvailable();
+  assertSafeGitArg(toRepo, 'target repository');
+  assertSafeGitArg(targetBranch, 'branch name');
+
+  const workClone = fs.mkdtempSync(path.join(os.tmpdir(), 'ks-publish-'));
+  fs.rmSync(workClone, { recursive: true, force: true });
+
+  try {
+    const cloneRes = spawnSync('git', ['clone', '--', toRepo, workClone], {
+      stdio: 'pipe',
+      encoding: 'utf-8',
+      env: gitEnv(),
+    });
+    if (cloneRes.status !== 0) {
+      throw new Error(cloneRes.stderr || 'git clone failed');
+    }
+
+    // Determine whether origin/<targetBranch> exists on the remote
+    const showRefRes = spawnSync('git', ['show-ref', '--verify', '--quiet', `refs/remotes/origin/${targetBranch}`], {
+      cwd: workClone,
+      stdio: 'pipe',
+    });
+    const branchExistsRemotely = showRefRes.status === 0;
+    const isFirstPublish = !branchExistsRemotely;
+
+    if (branchExistsRemotely) {
+      const checkoutRes = spawnSync('git', ['checkout', '-B', targetBranch, `refs/remotes/origin/${targetBranch}`], {
+        cwd: workClone,
+        stdio: 'pipe',
+        encoding: 'utf-8',
+      });
+      if (checkoutRes.status !== 0) {
+        throw new Error(checkoutRes.stderr || `git checkout -B ${targetBranch} refs/remotes/origin/${targetBranch} failed`);
+      }
+    } else {
+      const checkoutRes = spawnSync('git', ['checkout', '-B', targetBranch], {
+        cwd: workClone,
+        stdio: 'pipe',
+        encoding: 'utf-8',
+      });
+      if (checkoutRes.status !== 0) {
+        throw new Error(checkoutRes.stderr || `git checkout -B ${targetBranch} failed`);
+      }
+    }
+
+    const destDir = targetRelPath
+      ? resolveInsideDir(workClone, targetRelPath, true)
+      : workClone;
+    if (!destDir) {
+      throw new Error(`Invalid destination path '${targetRelPath}' inside target repository.`);
+    }
+
+    populateClone(destDir);
+
+    // Update shelf.json if updateShelf is true (or undefined/default) and shelf.json exists at target repo root
+    if (updateShelf !== false && fs.existsSync(path.join(workClone, 'shelf.json'))) {
+      const existingShelf = loadShelfCatalog(workClone);
+      const indexArgs = [workClone];
+      if (!existingShelf?.name) {
+        indexArgs.push('--name', deriveNameFromUrl(toRepo));
+      }
+      cmdIndex(indexArgs);
+    }
+
+    const addRes = spawnSync('git', ['add', '--all'], { cwd: workClone, stdio: 'pipe', encoding: 'utf-8' });
+    if (addRes.status !== 0) throw new Error(addRes.stderr || 'git add failed');
+
+    const statusRes = spawnSync('git', ['status', '--porcelain'], { cwd: workClone, encoding: 'utf-8' });
+    if (!(statusRes.stdout || '').trim()) {
+      console.log('No changes to publish (target repo already matches this unit).');
+      return;
+    }
+
+    const commitRes = spawnSync('git', ['commit', '-m', commitMsg], {
+      cwd: workClone,
+      stdio: 'pipe',
+      encoding: 'utf-8',
+    });
+    if (commitRes.status !== 0) {
+      throw new Error(commitRes.stderr || 'git commit failed');
+    }
+
+    const displayLabel = label || 'unit';
+    if (push) {
+      const pushArgs = buildPublishPushArgs(targetBranch, isFirstPublish);
+      const pushRes = spawnSync('git', pushArgs, {
+        cwd: workClone,
+        stdio: 'pipe',
+        encoding: 'utf-8',
+        env: gitEnv(),
+      });
+      if (pushRes.status !== 0) {
+        throw new Error(
+          `git push was rejected (publish never force-pushes; --force only overrides hygiene warnings).\n${pushRes.stderr || ''}`
+        );
+      }
+      console.log(`✓ Published '${displayLabel}' to ${toRepo} on branch '${targetBranch}'.`);
+    } else {
+      console.log(`✓ Committed '${displayLabel}' to temporary clone on branch '${targetBranch}'.`);
+      console.log('  Pass --push to push the branch to the remote repository.');
+    }
+  } finally {
+    removeDirSync(workClone);
+  }
+}
+
 export function cmdPublish(knowledgeDir: string, args: string[]): void {
   let unitArg = '';
   let toRepo = '';
@@ -1281,15 +1661,90 @@ export function cmdPublish(knowledgeDir: string, args: string[]): void {
     process.exit(1);
   }
 
-  let unitDir = path.resolve(expandHome(unitArg));
-  if (!fs.existsSync(unitDir)) {
-    unitDir = resolveSafeUnitDir(knowledgeDir, unitArg);
-  }
-  if (!fs.existsSync(unitDir) || !fs.statSync(unitDir).isDirectory()) {
-    console.error(`Error: Knowledge unit not found: ${unitArg}`);
+  const target = resolvePublishTarget(unitArg, knowledgeDir);
+  if (!target) {
+    const expanded = path.resolve(expandHome(unitArg));
+    const relInside = resolveInsideDir(knowledgeDir, unitArg, true);
+    if ((fs.existsSync(expanded) && fs.statSync(expanded).isFile()) ||
+        (relInside && fs.existsSync(relInside) && fs.statSync(relInside).isFile())) {
+      console.error(`Error: '${unitArg}' is neither a knowledge unit directory nor a Markdown (.md) file.`);
+      process.exit(1);
+    }
+    console.error(`Error: Knowledge unit not found: ${unitArg} (expected a unit directory or a standalone .md file)`);
     process.exit(1);
   }
 
+  assertGitAvailable();
+  assertSafeGitArg(toRepo, 'target repository');
+
+  if (target.kind === 'file') {
+    const filePath = target.path;
+    const fileName = path.basename(filePath);
+    const { errors, warnings } = validateStandaloneMdFile(filePath);
+    printValidationResults(fileName, errors, warnings);
+    if (errors.length > 0) {
+      console.error('Error: Fix validation errors before publishing.');
+      process.exit(1);
+    }
+
+    const hygieneWarnings = checkFilePublishHygiene(filePath);
+    if (hygieneWarnings.length > 0) {
+      for (const w of hygieneWarnings) {
+        console.log(`  ⚠ Hygiene warning: ${w}`);
+      }
+      if (!force) {
+        console.error('Error: Hygiene warnings detected. Clean them or pass --force to publish anyway.');
+        process.exit(1);
+      }
+    }
+
+    const baseNameWithoutExt = path.basename(filePath, path.extname(filePath));
+    const targetBranch = branchName || `knowledge/${baseNameWithoutExt}`;
+    const msg = commitMessage || `chore(knowledge): publish ${fileName}`;
+
+    try {
+      publishViaClone({
+        toRepo,
+        targetBranch,
+        targetRelPath: undefined,
+        populateClone: (cloneRoot) => {
+          let destPathInClone: string;
+          if (subPath) {
+            const isDirLike = subPath.endsWith('/') || subPath.endsWith('\\');
+            const resolvedPath = resolveInsideDir(cloneRoot, subPath, true);
+            if (!resolvedPath) {
+              throw new Error(`Invalid destination path '${subPath}' inside target repository.`);
+            }
+            if (isDirLike || (fs.existsSync(resolvedPath) && fs.statSync(resolvedPath).isDirectory())) {
+              destPathInClone = path.join(resolvedPath, fileName);
+            } else {
+              destPathInClone = resolvedPath;
+            }
+          } else {
+            destPathInClone = path.join(cloneRoot, fileName);
+          }
+
+          const safeDest = resolveInsideDir(cloneRoot, path.relative(cloneRoot, destPathInClone), true);
+          if (!safeDest) {
+            throw new Error(`Destination path escapes repository: '${destPathInClone}'`);
+          }
+
+          fs.mkdirSync(path.dirname(safeDest), { recursive: true });
+          fs.copyFileSync(filePath, safeDest);
+        },
+        commitMsg: msg,
+        push,
+        label: fileName,
+        updateShelf: false,
+      });
+    } catch (e) {
+      console.error(`Error: Publish failed.\n${e instanceof Error ? e.message : e}`);
+      process.exit(1);
+    }
+    return;
+  }
+
+  const unitDir = target.path;
   const unitName = path.basename(unitDir);
   const { errors, warnings } = validateManifestUnitDir(unitDir, unitName);
   printValidationResults(unitName, errors, warnings);
@@ -1309,93 +1764,28 @@ export function cmdPublish(knowledgeDir: string, args: string[]): void {
     }
   }
 
-  assertGitAvailable();
-  assertSafeGitArg(toRepo, 'target repository');
-
   const manifest = loadManifest(unitDir);
   const version = manifest?.version || '1.0.0';
   const targetBranch = branchName || `knowledge/${unitName}-${version}`;
-  assertSafeGitArg(targetBranch, 'branch name');
-
-  const workClone = fs.mkdtempSync(path.join(os.tmpdir(), 'ks-publish-'));
-  fs.rmSync(workClone, { recursive: true, force: true });
+  const destSubpath = subPath || unitName;
+  const msg = commitMessage || `chore(knowledge): publish ${unitName} v${version}`;
 
   try {
-    const cloneRes = spawnSync('git', ['clone', '--', toRepo, workClone], {
-      stdio: 'pipe',
-      encoding: 'utf-8',
-      env: gitEnv(),
+    publishViaClone({
+      toRepo,
+      targetBranch,
+      targetRelPath: destSubpath,
+      populateClone: (destInRepo) => {
+        removeDirSync(destInRepo);
+        copyDirSync(unitDir, destInRepo);
+      },
+      commitMsg: msg,
+      push,
+      label: unitName,
+      updateShelf: true,
     });
-    if (cloneRes.status !== 0) {
-      throw new Error(cloneRes.stderr || 'git clone failed');
-    }
-
-    const checkoutRes = spawnSync('git', ['checkout', '-B', targetBranch], {
-      cwd: workClone,
-      stdio: 'pipe',
-      encoding: 'utf-8',
-    });
-    if (checkoutRes.status !== 0) {
-      throw new Error(checkoutRes.stderr || `git checkout -B ${targetBranch} failed`);
-    }
-
-    const destSubpath = subPath || unitName;
-    const destInRepo = resolveInsideDir(workClone, destSubpath, true);
-    if (!destInRepo) {
-      throw new Error(`Invalid destination path '${destSubpath}' inside target repository.`);
-    }
-
-    removeDirSync(destInRepo);
-    copyDirSync(unitDir, destInRepo);
-
-    // Update shelf.json if it exists at target repo root
-    if (fs.existsSync(path.join(workClone, 'shelf.json'))) {
-      const existingShelf = loadShelfCatalog(workClone);
-      const indexArgs = [workClone];
-      if (!existingShelf?.name) {
-        indexArgs.push('--name', deriveNameFromUrl(toRepo));
-      }
-      cmdIndex(indexArgs);
-    }
-
-    const addRes = spawnSync('git', ['add', '--all'], { cwd: workClone, stdio: 'pipe', encoding: 'utf-8' });
-    if (addRes.status !== 0) throw new Error(addRes.stderr || 'git add failed');
-
-    const statusRes = spawnSync('git', ['status', '--porcelain'], { cwd: workClone, encoding: 'utf-8' });
-    if (!(statusRes.stdout || '').trim()) {
-      console.log('No changes to publish (target repo already matches this unit).');
-      return;
-    }
-
-    const msg = commitMessage || `chore(knowledge): publish ${unitName} v${version}`;
-    const commitRes = spawnSync('git', ['commit', '-m', msg], {
-      cwd: workClone,
-      stdio: 'pipe',
-      encoding: 'utf-8',
-    });
-    if (commitRes.status !== 0) {
-      throw new Error(commitRes.stderr || 'git commit failed');
-    }
-
-    if (push) {
-      const pushRes = spawnSync('git', ['push', '-u', 'origin', targetBranch], {
-        cwd: workClone,
-        stdio: 'pipe',
-        encoding: 'utf-8',
-        env: gitEnv(),
-      });
-      if (pushRes.status !== 0) {
-        throw new Error(pushRes.stderr || 'git push failed');
-      }
-      console.log(`✓ Published '${unitName}' to ${toRepo} on branch '${targetBranch}'.`);
-    } else {
-      console.log(`✓ Committed '${unitName}' to temporary clone on branch '${targetBranch}'.`);
-      console.log('  Pass --push to push the branch to the remote repository.');
-    }
   } catch (e) {
     console.error(`Error: Publish failed.\n${e instanceof Error ? e.message : e}`);
     process.exit(1);
-  } finally {
-    removeDirSync(workClone);
   }
 }

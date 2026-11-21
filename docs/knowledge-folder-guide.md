@@ -53,7 +53,7 @@ knowledge/my-topic/
 
 ### Knowledge Types
 
-These are organizational guidelines — the server does not enforce type restrictions.
+These are organizational guidelines — any non-empty string is accepted as a valid type, with four built-in documented values:
 
 | Type | Has modules? | Has scripts? | Has code? | Purpose |
 |---|---|---|---|---|
@@ -119,7 +119,7 @@ The MCP server ignores:
   "$schema": "knowledge-manifest/1.0",
   "name": "my-knowledge",
   "version": "1.0.0",
-  "type": "boilerplate|template|toolkit|cookbook",
+  "type": "boilerplate",
   "doc": "overview.md",
   "description": "1-2 sentence summary for search",
   "tags": ["keyword1", "keyword2"],
@@ -162,7 +162,7 @@ The MCP server ignores:
 |---|---|
 | `name` | Must match folder name.  Lowercase, hyphens, numbers. |
 | `version` | Semantic version (e.g., `"1.0.0"`) |
-| `type` | One of: `boilerplate`, `template`, `toolkit`, `cookbook` |
+| `type` | Any non-empty string; documented values: `boilerplate`, `template`, `toolkit`, `cookbook` |
 | `description` | 1-2 sentences.  Drives search relevance. |
 
 ### Optional fields
@@ -174,7 +174,7 @@ The MCP server ignores:
 | `requires` | Other knowledge units this depends on |
 | `enhances` | Complementary knowledge (not required) |
 | `modules` | Named code modules with files and dependencies |
-| `scripts` | Automation scripts with interpreter and args |
+| `scripts` | Automation scripts with interpreter, optional integer `timeout_ms` (1000..600000), and `args`. Note: `scripts.*.args` is informational (validated for shape, not applied when a script runs). |
 | `workflows` | Named workflows (details in `workflows/<name>.json`) |
 | `references` | Documentation files with descriptions |
 | `placeholders` | Template variables used in code files |
@@ -203,4 +203,4 @@ Workflow files live at `workflows/<name>.json`:
 }
 ```
 
-Steps execute sequentially.  Errors are recorded but don't stop execution.
+Steps execute sequentially.  Errors are recorded but don't stop execution. For `run` steps, an optional `timeout_ms` must be an integer between 1000 and 600000 (defaults to 120000).

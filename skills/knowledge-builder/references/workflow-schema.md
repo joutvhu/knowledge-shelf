@@ -144,7 +144,7 @@ Complete schema and runtime constraints for workflow JSON files (`workflows/<nam
 | `args` | Optional | Array of string arguments (`{{KEY}}` placeholders are replaced) |
 | `interpreter` | Optional | One of: `python`, `python3`, `node`, `pwsh`, `powershell`, `bash`, `sh`, `cmd`. Auto-detected from file extension if omitted. |
 | `cwd` | Optional | Working directory starting with `{{ROOT_KEY}}` (defaults to unit folder) |
-| `timeout_ms` | Optional | Timeout in milliseconds (default: `120000`, max: `600000`) |
+| `timeout_ms` | Optional | Timeout in milliseconds: integer between 1000 and 600000 (default: `120000`) |
 
 ### `message` — Emit progress message
 
