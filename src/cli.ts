@@ -20,9 +20,14 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import {
+  ALLOWED_INTERPRETERS,
+  ALLOWED_WORKFLOW_ACTIONS,
+  ROOT_PLACEHOLDER_RE,
+  expandHome,
   findManifestFolders,
   findMdFiles,
   getPackageVersion,
+  normalizeListField,
   parseFrontmatter,
   resolveInsideDir,
   resolveKnowledgeDir,
@@ -392,6 +397,11 @@ function cmdAdd(knowledgeDir: string, args: string[]): void {
     process.exit(1);
   }
 
+  if (addAll && customName) {
+    console.error('Error: --name cannot be combined with --all.');
+    process.exit(1);
+  }
+
   const repoName = deriveNameFromUrl(url);
   const cacheDir = getCacheDir(knowledgeDir);
   const cloneTarget = getCloneTarget(knowledgeDir, repoName);
@@ -539,7 +549,16 @@ function cmdList(knowledgeDir: string): void {
   console.log(`Total: ${registry.sources.length} source(s)`);
 }
 
+function rejectUnknownFlags(args: string[], command: string): void {
+  const unknown = args.find((a) => a.startsWith('-'));
+  if (unknown) {
+    console.error(`Error: Unknown option '${unknown}' for '${command}'.`);
+    process.exit(1);
+  }
+}
+
 function cmdUpdate(knowledgeDir: string, args: string[]): void {
+  rejectUnknownFlags(args, 'update');
   const registry = loadRegistry(knowledgeDir);
   const targetName = args[0];
 
@@ -645,9 +664,13 @@ function cmdUpdate(knowledgeDir: string, args: string[]): void {
 
   saveRegistry(knowledgeDir, registry);
   console.log(`\nDone. ${updated} updated, ${failed} failed.`);
+  if (failed > 0) {
+    process.exit(1);
+  }
 }
 
 function cmdRemove(knowledgeDir: string, args: string[]): void {
+  rejectUnknownFlags(args, 'remove');
   const name = args[0];
 
   if (!name) {
@@ -684,6 +707,7 @@ function cmdRemove(knowledgeDir: string, args: string[]): void {
 }
 
 function cmdInfo(knowledgeDir: string, args: string[]): void {
+  rejectUnknownFlags(args, 'info');
   const name = args[0];
 
   if (!name) {
@@ -718,11 +742,13 @@ function cmdInfo(knowledgeDir: string, args: string[]): void {
     if (metadata.description) {
       console.log(`  Description:  ${metadata.description}`);
     }
-    if (Array.isArray(metadata.tags) && metadata.tags.length > 0) {
-      console.log(`  Tags:         ${metadata.tags.join(', ')}`);
+    const tags = normalizeListField(metadata, 'tags', 'keywords');
+    if (tags.length > 0) {
+      console.log(`  Tags:         ${tags.join(', ')}`);
     }
-    if (Array.isArray(metadata.aliases) && metadata.aliases.length > 0) {
-      console.log(`  Aliases:      ${metadata.aliases.join(', ')}`);
+    const aliases = normalizeListField(metadata, 'aliases');
+    if (aliases.length > 0) {
+      console.log(`  Aliases:      ${aliases.join(', ')}`);
     }
     console.log('  Files:        1');
     console.log(`  Size:         ${formatSize(stat.size)}`);
@@ -860,72 +886,129 @@ function validateManifestUnitDir(unitDir: string, expectedUnitName?: string): Va
     }
   }
 
-  const modules = manifest.modules as
-    | Record<string, { files?: string[]; guide?: string; dependencies?: string[] }>
-    | undefined;
-  if (modules) {
+  const isRecord = (v: unknown): v is Record<string, unknown> =>
+    Boolean(v) && typeof v === 'object' && !Array.isArray(v);
+
+  if (manifest.modules !== undefined && !isRecord(manifest.modules)) {
+    errors.push('Field "modules" must be an object');
+  } else if (isRecord(manifest.modules)) {
+    const modules = manifest.modules;
     const moduleNames = Object.keys(modules);
-    for (const [modName, mod] of Object.entries(modules)) {
-      if (mod.files) {
-        for (const file of mod.files) {
-          const filePath = resolveInsideDir(unitDir, file, true);
-          if (!filePath) {
-            errors.push(`modules.${modName}.files: path escapes unit folder: ${file}`);
-          } else if (!fs.existsSync(filePath)) {
-            errors.push(`modules.${modName}.files: file not found: ${file}`);
+    for (const [modName, rawMod] of Object.entries(modules)) {
+      if (!isRecord(rawMod)) {
+        errors.push(`modules.${modName}: must be an object`);
+        continue;
+      }
+      if (rawMod.files !== undefined) {
+        if (!Array.isArray(rawMod.files)) {
+          errors.push(`modules.${modName}.files: must be an array`);
+        } else {
+          for (const file of rawMod.files) {
+            if (typeof file !== 'string') {
+              errors.push(`modules.${modName}.files: entry must be a string`);
+              continue;
+            }
+            const filePath = resolveInsideDir(unitDir, file, true);
+            if (!filePath) {
+              errors.push(`modules.${modName}.files: path escapes unit folder: ${file}`);
+            } else if (!fs.existsSync(filePath)) {
+              errors.push(`modules.${modName}.files: file not found: ${file}`);
+            }
           }
         }
       }
-      if (mod.guide) {
-        const guidePath = resolveInsideDir(unitDir, mod.guide, true);
+      if (typeof rawMod.guide === 'string' && rawMod.guide) {
+        const guidePath = resolveInsideDir(unitDir, rawMod.guide, true);
         if (!guidePath) {
-          errors.push(`modules.${modName}.guide: path escapes unit folder: ${mod.guide}`);
+          errors.push(`modules.${modName}.guide: path escapes unit folder: ${rawMod.guide}`);
         } else if (!fs.existsSync(guidePath)) {
-          warnings.push(`modules.${modName}.guide: file not found: ${mod.guide}`);
+          warnings.push(`modules.${modName}.guide: file not found: ${rawMod.guide}`);
         }
       }
-      if (mod.dependencies) {
-        for (const dep of mod.dependencies) {
-          if (!moduleNames.includes(dep)) {
-            errors.push(`modules.${modName}.dependencies: unknown module "${dep}"`);
+      if (rawMod.dependencies !== undefined) {
+        if (!Array.isArray(rawMod.dependencies)) {
+          errors.push(`modules.${modName}.dependencies: must be an array`);
+        } else {
+          for (const dep of rawMod.dependencies) {
+            if (typeof dep !== 'string' || !moduleNames.includes(dep)) {
+              errors.push(`modules.${modName}.dependencies: unknown module "${String(dep)}"`);
+            }
           }
         }
       }
     }
+
+    // Detect circular module dependencies
+    const visitState = new Map<string, 'visiting' | 'done'>();
+    const checkCycle = (modName: string, stack: string[]) => {
+      if (visitState.get(modName) === 'done') return;
+      if (visitState.get(modName) === 'visiting') {
+        const start = stack.indexOf(modName);
+        const cycle = [...stack.slice(start), modName].join(' -> ');
+        errors.push(`modules.${modName}.dependencies: circular dependency detected (${cycle})`);
+        return;
+      }
+      const mod = modules[modName];
+      if (!isRecord(mod) || !Array.isArray(mod.dependencies)) {
+        visitState.set(modName, 'done');
+        return;
+      }
+      visitState.set(modName, 'visiting');
+      for (const dep of mod.dependencies) {
+        if (typeof dep === 'string' && Object.prototype.hasOwnProperty.call(modules, dep)) {
+          checkCycle(dep, [...stack, modName]);
+        }
+      }
+      visitState.set(modName, 'done');
+    };
+    for (const modName of moduleNames) {
+      if (!visitState.has(modName)) checkCycle(modName, []);
+    }
   }
 
-  const scripts = manifest.scripts as Record<string, { file?: string }> | undefined;
-  if (scripts) {
-    for (const [scriptName, script] of Object.entries(scripts)) {
-      if (script.file) {
-        const scriptPath = resolveInsideDir(unitDir, script.file, true);
+  if (manifest.scripts !== undefined && !isRecord(manifest.scripts)) {
+    errors.push('Field "scripts" must be an object');
+  } else if (isRecord(manifest.scripts)) {
+    for (const [scriptName, rawScript] of Object.entries(manifest.scripts)) {
+      if (!isRecord(rawScript)) {
+        errors.push(`scripts.${scriptName}: must be an object`);
+        continue;
+      }
+      if (typeof rawScript.file === 'string' && rawScript.file) {
+        const scriptPath = resolveInsideDir(unitDir, rawScript.file, true);
         if (!scriptPath) {
-          errors.push(`scripts.${scriptName}.file: path escapes unit folder: ${script.file}`);
+          errors.push(`scripts.${scriptName}.file: path escapes unit folder: ${rawScript.file}`);
         } else if (!fs.existsSync(scriptPath)) {
-          errors.push(`scripts.${scriptName}.file: not found: ${script.file}`);
+          errors.push(`scripts.${scriptName}.file: not found: ${rawScript.file}`);
         }
       }
     }
   }
 
-  const references = manifest.references as Record<string, { file?: string }> | undefined;
-  if (references) {
-    for (const [refName, ref] of Object.entries(references)) {
-      if (ref.file) {
-        const refPath = resolveInsideDir(unitDir, ref.file, true);
+  if (manifest.references !== undefined && !isRecord(manifest.references)) {
+    errors.push('Field "references" must be an object');
+  } else if (isRecord(manifest.references)) {
+    for (const [refName, rawRef] of Object.entries(manifest.references)) {
+      if (!isRecord(rawRef)) {
+        errors.push(`references.${refName}: must be an object`);
+        continue;
+      }
+      if (typeof rawRef.file === 'string' && rawRef.file) {
+        const refPath = resolveInsideDir(unitDir, rawRef.file, true);
         if (!refPath) {
-          errors.push(`references.${refName}.file: path escapes unit folder: ${ref.file}`);
+          errors.push(`references.${refName}.file: path escapes unit folder: ${rawRef.file}`);
         } else if (!fs.existsSync(refPath)) {
-          errors.push(`references.${refName}.file: not found: ${ref.file}`);
+          errors.push(`references.${refName}.file: not found: ${rawRef.file}`);
         }
       }
     }
   }
 
-  const workflows = manifest.workflows as Record<string, unknown> | undefined;
-  if (workflows) {
+  if (manifest.workflows !== undefined && !isRecord(manifest.workflows)) {
+    errors.push('Field "workflows" must be an object');
+  } else if (isRecord(manifest.workflows)) {
     const workflowsDir = path.join(unitDir, 'workflows');
-    for (const wfName of Object.keys(workflows)) {
+    for (const wfName of Object.keys(manifest.workflows)) {
       const wfPath = resolveInsideDir(workflowsDir, `${wfName}.json`, true);
       if (!wfPath) {
         errors.push(`workflows.${wfName}: invalid workflow name`);
@@ -938,25 +1021,11 @@ function validateManifestUnitDir(unitDir: string, expectedUnitName?: string): Va
           if (!wfDef.steps || !Array.isArray(wfDef.steps)) {
             errors.push(`workflows/${wfName}.json: missing or invalid "steps" array`);
           } else {
-            const allowedActions = new Set(['copy', 'run', 'mkdir', 'message']);
-            const allowedInterpreters = new Set([
-              'python',
-              'python3',
-              'node',
-              'pwsh',
-              'powershell',
-              'bash',
-              'sh',
-              'cmd',
-              'cmd /c',
-            ]);
-            const rootPlaceholderRe = /^\{\{[A-Za-z0-9_]+\}\}(?:[/\\].*)?$/;
-
             for (let i = 0; i < wfDef.steps.length; i++) {
               const step = wfDef.steps[i] as Record<string, unknown>;
               const prefix = `workflows/${wfName}.json step ${i + 1}`;
               const action = typeof step?.action === 'string' ? step.action : '';
-              if (!allowedActions.has(action)) {
+              if (!ALLOWED_WORKFLOW_ACTIONS.has(action)) {
                 errors.push(`${prefix}: unknown or missing action '${action}'`);
                 continue;
               }
@@ -973,12 +1042,12 @@ function validateManifestUnitDir(unitDir: string, expectedUnitName?: string): Va
                     errors.push(`${prefix} (copy): source not found: ${src}`);
                   }
                 }
-                if (!tgt || !rootPlaceholderRe.test(tgt)) {
+                if (!tgt || !ROOT_PLACEHOLDER_RE.test(tgt)) {
                   errors.push(`${prefix} (copy): target must start with a root placeholder (e.g. {{TARGET}}/...)`);
                 }
               } else if (action === 'mkdir') {
                 const p = typeof step.path === 'string' ? step.path.trim() : '';
-                if (!p || !rootPlaceholderRe.test(p)) {
+                if (!p || !ROOT_PLACEHOLDER_RE.test(p)) {
                   errors.push(`${prefix} (mkdir): path must start with a root placeholder (e.g. {{TARGET}}/...)`);
                 }
               } else if (action === 'run') {
@@ -994,8 +1063,9 @@ function validateManifestUnitDir(unitDir: string, expectedUnitName?: string): Va
                   }
                 }
                 if (typeof step.interpreter === 'string' && step.interpreter.trim()) {
-                  const interp = step.interpreter.trim().toLowerCase();
-                  if (!allowedInterpreters.has(interp)) {
+                  const rawInterp = step.interpreter.trim().toLowerCase();
+                  const interp = rawInterp === 'cmd /c' ? 'cmd' : rawInterp;
+                  if (!ALLOWED_INTERPRETERS.has(interp)) {
                     errors.push(`${prefix} (run): interpreter '${step.interpreter}' is not allowed`);
                   }
                 }
@@ -1068,11 +1138,12 @@ function syncManifestName(unitDir: string, targetName: string): void {
 }
 
 function cmdValidate(knowledgeDir: string, args: string[]): void {
+  rejectUnknownFlags(args, 'validate');
   const targetArg = args[0];
 
   // Check if targetArg refers to an external or local filesystem path directly
   if (targetArg) {
-    const localCandidate = path.resolve(targetArg);
+    const localCandidate = path.resolve(expandHome(targetArg));
     const hasPathSyntax =
       /[\\/]/.test(targetArg) ||
       targetArg.startsWith('.') ||
@@ -1237,7 +1308,7 @@ function cmdInstall(knowledgeDir: string, args: string[]): void {
     process.exit(1);
   }
 
-  const resolvedSource = path.resolve(sourceArg);
+  const resolvedSource = path.resolve(expandHome(sourceArg));
   if (!fs.existsSync(resolvedSource)) {
     console.error(`Error: Source path not found: ${sourceArg}`);
     process.exit(1);
@@ -1356,6 +1427,11 @@ function cmdInstall(knowledgeDir: string, args: string[]): void {
     for (const unitDir of manifestFolders) {
       const unitName = path.basename(unitDir);
       const destDir = resolveSafeUnitDir(knowledgeDir, unitName);
+      if (path.resolve(destDir) === path.resolve(unitDir)) {
+        console.log(`  Skipping '${unitName}' (source and destination are the same directory)`);
+        skipped++;
+        continue;
+      }
       if (fs.existsSync(destDir) && !force) {
         console.log(`  Skipping '${unitName}' (already exists; use --force to overwrite)`);
         skipped++;
@@ -1370,6 +1446,11 @@ function cmdInstall(knowledgeDir: string, args: string[]): void {
     for (const mdFile of topLevelMds) {
       const docName = path.basename(mdFile);
       const destFile = resolveSafeUnitDir(knowledgeDir, docName);
+      if (path.resolve(destFile) === path.resolve(mdFile)) {
+        console.log(`  Skipping '${docName}' (source and destination are the same path)`);
+        skipped++;
+        continue;
+      }
       if (fs.existsSync(destFile) && !force) {
         console.log(`  Skipping '${docName}' (already exists; use --force to overwrite)`);
         skipped++;
@@ -1443,6 +1524,7 @@ function printValidationResults(name: string, errors: string[], warnings: string
 }
 
 function cmdPin(knowledgeDir: string, args: string[]): void {
+  rejectUnknownFlags(args, 'pin');
   const name = args[0];
   const version = args[1];
 
@@ -1484,6 +1566,7 @@ function cmdPin(knowledgeDir: string, args: string[]): void {
 
       const destDir = resolveSafeUnitDir(knowledgeDir, source.name);
       replaceDirSync(knowledgeDir, sourceDir, destDir);
+      syncManifestName(destDir, source.name);
 
       source.commit = gitGetCommit(cloneTarget);
       source.updatedAt = new Date().toISOString();
@@ -1502,6 +1585,7 @@ function cmdPin(knowledgeDir: string, args: string[]): void {
 }
 
 function cmdUnpin(knowledgeDir: string, args: string[]): void {
+  rejectUnknownFlags(args, 'unpin');
   const name = args[0];
 
   if (!name) {
@@ -1629,7 +1713,7 @@ function cmdExport(knowledgeDir: string, args: string[]): void {
     const ext = format === 'tar' ? '.tar.gz' : '.zip';
     outputPath = path.resolve(process.cwd(), `${path.basename(name)}${ext}`);
   } else {
-    outputPath = path.resolve(outputPath);
+    outputPath = path.resolve(expandHome(outputPath));
   }
 
   console.log(`Exporting '${name}' to ${outputPath}...`);

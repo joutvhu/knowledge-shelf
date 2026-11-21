@@ -69,7 +69,13 @@ export function createKnowledgeServer(knowledgeDir: string): McpServer {
     'list_docs',
     {
       description:
-        'List all available knowledge base documents and units. Returns manifest-based knowledge units (with modules, workflows, scripts) and legacy .md documents. Use when you need a full overview of what knowledge is available.',
+        'List all available knowledge base documents and units. Returns manifest-based knowledge units (with modules, workflows, scripts) and standalone .md documents. Use when you need a full overview of what knowledge is available.',
+      annotations: {
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false,
+      },
     },
     async () => toMcpResult(toolListDocs(knowledgeDir))
   );
@@ -89,6 +95,12 @@ export function createKnowledgeServer(knowledgeDir: string): McpServer {
           .optional()
           .describe('Maximum results to return (1-100, default: 10)'),
       }),
+      annotations: {
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false,
+      },
     },
     async ({ query, max_results }) => toMcpResult(toolSearchDocs(knowledgeDir, query, max_results))
   );
@@ -97,12 +109,18 @@ export function createKnowledgeServer(knowledgeDir: string): McpServer {
     'get_doc',
     {
       description:
-        'Retrieve the main document content of a knowledge unit or legacy .md file. For manifest-based units: returns the file specified by the manifest "doc" field. For legacy .md files: returns the file content without frontmatter. Prefer get_doc_section when you only need a specific section of a large document.',
+        'Retrieve the main document content of a knowledge unit or standalone .md file. For manifest-based units: returns the file specified by the manifest "doc" field. For standalone .md files: returns the file content without frontmatter. Prefer get_doc_section when you only need a specific section of a large document.',
       inputSchema: z.object({
         name: z
           .string()
-          .describe('Knowledge unit folder name or legacy .md path (relative to knowledge directory root)'),
+          .describe('Knowledge unit folder name or standalone .md path (relative to knowledge directory root)'),
       }),
+      annotations: {
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false,
+      },
     },
     async ({ name }) => toMcpResult(toolGetDoc(knowledgeDir, name))
   );
@@ -116,6 +134,12 @@ export function createKnowledgeServer(knowledgeDir: string): McpServer {
         name: z.string().describe('Document path or knowledge unit name (relative to knowledge directory root)'),
         section: z.string().describe('Section heading text (case-insensitive, partial match supported)'),
       }),
+      annotations: {
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false,
+      },
     },
     async ({ name, section }) => toMcpResult(toolGetDocSection(knowledgeDir, name, section))
   );
@@ -130,6 +154,12 @@ export function createKnowledgeServer(knowledgeDir: string): McpServer {
           .string()
           .describe('File path relative to knowledge directory root (e.g. "my-unit/references/guide.md")'),
       }),
+      annotations: {
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false,
+      },
     },
     async ({ name }) => toMcpResult(toolGetResource(knowledgeDir, name))
   );
@@ -142,6 +172,12 @@ export function createKnowledgeServer(knowledgeDir: string): McpServer {
       inputSchema: z.object({
         name: z.string().describe('Knowledge unit folder name (relative to knowledge directory root)'),
       }),
+      annotations: {
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false,
+      },
     },
     async ({ name }) => toMcpResult(toolGetManifest(knowledgeDir, name))
   );
@@ -161,8 +197,14 @@ export function createKnowledgeServer(knowledgeDir: string): McpServer {
             'Input values for workflow placeholders (e.g. {"TARGET": "/path/to/project", "NAME": "my-app"})'
           ),
       }),
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: true,
+        idempotentHint: false,
+        openWorldHint: true,
+      },
     },
-    async ({ name, workflow, inputs }) => toMcpResult(toolRunWorkflow(knowledgeDir, name, workflow, inputs))
+    async ({ name, workflow, inputs }) => toMcpResult(await toolRunWorkflow(knowledgeDir, name, workflow, inputs))
   );
 
   return server;

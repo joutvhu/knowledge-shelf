@@ -770,6 +770,124 @@ describe('Security, Binary Detection & Script Execution Edge Cases', () => {
       fs.rmSync(dir, { recursive: true, force: true });
     }
   });
+  it('should expose tool annotations, block dot-prefixed internal paths, reject unresolved script args, and improve search indexing', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ks-sec-search-'));
+    try {
+      fs.writeFileSync(path.join(dir, '.registry.json'), JSON.stringify({ version: '1.0', sources: [] }), 'utf-8');
+      fs.mkdirSync(path.join(dir, '.cache'), { recursive: true });
+      fs.writeFileSync(path.join(dir, '.cache', 'secret.txt'), 'CACHED', 'utf-8');
+
+      const unit = path.join(dir, 'auth-unit');
+      fs.mkdirSync(path.join(unit, 'workflows'), { recursive: true });
+      fs.mkdirSync(path.join(unit, 'scripts'), { recursive: true });
+      fs.mkdirSync(path.join(unit, 'examples', 'nested-child'), { recursive: true });
+
+      fs.writeFileSync(
+        path.join(unit, 'overview.md'),
+        '# Auth Unit\n\n## OAuth2 PKCE Flow\n\nHướng dẫn bảo mật.',
+        'utf-8'
+      );
+      fs.writeFileSync(path.join(unit, 'scripts', 'echo.js'), 'console.log(process.argv[2]);', 'utf-8');
+      fs.writeFileSync(
+        path.join(unit, 'manifest.json'),
+        JSON.stringify({
+          name: 'auth-unit',
+          version: '1.0.0',
+          type: 'cookbook',
+          description: 'Authentication patterns',
+          doc: 'overview.md',
+          modules: {
+            jwt: {
+              description: 'Token verification',
+              tags: ['jwks', 'rsa256'],
+            },
+          },
+          workflows: {
+            'init-auth': { description: 'Scaffold authentication' },
+          },
+          scripts: {
+            'check-env': { file: 'scripts/echo.js', description: 'Verify environment' },
+          },
+        }),
+        'utf-8'
+      );
+      fs.writeFileSync(
+        path.join(unit, 'workflows', 'init-auth.json'),
+        JSON.stringify({
+          name: 'init-auth',
+          steps: [{ action: 'run', script: 'scripts/echo.js', args: ['{{MISSING_ARG}}'] }],
+        }),
+        'utf-8'
+      );
+      // Nested child unit inside auth-unit should not be indexed separately
+      fs.writeFileSync(
+        path.join(unit, 'examples', 'nested-child', 'manifest.json'),
+        JSON.stringify({ name: 'nested-child', version: '1.0.0', type: 'cookbook', description: 'Nested' }),
+        'utf-8'
+      );
+
+      // Standalone doc with Unicode text
+      fs.writeFileSync(
+        path.join(dir, 'security-vn.md'),
+        '---\ndescription: Tài liệu bảo mật hệ thống\ntags: security\n---\n\n# Bảo mật\n\nNội dung.',
+        'utf-8'
+      );
+
+      const { client, close } = await createConnectedClient(dir);
+      try {
+        // 1. Tool annotations
+        const { tools } = await client.listTools();
+        const getDocTool = tools.find((t) => t.name === 'get_doc');
+        const runWfTool = tools.find((t) => t.name === 'run_workflow');
+        expect(getDocTool?.annotations?.readOnlyHint).toBe(true);
+        expect(runWfTool?.annotations?.destructiveHint).toBe(true);
+
+        // 2. Internal dot-prefixed paths blocked
+        const regRes = await client.callTool({ name: 'get_resource', arguments: { name: '.registry.json' } });
+        expect(regRes.isError).toBe(true);
+        expect(getText(regRes)).toContain('Reserved internal path');
+
+        const regDocRes = await client.callTool({ name: 'get_doc', arguments: { name: '.registry.json' } });
+        expect(regDocRes.isError).toBe(true);
+        expect(getText(regDocRes)).toContain('Reserved internal path');
+
+        const cacheRes = await client.callTool({ name: 'get_resource', arguments: { name: '.cache/secret.txt' } });
+        expect(cacheRes.isError).toBe(true);
+        expect(getText(cacheRes)).toContain('Reserved internal path');
+
+        // 3. Nested manifest folder not indexed separately
+        const listRes = await client.callTool({ name: 'list_docs', arguments: {} });
+        const listedNames = JSON.parse(getText(listRes)).documents.map((d: { name: string }) => d.name);
+        expect(listedNames).toContain('auth-unit');
+        expect(listedNames).not.toContain('auth-unit/examples/nested-child');
+
+        // 4. Search matches module tags, manifest doc sections, workflow keys, and Unicode words
+        for (const q of ['jwks', 'PKCE', 'init-auth']) {
+          const sRes = await client.callTool({ name: 'search_docs', arguments: { query: q } });
+          const sJson = JSON.parse(getText(sRes));
+          expect(sJson.results[0]?.name, q).toBe('auth-unit');
+        }
+
+        const vnRes = await client.callTool({ name: 'search_docs', arguments: { query: 'bảo' } });
+        const vnJson = JSON.parse(getText(vnRes));
+        expect(vnJson.results.some((r: { name: string }) => r.name === 'security-vn.md')).toBe(true);
+
+        // 5. Unresolved placeholder in run step args is rejected
+        const wfRes = await client.callTool({
+          name: 'run_workflow',
+          arguments: { name: 'auth-unit', workflow: 'init-auth', inputs: {} },
+        });
+        expect(wfRes.isError).toBe(true);
+        const wfJson = JSON.parse(getText(wfRes));
+        expect(wfJson.scripts_run).toHaveLength(0);
+        expect(wfJson.errors[0]).toContain('unresolved placeholder');
+      } finally {
+        await close();
+      }
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
   it('should work end-to-end over StdioClientTransport with compiled dist/index.js', async () => {
     const transport = new StdioClientTransport({
       command: process.execPath,

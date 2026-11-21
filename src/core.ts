@@ -9,13 +9,28 @@
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { spawnSync } from 'node:child_process';
+import { spawn } from 'node:child_process';
 
 // ---------------------------------------------------------------------------
 // Package Metadata & Configuration
 // ---------------------------------------------------------------------------
 
 export const IGNORED_FILES = new Set(['README.md', 'manifest.json']);
+
+export const ALLOWED_WORKFLOW_ACTIONS = new Set(['copy', 'run', 'mkdir', 'message']);
+
+export const ALLOWED_INTERPRETERS = new Set([
+  'python',
+  'python3',
+  'node',
+  'pwsh',
+  'powershell',
+  'bash',
+  'sh',
+  'cmd',
+]);
+
+export const ROOT_PLACEHOLDER_RE = /^\{\{[A-Za-z0-9_]+\}\}(?:[/\\].*)?$/;
 
 export function getPackageVersion(): string {
   try {
@@ -27,7 +42,7 @@ export function getPackageVersion(): string {
   }
 }
 
-function expandHome(p: string): string {
+export function expandHome(p: string): string {
   if (p === '~' || p.startsWith('~/') || p.startsWith('~\\')) {
     const home = process.env.HOME || process.env.USERPROFILE || os.homedir() || '';
     return path.join(home, p.slice(1));
@@ -177,6 +192,17 @@ export function resolveInsideDir(baseDir: string, subPath: string, strictChild =
   }
 }
 
+/**
+ * Returns true if `targetPath` relative to `baseDir` traverses any dot-prefixed
+ * segment (e.g. `.registry.json`, `.cache`, `.git`), protecting internal files.
+ */
+export function isReservedPath(baseDir: string, targetPath: string): boolean {
+  const resolvedBase = fs.existsSync(baseDir) ? fs.realpathSync(baseDir) : path.resolve(baseDir);
+  const rel = path.relative(resolvedBase, targetPath);
+  if (!rel || rel.startsWith('..') || path.isAbsolute(rel)) return false;
+  return rel.split(/[\\/]+/).some((seg) => seg.startsWith('.'));
+}
+
 // ---------------------------------------------------------------------------
 // File System Helpers
 // ---------------------------------------------------------------------------
@@ -185,7 +211,7 @@ export function walkDir(dir: string, callback: (filePath: string) => void): void
   if (!fs.existsSync(dir)) return;
   const entries = fs.readdirSync(dir, { withFileTypes: true });
   for (const entry of entries) {
-    if (entry.name === '.git' || entry.name === '.cache' || entry.name === 'node_modules') continue;
+    if (entry.name.startsWith('.') || entry.name === 'node_modules') continue;
     const fullPath = path.join(dir, entry.name);
     if (entry.isDirectory()) {
       walkDir(fullPath, callback);
@@ -367,11 +393,64 @@ export function normalizeListField(metadata: Record<string, unknown>, ...keys: s
 // Scanning & Search Scoring
 // ---------------------------------------------------------------------------
 
+const SEARCH_EXTRAS = Symbol('searchExtras');
+
+interface SearchExtras {
+  moduleTags: string;
+  capabilityKeys: string;
+  capabilityDescriptions: string;
+}
+
+function isPlainRecord(val: unknown): val is Record<string, unknown> {
+  return Boolean(val) && typeof val === 'object' && !Array.isArray(val);
+}
+
+function collectManifestSearchExtras(manifest: Manifest): SearchExtras {
+  const moduleTags: string[] = [];
+  const capabilityKeys: string[] = [];
+  const capabilityDescriptions: string[] = [];
+
+  if (isPlainRecord(manifest.modules)) {
+    for (const mod of Object.values(manifest.modules)) {
+      if (!isPlainRecord(mod)) continue;
+      if (Array.isArray(mod.tags)) moduleTags.push(...mod.tags.map(String));
+      if (typeof mod.description === 'string') capabilityDescriptions.push(mod.description);
+    }
+  }
+
+  for (const section of [manifest.workflows, manifest.scripts, manifest.references]) {
+    if (!isPlainRecord(section)) continue;
+    for (const [key, item] of Object.entries(section)) {
+      capabilityKeys.push(key);
+      if (isPlainRecord(item) && typeof item.description === 'string') {
+        capabilityDescriptions.push(item.description);
+      }
+    }
+  }
+
+  return {
+    moduleTags: moduleTags.join(' ').toLowerCase(),
+    capabilityKeys: capabilityKeys.join(' ').toLowerCase(),
+    capabilityDescriptions: capabilityDescriptions.join(' ').toLowerCase(),
+  };
+}
+
 export function scanDocuments(knowledgeDir: string): DocEntry[] {
   const docs: DocEntry[] = [];
   if (!fs.existsSync(knowledgeDir)) return docs;
 
-  const manifestFolders = findManifestFolders(knowledgeDir);
+  const rootResolved = path.resolve(knowledgeDir);
+  const allManifestFolders = findManifestFolders(knowledgeDir).filter(
+    (folder) => path.resolve(folder) !== rootResolved
+  );
+  // Nested units inside another manifest unit belong to the parent unit
+  const manifestFolders = allManifestFolders.filter((folder) => {
+    const resolved = path.resolve(folder);
+    return !allManifestFolders.some((other) => {
+      const resolvedOther = path.resolve(other);
+      return resolvedOther !== resolved && resolved.startsWith(resolvedOther + path.sep);
+    });
+  });
 
   // Index manifest-based knowledge units
   for (const folder of manifestFolders) {
@@ -390,10 +469,28 @@ export function scanDocuments(knowledgeDir: string): DocEntry[] {
     };
 
     if (Array.isArray(manifest.aliases)) entry.aliases = manifest.aliases;
-    if (manifest.modules) entry.modules = Object.keys(manifest.modules);
-    if (manifest.workflows) entry.workflows = Object.keys(manifest.workflows);
-    if (manifest.scripts) entry.scripts = Object.keys(manifest.scripts);
-    if (manifest.references) entry.references = Object.keys(manifest.references);
+    if (isPlainRecord(manifest.modules)) entry.modules = Object.keys(manifest.modules);
+    if (isPlainRecord(manifest.workflows)) entry.workflows = Object.keys(manifest.workflows);
+    if (isPlainRecord(manifest.scripts)) entry.scripts = Object.keys(manifest.scripts);
+    if (isPlainRecord(manifest.references)) entry.references = Object.keys(manifest.references);
+
+    if (typeof manifest.doc === 'string' && manifest.doc) {
+      const docPath = resolveInsideDir(folder, manifest.doc, true);
+      if (docPath && fs.existsSync(docPath) && fs.statSync(docPath).isFile()) {
+        try {
+          const { body } = parseFrontmatter(fs.readFileSync(docPath, 'utf-8'));
+          const sections = extractSections(body);
+          if (sections.length > 0) entry.sections = sections.map((s) => s.title);
+        } catch {
+          /* skip unreadable doc */
+        }
+      }
+    }
+
+    Object.defineProperty(entry, SEARCH_EXTRAS, {
+      value: collectManifestSearchExtras(manifest),
+      enumerable: false,
+    });
 
     docs.push(entry);
   }
@@ -450,7 +547,7 @@ export function scanDocuments(knowledgeDir: string): DocEntry[] {
 
 function matchesToken(haystackLower: string, termLower: string): boolean {
   const escaped = termLower.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  return new RegExp(`(?:^|[^a-z0-9])${escaped}(?:$|[^a-z0-9])`, 'i').test(haystackLower);
+  return new RegExp(`(?:^|[^\\p{L}\\p{N}])${escaped}(?:$|[^\\p{L}\\p{N}])`, 'iu').test(haystackLower);
 }
 
 function scoreField(haystackLower: string, termLower: string, fullWeight: number): number {
@@ -472,6 +569,7 @@ export function searchScore(doc: DocEntry, queryTerms: string[]): number {
   const sectionsLower = (doc.sections || []).join(' ').toLowerCase();
   const modulesLower = (doc.modules || []).join(' ').toLowerCase();
   const typeLower = (doc.type || '').toLowerCase();
+  const extras = (doc as unknown as { [SEARCH_EXTRAS]?: SearchExtras })[SEARCH_EXTRAS];
 
   for (const term of queryTerms) {
     const t = term.toLowerCase();
@@ -484,6 +582,11 @@ export function searchScore(doc: DocEntry, queryTerms: string[]): number {
     score += scoreField(nameLower, t, 6);
     score += scoreField(sectionsLower, t, 4);
     score += scoreField(descLower, t, 2);
+    if (extras) {
+      score += scoreField(extras.moduleTags, t, 6);
+      score += scoreField(extras.capabilityKeys, t, 5);
+      score += scoreField(extras.capabilityDescriptions, t, 2);
+    }
   }
 
   return score;
@@ -650,12 +753,65 @@ export function isSafeCmdArg(arg: string): boolean {
   return !/["%!^&|<>\x00-\x1f]/.test(arg);
 }
 
-function executeRunStep(
+function runProcessAsync(
+  bin: string,
+  spawnArgs: string[],
+  cwd: string,
+  windowsVerbatimArguments: boolean,
+  timeoutMs = 120_000
+): Promise<{ stdout: string; stderr: string; status: number | null; error?: Error }> {
+  return new Promise((resolve) => {
+    const child = spawn(bin, spawnArgs, {
+      cwd,
+      stdio: ['pipe', 'pipe', 'pipe'],
+      windowsVerbatimArguments,
+    });
+
+    let stdout = '';
+    let stderr = '';
+    let settled = false;
+
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      child.kill();
+      resolve({
+        stdout,
+        stderr,
+        status: 1,
+        error: new Error(`Process timed out after ${timeoutMs}ms`),
+      });
+    }, timeoutMs);
+
+    child.stdout?.on('data', (chunk: Buffer) => {
+      stdout = (stdout + chunk.toString('utf-8')).slice(-4000);
+    });
+    child.stderr?.on('data', (chunk: Buffer) => {
+      stderr = (stderr + chunk.toString('utf-8')).slice(-2000);
+    });
+
+    child.on('error', (err) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve({ stdout, stderr, status: null, error: err });
+    });
+
+    child.on('close', (code) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve({ stdout, stderr, status: code });
+    });
+  });
+}
+
+async function executeRunStep(
   step: Record<string, unknown>,
   folder: string,
   inputs: Record<string, string>,
   results: WorkflowResults
-): void {
+): Promise<void> {
   const scriptRel = String(step.script || '');
   const argsTemplate = Array.isArray(step.args) ? (step.args as string[]) : [];
   const rawInterpreter = typeof step.interpreter === 'string' ? step.interpreter.trim() : '';
@@ -677,6 +833,12 @@ function executeRunStep(
   }
 
   const args = argsTemplate.map((a) => replacePlaceholders(String(a), inputs));
+  const unresolvedArg = args.find((a) => /\{\{[A-Za-z0-9_]+\}\}/.test(a));
+  if (unresolvedArg) {
+    results.errors.push(`Script argument '${unresolvedArg}' contains unresolved placeholder(s).`);
+    return;
+  }
+
   const ext = path.extname(resolvedScript).toLowerCase();
 
   let interpreter = rawInterpreter.toLowerCase() === 'cmd /c' ? 'cmd' : rawInterpreter;
@@ -694,26 +856,14 @@ function executeRunStep(
     interpreter = interpreterMap[ext] || 'node';
   }
 
-  const allowedInterpreters = new Set([
-    'python',
-    'python3',
-    'node',
-    'pwsh',
-    'powershell',
-    'bash',
-    'sh',
-    'cmd',
-  ]);
   const normalizedInterp = interpreter.toLowerCase();
-  if (!allowedInterpreters.has(normalizedInterp)) {
+  if (!ALLOWED_INTERPRETERS.has(normalizedInterp)) {
     results.errors.push(`Interpreter '${interpreter}' is not allowed.`);
     return;
   }
 
   if (normalizedInterp === 'cmd') {
-    // eslint-disable-next-line no-control-regex
-    const scriptUnsafe = /["%\x00-\x1f]/.test(resolvedScript);
-    const unsafe = scriptUnsafe || args.some((a) => !isSafeCmdArg(a));
+    const unsafe = !isSafeCmdArg(resolvedScript) || args.some((a) => !isSafeCmdArg(a));
     if (unsafe) {
       results.errors.push(
         `Refusing to run '${scriptRel}' with cmd.exe: the script path or an argument contains characters ` +
@@ -736,13 +886,7 @@ function executeRunStep(
   };
 
   let [bin, spawnArgs, verbatim] = buildSpawnArgs(normalizedInterp);
-  let result = spawnSync(bin, spawnArgs, {
-    cwd: folder,
-    timeout: 120_000,
-    encoding: 'utf-8',
-    stdio: ['pipe', 'pipe', 'pipe'],
-    windowsVerbatimArguments: verbatim,
-  });
+  let result = await runProcessAsync(bin, spawnArgs, folder, verbatim);
 
   // Fallback from pwsh to Windows PowerShell if pwsh is not installed
   if (
@@ -753,16 +897,10 @@ function executeRunStep(
     process.platform === 'win32'
   ) {
     [bin, spawnArgs, verbatim] = buildSpawnArgs('powershell');
-    result = spawnSync(bin, spawnArgs, {
-      cwd: folder,
-      timeout: 120_000,
-      encoding: 'utf-8',
-      stdio: ['pipe', 'pipe', 'pipe'],
-      windowsVerbatimArguments: verbatim,
-    });
+    result = await runProcessAsync(bin, spawnArgs, folder, verbatim);
   }
 
-  const stdout = (result.stdout || '').slice(-2000);
+  const stdout = result.stdout.slice(-2000);
   const stderr = (result.stderr || (result.error ? result.error.message : '')).slice(-1000);
   const exitCode = result.error ? 1 : (result.status ?? 1);
 
@@ -856,6 +994,12 @@ export function toolGetDoc(knowledgeDir: string, name: string): ToolResponse {
       isError: true,
     };
   }
+  if (isReservedPath(knowledgeDir, resolvedTarget)) {
+    return {
+      text: JSON.stringify({ error: 'Access denied. Reserved internal path.' }, null, 2),
+      isError: true,
+    };
+  }
 
   // Try as manifest-based folder first (exact or case-insensitive)
   const manifestFolder =
@@ -913,7 +1057,7 @@ export function toolGetDoc(knowledgeDir: string, name: string): ToolResponse {
     }
     const relFound = path.relative(knowledgeDir, found);
     const safeFound = resolveInsideDir(knowledgeDir, relFound, true);
-    if (!safeFound) {
+    if (!safeFound || isReservedPath(knowledgeDir, safeFound)) {
       return {
         text: JSON.stringify({ error: 'Access denied. Path outside knowledge directory.' }, null, 2),
         isError: true,
@@ -923,8 +1067,14 @@ export function toolGetDoc(knowledgeDir: string, name: string): ToolResponse {
   }
 
   try {
-    const content = fs.readFileSync(filePath, 'utf-8');
-    const { body } = parseFrontmatter(content);
+    const buf = fs.readFileSync(filePath);
+    if (buf.subarray(0, 8192).includes(0)) {
+      return {
+        text: JSON.stringify({ error: `Document '${name}' is binary and cannot be read as text.` }, null, 2),
+        isError: true,
+      };
+    }
+    const { body } = parseFrontmatter(buf.toString('utf-8'));
     return { text: `directory: ${path.dirname(filePath)}\n---\n\n${body}` };
   } catch (e) {
     return {
@@ -1000,6 +1150,12 @@ export function toolGetResource(knowledgeDir: string, name: string): ToolRespons
       isError: true,
     };
   }
+  if (isReservedPath(knowledgeDir, resolvedCandidate)) {
+    return {
+      text: JSON.stringify({ error: 'Access denied. Reserved internal path.' }, null, 2),
+      isError: true,
+    };
+  }
 
   let filePath = resolvedCandidate;
   if (!fs.existsSync(filePath)) {
@@ -1019,7 +1175,7 @@ export function toolGetResource(knowledgeDir: string, name: string): ToolRespons
     }
     const relFound = path.relative(knowledgeDir, found);
     const safeFound = resolveInsideDir(knowledgeDir, relFound, true);
-    if (!safeFound) {
+    if (!safeFound || isReservedPath(knowledgeDir, safeFound)) {
       return {
         text: JSON.stringify({ error: 'Access denied. Path outside knowledge directory.' }, null, 2),
         isError: true,
@@ -1069,6 +1225,12 @@ export function toolGetManifest(knowledgeDir: string, name: string): ToolRespons
       isError: true,
     };
   }
+  if (isReservedPath(knowledgeDir, resolvedTarget)) {
+    return {
+      text: JSON.stringify({ error: 'Access denied. Reserved internal path.' }, null, 2),
+      isError: true,
+    };
+  }
 
   const folder =
     fs.existsSync(resolvedTarget) && fs.statSync(resolvedTarget).isDirectory()
@@ -1095,7 +1257,7 @@ export function toolGetManifest(knowledgeDir: string, name: string): ToolRespons
       text: JSON.stringify(
         {
           error: `No manifest.json in '${name}'.`,
-          hint: 'This is a legacy knowledge folder without structured metadata.',
+          hint: 'This is a standalone knowledge folder without structured metadata.',
         },
         null,
         2
@@ -1108,16 +1270,22 @@ export function toolGetManifest(knowledgeDir: string, name: string): ToolRespons
   return { text: JSON.stringify(manifest, null, 2) };
 }
 
-export function toolRunWorkflow(
+export async function toolRunWorkflow(
   knowledgeDir: string,
   name: string,
   workflow: string,
   inputsArg: unknown
-): ToolResponse {
+): Promise<ToolResponse> {
   const resolvedTarget = resolveInsideDir(knowledgeDir, name, true);
   if (!resolvedTarget) {
     return {
       text: JSON.stringify({ error: 'Access denied. Path outside knowledge directory.' }, null, 2),
+      isError: true,
+    };
+  }
+  if (isReservedPath(knowledgeDir, resolvedTarget)) {
+    return {
+      text: JSON.stringify({ error: 'Access denied. Reserved internal path.' }, null, 2),
       isError: true,
     };
   }
@@ -1232,7 +1400,7 @@ export function toolRunWorkflow(
       if (action === 'copy') {
         executeCopyStep(step, folder, inputValues, results);
       } else if (action === 'run') {
-        executeRunStep(step, folder, inputValues, results);
+        await executeRunStep(step, folder, inputValues, results);
       } else if (action === 'mkdir') {
         executeMkdirStep(step, inputValues, results);
       } else if (action === 'message') {

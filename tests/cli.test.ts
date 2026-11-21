@@ -646,5 +646,110 @@ describe('CLI Commands', () => {
       runCli(`export exp-unit --output "${nestedOut}"`, tmpDir);
       expect(fs.existsSync(nestedOut)).toBe(true);
     });
+
+    it('pin <name> <ref> keeps manifest.name synced for aliased units', () => {
+      const repoDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ks-pin-alias-'));
+      try {
+        const git = (args: string[]) =>
+          execSync(`git ${args.join(' ')}`, { cwd: repoDir, stdio: 'pipe', encoding: 'utf-8' });
+        git(['init']);
+        git(['config', 'user.email', 'test@example.com']);
+        git(['config', 'user.name', 'Test User']);
+        fs.writeFileSync(
+          path.join(repoDir, 'manifest.json'),
+          JSON.stringify({ name: 'orig-name', version: '1.0.0', type: 'cookbook', description: 'v1' }),
+          'utf-8'
+        );
+        git(['add', '.']);
+        git(['commit', '-m', '"v1"']);
+        git(['tag', 'v1.0.0']);
+
+        fs.writeFileSync(
+          path.join(repoDir, 'manifest.json'),
+          JSON.stringify({ name: 'orig-name', version: '2.0.0', type: 'cookbook', description: 'v2' }),
+          'utf-8'
+        );
+        git(['add', '.']);
+        git(['commit', '-m', '"v2"']);
+
+        runCli('init', tmpDir);
+        runCli(`add "${repoDir}" --name my-alias`, tmpDir);
+        runCli('pin my-alias v1.0.0', tmpDir);
+        expect(runCli('validate my-alias', tmpDir)).toContain('my-alias — OK');
+      } finally {
+        fs.rmSync(repoDir, { recursive: true, force: true });
+      }
+    });
+
+    it('validate detects circular module dependencies and malformed manifest objects without crashing', () => {
+      runCli('init', tmpDir);
+      const cyclicDir = path.join(tmpDir, 'cyclic-unit');
+      fs.mkdirSync(cyclicDir);
+      fs.writeFileSync(
+        path.join(cyclicDir, 'manifest.json'),
+        JSON.stringify({
+          name: 'cyclic-unit',
+          version: '1.0.0',
+          type: 'boilerplate',
+          description: 'Cyclic deps and null module',
+          modules: {
+            a: { dependencies: ['b'] },
+            b: { dependencies: ['a'] },
+            broken: null,
+          },
+          scripts: 'invalid',
+        }),
+        'utf-8'
+      );
+
+      const res = run(['validate', 'cyclic-unit'], tmpDir);
+      expect(res.status).toBe(1);
+      expect(res.stdout).toContain('circular dependency detected');
+      expect(res.stdout).toContain('modules.broken: must be an object');
+      expect(res.stdout).toContain('Field "scripts" must be an object');
+    });
+
+    it('info shows single-value tags/aliases, update exits 1 on failure, and install --all skips self', () => {
+      runCli('init', tmpDir);
+      fs.writeFileSync(
+        path.join(tmpDir, 'single-meta.md'),
+        '---\ndescription: Single tag doc\ntags: cucumber\naliases: cuke\n---\n\n# Single Meta\n\nBody.',
+        'utf-8'
+      );
+      const infoOut = runCli('info single-meta.md', tmpDir);
+      expect(infoOut).toContain('Tags:         cucumber');
+      expect(infoOut).toContain('Aliases:      cuke');
+
+      // install --all --force pointing at knowledgeDir itself skips self cleanly
+      const selfInstall = run(['install', tmpDir, '--all', '--force'], tmpDir);
+      expect(selfInstall.status).toBe(0);
+      expect(selfInstall.stdout).toContain('0 installed, 1 skipped');
+      expect(fs.readFileSync(path.join(tmpDir, 'single-meta.md'), 'utf-8')).toContain('Single tag doc');
+
+      // update rejects unknown flags and exits 1 when a remote source fails
+      const badFlag = run(['update', '--all'], tmpDir);
+      expect(badFlag.status).toBe(1);
+      expect(badFlag.stderr).toContain('Unknown option');
+
+      fs.writeFileSync(
+        path.join(tmpDir, '.registry.json'),
+        JSON.stringify({
+          version: '1.0',
+          sources: [
+            {
+              name: 'broken-remote',
+              url: 'https://invalid.invalid/nonexistent.git',
+              commit: '0000000',
+              installedAt: new Date().toISOString(),
+              updatedAt: new Date().toISOString(),
+            },
+          ],
+        }),
+        'utf-8'
+      );
+      const failUpdate = run(['update'], tmpDir);
+      expect(failUpdate.status).toBe(1);
+      expect(failUpdate.stdout).toContain('1 failed');
+    });
   });
 });

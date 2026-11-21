@@ -26,6 +26,7 @@ List all available knowledge base documents and units.
 | `workflows` | string[] | Workflow names |
 | `scripts` | string[] | Script names |
 | `references` | string[] | Reference names |
+| `sections` | string[] | Heading titles extracted from manifest `doc` file (when present) |
 
 **Document fields (standalone .md):**
 | Field | Type | Description |
@@ -365,7 +366,7 @@ Retrieve the `manifest.json` of a knowledge folder.
 ```json
 {
   "error": "No manifest.json in 'guides'.",
-  "hint": "This is a legacy knowledge folder without structured metadata."
+  "hint": "This is a standalone knowledge folder without structured metadata."
 }
 ```
 
@@ -380,7 +381,7 @@ Execute a predefined workflow from a knowledge folder.
 |---|---|---|---|
 | `name` | string | ✅ | Knowledge folder name |
 | `workflow` | string | ✅ | Workflow name (matches filename in `workflows/`) |
-| `inputs` | string | ❌ | JSON string of input values for placeholder replacement |
+| `inputs` | object | ❌ | Key-value map (`Record<string, string>`) of input values for placeholder replacement |
 
 **⚠️ Side effects:**  This tool creates files, runs scripts, and creates directories.  It is intentionally excluded from `autoApprove` in MCP configuration.
 
@@ -400,7 +401,11 @@ Execute a predefined workflow from a knowledge folder.
 {
   "name": "cucumber-boilerplate",
   "workflow": "setup-project",
-  "inputs": "{\"TARGET\": \"C:/projects/new-qa\", \"PACKAGE_NAME\": \"com.example.qa\", \"APP_URL\": \"http://localhost:4200\"}"
+  "inputs": {
+    "TARGET": "C:/projects/new-qa",
+    "PACKAGE_NAME": "com.example.qa",
+    "APP_URL": "http://localhost:4200"
+  }
 }
 ```
 
