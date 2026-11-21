@@ -173,7 +173,8 @@ export function toolSearchDocs(
   }
 
   const queryTerms = query.trim().split(/\s+/).filter(Boolean);
-  if (queryTerms.length === 0) {
+  const hasFilters = Boolean(options.type || options.unit || (options.tags && options.tags.length > 0));
+  if (queryTerms.length === 0 && !hasFilters) {
     return {
       text: JSON.stringify({ query, total: 0, message: 'Empty query.' }, null, 2),
     };
@@ -402,6 +403,9 @@ export function toolGetResource(
   }
 
   let filePath: string | null = null;
+  const normalizedRel = name.replace(/\\/g, '/').replace(/^\/+/, '');
+  const firstSegment = normalizedRel.includes('/') ? normalizedRel.split('/')[0] : '';
+
   for (const dir of dirs) {
     const resolvedCandidate = resolveInsideDir(dir, name, true)!;
     if (fs.existsSync(resolvedCandidate)) {
@@ -420,6 +424,18 @@ export function toolGetResource(
       }
       filePath = safeFound;
       break;
+    }
+
+    // If this layer already defines a manifest unit matching the top-level folder segment,
+    // it shadows lower layers for that entire unit — do not leak files from shadowed units.
+    if (firstSegment) {
+      const shadowedFolder = resolveInsideDir(dir, firstSegment, true);
+      const hasShadowedUnit =
+        (shadowedFolder && fs.existsSync(path.join(shadowedFolder, 'manifest.json'))) ||
+        Boolean(findManifestFolderCaseInsensitive(dir, firstSegment));
+      if (hasShadowedUnit) {
+        break;
+      }
     }
   }
 
@@ -534,10 +550,10 @@ export function toolGetModule(
   includeDependencies = true
 ): ToolResponse {
   const dirs = toDirs(knowledgeDirs);
-  const { folder, error } = resolveManifestFolderAcrossLayers(dirs, name);
+  const { folder, layerDir, error } = resolveManifestFolderAcrossLayers(dirs, name);
   if (error) return error;
 
-  if (!folder) {
+  if (!folder || !layerDir) {
     return {
       text: JSON.stringify({ error: `Knowledge folder '${name}' not found.` }, null, 2),
       isError: true,
@@ -560,7 +576,7 @@ export function toolGetModule(
     };
   }
 
-  const unitRel = manifest.name || path.basename(folder);
+  const unitRel = path.relative(layerDir, folder).replace(/\\/g, '/');
   return {
     text: JSON.stringify(
       {

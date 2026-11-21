@@ -113,7 +113,8 @@ export function rankDocuments(
   options: SearchOptions = {}
 ): SearchResultEntry[] {
   const queryTerms = query.trim().split(/\s+/).filter(Boolean);
-  if (queryTerms.length === 0) return [];
+  const hasFilters = Boolean(options.type || options.unit || (options.tags && options.tags.length > 0));
+  if (queryTerms.length === 0 && !hasFilters) return [];
 
   const filterType = options.type?.toLowerCase().trim();
   const filterTags = options.tags?.map((t) => t.toLowerCase().trim()).filter(Boolean) || [];
@@ -143,7 +144,7 @@ export function rankDocuments(
       if (!filterTags.every((t) => docTagSet.has(t))) continue;
     }
 
-    let score = searchScore(doc, queryTerms);
+    let score = queryTerms.length === 0 ? 1 : searchScore(doc, queryTerms);
     const extras = getSearchExtras(doc);
     const contentSnippets: string[] = [];
 

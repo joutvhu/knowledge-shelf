@@ -870,6 +870,7 @@ export function cmdImport(knowledgeDir: string, args: string[]): void {
   let archiveArg = '';
   let customName = '';
   let force = false;
+  let trusted = false;
 
   for (let i = 0; i < args.length; i++) {
     if (args[i] === '--name') {
@@ -880,6 +881,8 @@ export function cmdImport(knowledgeDir: string, args: string[]): void {
       customName = args[++i];
     } else if (args[i] === '--force' || args[i] === '-f') {
       force = true;
+    } else if (args[i] === '--trust') {
+      trusted = true;
     } else if (args[i].startsWith('-')) {
       console.error(`Error: Unknown option '${args[i]}' for 'import'.`);
       process.exit(1);
@@ -938,7 +941,9 @@ export function cmdImport(knowledgeDir: string, args: string[]): void {
       throw new Error(String(res.stderr || (res.error ? res.error.message : 'extraction failed')));
     }
 
-    const entries = fs.readdirSync(extractDir, { withFileTypes: true });
+    const entries = fs
+      .readdirSync(extractDir, { withFileTypes: true })
+      .filter((e) => !e.name.startsWith('.') && e.name !== '__MACOSX');
     if (entries.length === 0) {
       console.error('Error: Archive is empty.');
       process.exit(1);
@@ -957,6 +962,23 @@ export function cmdImport(knowledgeDir: string, args: string[]): void {
     }
 
     cmdInstall(knowledgeDir, installArgs);
+
+    // Replace transient temp extraction path in registry with archive origin & safe trust state
+    const registry = loadRegistry(knowledgeDir);
+    const tempPrefix = `local:${extractDir}`;
+    let changed = false;
+    for (const entry of registry.sources) {
+      if (entry.url.startsWith(tempPrefix)) {
+        entry.url = `archive:${archivePath}`;
+        if (!trusted) {
+          delete entry.trusted;
+        }
+        changed = true;
+      }
+    }
+    if (changed) {
+      saveRegistry(knowledgeDir, registry);
+    }
   } catch (e) {
     console.error(`Error: Failed to import archive.\n${e instanceof Error ? e.message : e}`);
     process.exit(1);

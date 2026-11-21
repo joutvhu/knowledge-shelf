@@ -257,6 +257,10 @@ describe('CLI v2 Ecosystem & Git Sharing', () => {
       expect(runCli(['import', zipSolo], importDir).status).toBe(0);
       expect(fs.existsSync(path.join(importDir, 'pkg-unit', 'manifest.json'))).toBe(true);
       expect(fs.existsSync(path.join(importDir, 'solo.md'))).toBe(true);
+      const reg = JSON.parse(fs.readFileSync(path.join(importDir, '.registry.json'), 'utf-8'));
+      const pkgEntry = reg.sources.find((s: { name: string }) => s.name === 'pkg-unit');
+      expect(pkgEntry.url).toBe(`archive:${zipUnit}`);
+      expect(pkgEntry.trusted).toBeUndefined();
     } finally {
       fs.rmSync(importDir, { recursive: true, force: true });
     }

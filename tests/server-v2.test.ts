@@ -195,6 +195,7 @@ describe('Multi-Layer, Search v2, Module Resolution, Resources & Workflow v1.1',
       const globalShadowed = path.join(globalDir, 'shared-unit');
       fs.mkdirSync(globalShadowed, { recursive: true });
       fs.writeFileSync(path.join(globalShadowed, 'overview.md'), '# Global Old', 'utf-8');
+      fs.writeFileSync(path.join(globalShadowed, 'only-in-global.md'), 'Shadowed secret', 'utf-8');
       fs.writeFileSync(
         path.join(globalShadowed, 'manifest.json'),
         JSON.stringify({
@@ -241,9 +242,14 @@ describe('Multi-Layer, Search v2, Module Resolution, Resources & Workflow v1.1',
         expect(shared.version).toBe('2.0.0');
         expect(shared.source_layer).toBe(projectDir);
 
-        // 2. get_doc reads project override; deprecated unit shows banner
+        // 2. get_doc reads project override; shadowed unit does not leak global-only resources; deprecated unit shows banner
         const docRes = await client.callTool({ name: 'get_doc', arguments: { name: 'shared-unit' } });
         expect(getText(docRes)).toContain('Project override.');
+        const shadowedRes = await client.callTool({
+          name: 'get_resource',
+          arguments: { name: 'shared-unit/only-in-global.md' },
+        });
+        expect(shadowedRes.isError).toBe(true);
         const depDocRes = await client.callTool({ name: 'get_doc', arguments: { name: 'legacy-unit' } });
         expect(getText(depDocRes)).toContain('WARNING (deprecated)');
         expect(getText(depDocRes)).toContain('shared-unit');
