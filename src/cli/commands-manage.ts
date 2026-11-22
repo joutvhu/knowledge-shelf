@@ -11,6 +11,7 @@ import {
   findManifestFolders,
   findMdFiles,
   inspectUnitSecurity,
+  loadManifest,
   normalizeListField,
   parseFrontmatter,
   rankDocuments,
@@ -36,6 +37,10 @@ import {
   resolveSafeUnitDir,
   saveRegistry,
 } from './registry.js';
+
+function isSafeUnitSegment(name: string): boolean {
+  return Boolean(name) && !name.startsWith('.') && !name.includes('/') && !name.includes('\\') && name !== '..';
+}
 
 export function rejectUnknownFlags(args: string[], command: string): void {
   const unknown = args.find((a) => a.startsWith('-'));
@@ -177,7 +182,7 @@ export function cmdRemove(knowledgeDir: string, args: string[]): void {
   console.log(`✓ Removed '${name}'`);
 }
 
-export function cmdInfo(knowledgeDir: string, args: string[]): void {
+export function cmdInfo(knowledgeDirs: string | string[], args: string[]): void {
   rejectUnknownFlags(args, 'info');
   const name = args[0];
 
@@ -186,16 +191,31 @@ export function cmdInfo(knowledgeDir: string, args: string[]): void {
     process.exit(1);
   }
 
-  let unitDir = resolveSafeUnitDir(knowledgeDir, name);
-  if (!fs.existsSync(unitDir) && !name.endsWith('.md')) {
-    const mdCandidate = resolveSafeUnitDir(knowledgeDir, `${name}.md`);
-    if (fs.existsSync(mdCandidate)) {
-      unitDir = mdCandidate;
+  const dirs = Array.isArray(knowledgeDirs) ? knowledgeDirs : [knowledgeDirs];
+  let unitDir: string | null = null;
+  let knowledgeDir = dirs[0];
+
+  for (const kDir of dirs) {
+    if (!fs.existsSync(kDir)) continue;
+    const directCandidate = resolveInsideDir(kDir, name, true);
+    if (directCandidate && fs.existsSync(directCandidate)) {
+      unitDir = directCandidate;
+      knowledgeDir = kDir;
+      break;
+    }
+    if (!name.endsWith('.md')) {
+      const mdCandidate = resolveInsideDir(kDir, `${name}.md`, true);
+      if (mdCandidate && fs.existsSync(mdCandidate)) {
+        unitDir = mdCandidate;
+        knowledgeDir = kDir;
+        break;
+      }
     }
   }
 
-  if (!fs.existsSync(unitDir)) {
-    console.error(`Error: '${name}' not found in ${knowledgeDir}`);
+  if (!unitDir) {
+    const displayDir = dirs.length > 1 ? dirs.join(', ') : dirs[0];
+    console.error(`Error: '${name}' not found in ${displayDir}`);
     process.exit(1);
   }
 
@@ -331,13 +351,27 @@ export function cmdInfo(knowledgeDir: string, args: string[]): void {
   console.log('');
 }
 
-export function cmdValidate(knowledgeDir: string, args: string[]): void {
+export function cmdValidate(knowledgeDirs: string | string[], args: string[]): void {
   rejectUnknownFlags(args, 'validate');
   const targetArg = args[0];
+  const dirs = Array.isArray(knowledgeDirs) ? knowledgeDirs : [knowledgeDirs];
 
-  const installedUnits = fs.existsSync(knowledgeDir)
-    ? new Set(scanDocuments(knowledgeDir).map((d) => d.name))
+  const installedUnits = dirs.some((d) => fs.existsSync(d))
+    ? new Set(scanDocuments(dirs).map((d) => d.name))
     : undefined;
+
+  let knowledgeDir = dirs[0];
+  if (targetArg) {
+    for (const d of dirs) {
+      if (!fs.existsSync(d)) continue;
+      const targetDir = path.join(d, targetArg);
+      const targetMd = targetArg.endsWith('.md') ? targetDir : `${targetDir}.md`;
+      if (fs.existsSync(targetDir) || fs.existsSync(targetMd)) {
+        knowledgeDir = d;
+        break;
+      }
+    }
+  }
 
   if (targetArg) {
     const localCandidate = path.resolve(expandHome(targetArg));
@@ -681,11 +715,16 @@ export function cmdInstall(knowledgeDir: string, args: string[]): void {
     process.exit(1);
   }
 
-  const unitName = customName || path.basename(resolvedSource);
+  const manifest = loadManifest(resolvedSource);
+  const derivedDefault =
+    manifest?.name && isSafeUnitSegment(manifest.name)
+      ? manifest.name
+      : path.basename(resolvedSource);
+  const unitName = customName || derivedDefault;
   console.log(`Validating '${unitName}'...`);
   const { errors, warnings } = validateManifestUnitDir(
     resolvedSource,
-    customName ? path.basename(resolvedSource) : unitName
+    unitName
   );
   printValidationResults(unitName, errors, warnings);
 
@@ -954,6 +993,18 @@ export function cmdImport(knowledgeDir: string, args: string[]): void {
     let installSource = extractDir;
     if (entries.length === 1) {
       installSource = path.join(extractDir, entries[0].name);
+    } else if (entries.some((e) => e.name === 'manifest.json')) {
+      installSource = extractDir;
+      if (!customName) {
+        try {
+          const m = JSON.parse(fs.readFileSync(path.join(extractDir, 'manifest.json'), 'utf-8'));
+          if (m?.name && typeof m.name === 'string' && isSafeUnitSegment(m.name)) {
+            customName = m.name;
+          }
+        } catch {
+          /* ignore */
+        }
+      }
     }
 
     const installArgs = [installSource];

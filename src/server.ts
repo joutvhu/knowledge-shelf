@@ -329,7 +329,12 @@ export function createKnowledgeServer(
       const rawPath = Array.isArray(variables.path)
         ? variables.path.join('/')
         : String(variables.path || '');
-      const relPath = decodeURIComponent(rawPath).replace(/^\/+/, '');
+      let relPath = '';
+      try {
+        relPath = decodeURIComponent(rawPath).replace(/^\/+/, '');
+      } catch {
+        relPath = rawPath.replace(/^\/+/, '');
+      }
       const resDoc = toolGetDoc(knowledgeDirs, relPath);
       if (!resDoc.isError) {
         return {

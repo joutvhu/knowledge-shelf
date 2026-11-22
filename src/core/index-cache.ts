@@ -31,10 +31,12 @@ export interface ReferenceIndexInfo {
 
 export interface SearchExtras {
   moduleTags: string;
+  moduleTagsList: string[];
   capabilityKeys: string;
   capabilityDescriptions: string;
   appliesToText: string;
   referenceTags: string;
+  referenceTagsList: string[];
   referenceSections: string[];
   references: ReferenceIndexInfo[];
   docBody: string;
@@ -155,10 +157,12 @@ function collectManifestSearchExtras(manifest: Manifest, folder: string, docBody
 
   return {
     moduleTags: moduleTags.join(' ').toLowerCase(),
+    moduleTagsList: moduleTags,
     capabilityKeys: capabilityKeys.join(' ').toLowerCase(),
     capabilityDescriptions: capabilityDescriptions.join(' ').toLowerCase(),
     appliesToText: appliesToTokens.join(' ').toLowerCase(),
     referenceTags: referenceTags.join(' ').toLowerCase(),
+    referenceTagsList: referenceTags,
     referenceSections,
     references,
     docBody,
@@ -289,6 +293,8 @@ function scanSingleLayerUncached(knowledgeDir: string): DocEntry[] {
     Object.defineProperty(entry, SEARCH_EXTRAS, {
       value: {
         moduleTags: '',
+        moduleTagsList: [],
+        referenceTagsList: [],
         capabilityKeys: '',
         capabilityDescriptions: '',
         appliesToText: '',

@@ -519,12 +519,69 @@ export function cmdAdd(knowledgeDir: string, args: string[]): void {
     return;
   }
 
-  // Single unit mode
+  // Single unit or file mode
   const sourceDir = subPath ? resolveInsideDir(cloneTarget, subPath, true) : cloneTarget;
   if (!sourceDir || !fs.existsSync(sourceDir)) {
     console.error(`Error: Path '${subPath}' not found in repository.`);
     removeDirSync(cloneTarget);
     process.exit(1);
+  }
+
+  const isFile = fs.statSync(sourceDir).isFile();
+  if (isFile) {
+    let derivedDefault = path.basename(sourceDir);
+    let name = customName || derivedDefault;
+    if (sourceDir.toLowerCase().endsWith('.md') && !name.toLowerCase().endsWith('.md')) {
+      name = `${name}.md`;
+    }
+    const destFile = resolveSafeUnitDir(knowledgeDir, name);
+
+    const registry = loadRegistry(knowledgeDir);
+    const existing = registry.sources.find((s) => s.name === name);
+    if (existing && !force) {
+      console.error(`Error: '${name}' is already installed.  Use 'update ${name}' or pass --force.`);
+      removeDirSync(cloneTarget);
+      process.exit(1);
+    }
+    if (fs.existsSync(destFile) && !force) {
+      console.error(`Error: File '${name}' already exists in knowledge folder. Pass --force to overwrite.`);
+      removeDirSync(cloneTarget);
+      process.exit(1);
+    }
+
+    if (!noVerify && sourceDir.toLowerCase().endsWith('.md')) {
+      const { errors, warnings } = validateStandaloneMdFile(sourceDir);
+      printValidationResults(name, errors, warnings);
+      if (errors.length > 0) {
+        console.error(`Error: Validation failed for '${name}'. Aborting add (use --no-verify to skip).`);
+        removeDirSync(cloneTarget);
+        process.exit(1);
+      }
+    }
+
+    fs.copyFileSync(sourceDir, destFile);
+
+    const now = new Date().toISOString();
+    const checksum = computeUnitChecksum(destFile);
+    const entry: RegistryEntry = {
+      name,
+      url,
+      path: subPath || undefined,
+      ...(branch ? { branch } : {}),
+      commit,
+      ...(fullCommit ? { fullCommit } : {}),
+      ...(pinAfter || (ref && !branch) ? { pin: ref || commit } : {}),
+      checksum,
+      ...(trusted ? { trusted: true } : {}),
+      installedAt: existing?.installedAt || now,
+      updatedAt: now,
+    };
+
+    recordInstalledSource(registry, entry);
+    saveRegistry(knowledgeDir, registry);
+    removeDirSync(cloneTarget);
+    console.log(`✓ Installed '${name}' (${commit})`);
+    return;
   }
 
   let derivedDefault = subPath ? path.basename(subPath) : repoName;
@@ -650,6 +707,12 @@ export function cmdUpdate(knowledgeDir: string, args: string[]): void {
       }
       try {
         const destDir = resolveSafeUnitDir(knowledgeDir, source.name);
+        if (!force && hasLocalModifications(destDir, source.checksum)) {
+          console.log(
+            `  ⚠ Skipping '${source.name}' (local modifications detected; pass --force to overwrite)`
+          );
+          continue;
+        }
         const ok = installValidated(knowledgeDir, localPath, destDir, source.name, noVerify);
         if (!ok) {
           failed++;
@@ -719,6 +782,12 @@ export function cmdUpdate(knowledgeDir: string, args: string[]): void {
         }
 
         const destDir = resolveSafeUnitDir(knowledgeDir, source.name);
+        if (!force && hasLocalModifications(destDir, source.checksum)) {
+          console.log(
+            `  ⚠ Skipping '${source.name}' (local modifications detected; pass --force to overwrite)`
+          );
+          continue;
+        }
         const ok = installValidated(knowledgeDir, installSource, destDir, source.name, noVerify);
         if (!ok) {
           failed++;
@@ -999,6 +1068,14 @@ export function cmdSync(knowledgeDir: string, args: string[]): void {
       process.exit(1);
     } else if (!fileArg) {
       fileArg = args[i];
+    }
+  }
+
+  if (fileArg) {
+    const explicitConfig = path.resolve(expandHome(fileArg));
+    if (!fs.existsSync(explicitConfig)) {
+      console.error(`Error: Config file not found: ${fileArg}`);
+      process.exit(1);
     }
   }
 

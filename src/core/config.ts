@@ -125,6 +125,9 @@ export function resolveKnowledgeDir(explicitDir?: string): string {
     return path.resolve(expandHome(process.env.KNOWLEDGE_DIR));
   }
 
+  const agentsLocal = findWalkUpAgentsKnowledgeDir(process.cwd());
+  if (agentsLocal) return agentsLocal;
+
   const found = findWalkUpRegistryDir(process.cwd());
   if (found) return found;
 
@@ -208,7 +211,7 @@ export function resolveKnowledgeDirs(
 function isPathInside(base: string, target: string, strictChild: boolean): boolean {
   const rel = path.relative(base, target);
   if (!rel) return !strictChild;
-  return !rel.startsWith('..') && !path.isAbsolute(rel);
+  return !(rel === '..' || rel.startsWith('..' + path.sep)) && !path.isAbsolute(rel);
 }
 
 /**
@@ -250,12 +253,15 @@ export function resolveInsideDir(baseDir: string, subPath: string, strictChild =
 }
 
 /**
- * Returns true if `targetPath` relative to `baseDir` traverses any dot-prefixed
- * segment (e.g. `.registry.json`, `.cache`, `.git`), protecting internal files.
+ * Returns true if `targetPath` relative to `baseDir` traverses internal shelf files
+ * (root dot-items like `.registry.json`, `.cache`, `.git`, or `.git` directory at any depth).
  */
 export function isReservedPath(baseDir: string, targetPath: string): boolean {
   const resolvedBase = fs.existsSync(baseDir) ? fs.realpathSync(baseDir) : path.resolve(baseDir);
   const rel = path.relative(resolvedBase, targetPath);
-  if (!rel || rel.startsWith('..') || path.isAbsolute(rel)) return false;
-  return rel.split(/[\\/]+/).some((seg) => seg.startsWith('.'));
+  if (!rel || rel === '..' || rel.startsWith('..' + path.sep) || path.isAbsolute(rel)) return false;
+  const segments = rel.split(/[\\/]+/);
+  if (segments[0].startsWith('.')) return true;
+  if (segments.some((seg) => seg === '.git')) return true;
+  return false;
 }

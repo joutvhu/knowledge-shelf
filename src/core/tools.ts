@@ -106,7 +106,11 @@ function resolveManifestFolderAcrossLayers(
       };
     }
 
-    if (fs.existsSync(resolvedTarget) && fs.statSync(resolvedTarget).isDirectory()) {
+    if (
+      fs.existsSync(resolvedTarget) &&
+      fs.statSync(resolvedTarget).isDirectory() &&
+      fs.existsSync(path.join(resolvedTarget, 'manifest.json'))
+    ) {
       return { folder: resolvedTarget, layerDir: dir };
     }
     const ci = findManifestFolderCaseInsensitive(dir, name);
@@ -262,7 +266,11 @@ export function toolGetDoc(knowledgeDirs: string | string[], name: string): Tool
   let foundFilePath: string | null = null;
   for (const dir of dirs) {
     const resolvedTarget = resolveInsideDir(dir, name, true)!;
-    if (fs.existsSync(resolvedTarget) && !fs.statSync(resolvedTarget).isDirectory()) {
+    if (
+      fs.existsSync(resolvedTarget) &&
+      !fs.statSync(resolvedTarget).isDirectory() &&
+      resolvedTarget.toLowerCase().endsWith('.md')
+    ) {
       foundFilePath = resolvedTarget;
       break;
     }
@@ -409,7 +417,6 @@ export function toolGetResource(
 
   let filePath: string | null = null;
   const normalizedRel = name.replace(/\\/g, '/').replace(/^\/+/, '');
-  const firstSegment = normalizedRel.includes('/') ? normalizedRel.split('/')[0] : '';
 
   for (const dir of dirs) {
     const resolvedCandidate = resolveInsideDir(dir, name, true)!;
@@ -717,6 +724,13 @@ export async function toolRunWorkflow(
 
   for (const [k, d] of Object.entries(defs)) {
     if (!(k in inputValues) && d.default !== undefined) {
+      inputValues[k] = String(d.default);
+    }
+  }
+
+  // Fallback defaults from manifest.placeholders for placeholders not defined in workflow inputs
+  for (const [k, d] of Object.entries(manifestPh)) {
+    if (isRecord(d) && d.default !== undefined && !(k in inputValues)) {
       inputValues[k] = String(d.default);
     }
   }

@@ -8,15 +8,19 @@ Complete reference for all Knowledge Shelf CLI commands.
 
 | Option | Description |
 |---|---|
-| `--dir <path>` | Explicit path to knowledge directory (overrides all other resolution) |
+| `--dir <path>` | Explicit path to knowledge directory (repeatable for layered MCP/search/list) |
+| `--read-only` | (MCP server) Disable side-effecting workflow execution (`dry_run: true` still allowed) |
+| `--strict-trust` | (MCP server) Block script execution in untrusted remote units |
+| `--include-global` | (MCP server / CLI) Append `~/.knowledge` after explicit `--dir` layers |
+| `--no-global` | (MCP server / CLI) Do not auto-append `~/.knowledge` |
 
 ### Knowledge Directory Resolution
 
-The CLI finds the knowledge directory in this order:
+The CLI and MCP server find knowledge directories in this order:
 
-1. `--dir <path>` flag (highest priority)
-2. `KNOWLEDGE_DIR` environment variable
-3. Walk up from CWD looking for `.registry.json` (or `knowledge/.registry.json`)
+1. `--dir <path>` flag(s) (highest priority; first dir is primary writable dir)
+2. `KNOWLEDGE_DIRS` (delimited list) or `KNOWLEDGE_DIR` environment variable
+3. Walk up from CWD looking for `.agents/knowledges` or `.registry.json` (or `knowledge/.registry.json`)
 4. `~/.knowledge` (global default)
 
 ---

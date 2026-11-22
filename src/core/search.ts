@@ -136,9 +136,22 @@ export function rankDocuments(
     if (filterTags.length > 0) {
       const docTagSet = new Set((doc.tags || []).map((t) => t.toLowerCase()));
       const extras = getSearchExtras(doc);
-      if (extras?.moduleTags) {
+      if (extras?.moduleTagsList && extras.moduleTagsList.length > 0) {
+        for (const mt of extras.moduleTagsList) {
+          if (mt) docTagSet.add(mt.toLowerCase());
+        }
+      } else if (extras?.moduleTags) {
         for (const mt of extras.moduleTags.split(/\s+/)) {
           if (mt) docTagSet.add(mt);
+        }
+      }
+      if (extras?.referenceTagsList && extras.referenceTagsList.length > 0) {
+        for (const rt of extras.referenceTagsList) {
+          if (rt) docTagSet.add(rt.toLowerCase());
+        }
+      } else if (extras?.referenceTags) {
+        for (const rt of extras.referenceTags.split(/\s+/)) {
+          if (rt) docTagSet.add(rt);
         }
       }
       if (!filterTags.every((t) => docTagSet.has(t))) continue;

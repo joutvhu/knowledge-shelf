@@ -105,13 +105,18 @@ aliases: [<short-name>, <artifact-id>]
 2. **`doc` vs `references/` Split (Context Budget)**:
    - `doc` (loaded via `get_doc`) must stay concise (< 100 lines): overview, prerequisites, and quick-start workflow/module table.
    - Put detailed API tables, module wiring instructions, and edge cases in `references/<topic>.md` (loaded on-demand via `get_resource` or `get_doc_section`).
-3. **Workflow Path Containment Security (`copy` and `mkdir` steps)**:
-   - Every `target` (in `copy`) and `path` (in `mkdir`) **MUST** start with a root placeholder prefix `{{ROOT_KEY}}/...` (e.g. `{{TARGET}}/src/...`), and the runtime value of `ROOT_KEY` must be an **absolute path**. Relative targets or paths without a `{{ROOT_KEY}}` prefix are rejected by the MCP server security check.
-   - Every `source` (in `copy`) and `script` (in `run`) must stay strictly inside the knowledge unit folder (no `..` traversal).
-4. **Allowed Script Interpreters (`run` steps)**:
+3. **Workflow Step Actions & Security (`copy`, `copy_dir`, `patch`, `mkdir`, `run`, `message`)**:
+   - Every `target` (in `copy`, `copy_dir`, `patch`) and `path` (in `mkdir`) **MUST** start with a root placeholder prefix `{{ROOT_KEY}}/...` (e.g. `{{TARGET}}/src/...`), and the runtime value of `ROOT_KEY` must be an **absolute path**. Relative targets or paths without a `{{ROOT_KEY}}` prefix are rejected by the MCP server security check.
+   - `copy_dir` copies an entire directory tree (including dotfiles like `.eslintrc.json`, `.gitignore`), supporting optional `exclude` glob patterns and filename placeholder substitution (`render_filenames: true`).
+   - `patch` modifies an existing target file using modes `append`, `prepend`, `insert_before`, `insert_after`, or `replace` (requiring `anchor` for insertion/replacement).
+   - Every step can declare conditional execution with `when: { input: "KEY", equals: "val" }` or `when: { exists: "{{TARGET}}/file" }`.
+   - Every `source` (in `copy`/`copy_dir`) and `script` (in `run`) must stay strictly inside the knowledge unit folder (no `..` traversal).
+4. **Allowed Script Interpreters & Execution (`run` steps)**:
    - Whitelisted interpreters: `python`, `python3`, `node`, `pwsh`, `powershell`, `bash`, `sh`, `cmd`.
    - Auto-detected extensions when `interpreter` is omitted: `.py` → `python`, `.js`/`.mjs`/`.cjs` → `node`, `.ps1` → `pwsh` (falls back to `powershell` on Windows), `.sh` → `bash`, `.cmd`/`.bat` → `cmd`.
-   - Scripts execute with `cwd` set to the knowledge unit folder and a 120-second timeout. Keep scripts self-contained with zero external relative imports outside the unit folder.
+   - Workflows can execute named scripts via `script_ref: "<scriptName>"` mapped to `manifest.scripts`.
+   - Scripts execute with optional `cwd` (must start with a root placeholder `{{TARGET}}`), standard timeout default 120s (configurable via `timeout_ms` 1000..600000). Keep scripts self-contained with zero external relative imports outside the unit folder.
+   - Workflows support `dry_run: true` to safely preview created/patched files and script invocations without making changes. Server option `--read-only` disables non-dry-run workflow execution.
 5. **Placeholders**:
    - Must use exact `{{UPPER_SNAKE_CASE}}` syntax (`/[A-Za-z0-9_]+/`). Declare all placeholders used across code templates in `manifest.json` under `"placeholders"`.
 6. **Module Wiring Guides**:

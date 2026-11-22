@@ -230,7 +230,7 @@ export function resolveUnitFiles(
   const getAllUnitFiles = () => {
     if (allUnitFiles) return allUnitFiles;
     const list: string[] = [];
-    walkDir(unitDir, (fp) => {
+    walkUnitFiles(unitDir, (fp) => {
       list.push(path.relative(unitDir, fp).replace(/\\/g, '/'));
     });
     allUnitFiles = list.sort();

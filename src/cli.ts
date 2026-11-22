@@ -138,6 +138,11 @@ export function runCli(rawArgs: string[]): void {
     }
   }
 
+  if (args.includes('--help') || args.includes('-h')) {
+    printHelp();
+    return;
+  }
+
   const command = args[0];
   const primaryDir = cliDirs.length > 0 ? resolveKnowledgeDir(cliDirs[0]) : resolveKnowledgeDir();
   const allDirs =
@@ -168,7 +173,7 @@ export function runCli(rawArgs: string[]): void {
       cmdPublish(primaryDir, args.slice(1));
       break;
     case 'info':
-      cmdInfo(primaryDir, args.slice(1));
+      cmdInfo(allDirs, args.slice(1));
       break;
     case 'search':
       cmdSearch(allDirs, args.slice(1));
@@ -182,7 +187,7 @@ export function runCli(rawArgs: string[]): void {
       cmdOutdated(primaryDir, args.slice(1));
       break;
     case 'validate':
-      cmdValidate(primaryDir, args.slice(1));
+      cmdValidate(allDirs, args.slice(1));
       break;
     case 'update':
     case 'up':

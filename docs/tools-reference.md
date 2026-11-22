@@ -105,12 +105,14 @@ Each query term is matched independently against document fields.  Scores accumu
 | `title` | +10 |
 | `tags` | +8 |
 | `type` | +7 |
-| `modules` | +6 |
+| `modules` / `module.tags` | +6 |
 | filename/path | +6 |
-| section headings | +4 |
-| `description` | +2 |
+| `applies_to` (languages, frameworks) | +5 |
+| `references.*.tags` / capability keys | +5 |
+| section headings / reference sections | +4 |
+| `description` / capability descriptions | +2 |
 
-Matching is case-insensitive with whole-token priority (partial/prefix matches receive half weight; terms of 2 characters or fewer require a whole-token match).  A document must score > 0 to appear in results.
+Matching is case-insensitive with whole-token priority (partial/prefix matches receive half weight; terms of 2 characters or fewer require a whole-token match). Units with status `deprecated` are down-ranked by 0.4x. When `include_content: true` is passed, document and reference body matches add +2 per body hit and +1 per reference hit with contextual snippets. A document must score > 0 to appear in results.
 
 **Example:**
 ```json

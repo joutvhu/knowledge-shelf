@@ -11,7 +11,7 @@ import {
   MAX_WORKFLOW_TIMEOUT_MS,
   resolveInsideDir,
 } from './config.js';
-import { Manifest, matchesAnyGlob, walkDir } from './parser.js';
+import { Manifest, matchesAnyGlob, walkDir, walkUnitFiles } from './parser.js';
 
 export interface WorkflowResults {
   workflow: string;
@@ -108,6 +108,7 @@ function runProcessAsync(
       stdio: ['pipe', 'pipe', 'pipe'],
       windowsVerbatimArguments,
     });
+    child.stdin?.end();
 
     let stdout = '';
     let stderr = '';
@@ -286,7 +287,7 @@ function executeCopyDirStep(
   const targetRoot = targetCheck.resolvedPath;
 
   const files: string[] = [];
-  walkDir(sourceDir, (fp) => {
+  walkUnitFiles(sourceDir, (fp) => {
     const rel = path.relative(sourceDir, fp).replace(/\\/g, '/');
     if (exclude.length > 0 && matchesAnyGlob(rel, exclude)) return;
     files.push(fp);
