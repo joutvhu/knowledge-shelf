@@ -24,10 +24,10 @@ export interface RegistryEntry {
 export interface RegistrySource extends RegistryEntry {}
 
 export function recordInstalledSource(registry: Registry, entry: RegistryEntry): RegistryEntry {
-  const existing = registry.sources.find((s) => s.name === entry.name);
-  if (existing) {
-    Object.assign(existing, entry);
-    return existing;
+  const existingIndex = registry.sources.findIndex((s) => s.name === entry.name);
+  if (existingIndex !== -1) {
+    registry.sources[existingIndex] = entry;
+    return entry;
   } else {
     registry.sources.push(entry);
     return entry;
@@ -107,7 +107,11 @@ export function resolveSafeUnitDir(knowledgeDir: string, name: string): string {
   return resolved;
 }
 
-export function loadRegistry(knowledgeDir: string): Registry {
+export interface LoadRegistryOptions {
+  exitOnError?: boolean;
+}
+
+export function loadRegistry(knowledgeDir: string, options: LoadRegistryOptions = {}): Registry {
   const registryPath = getRegistryPath(knowledgeDir);
   if (!fs.existsSync(registryPath)) {
     return { version: '1.0', sources: [] };
@@ -120,6 +124,9 @@ export function loadRegistry(knowledgeDir: string): Registry {
     }
     return parsed;
   } catch (e) {
+    if (options.exitOnError === false) {
+      throw e;
+    }
     // Never fall back to an empty registry: the next save would silently erase every entry.
     console.error(`Error: Cannot read registry ${registryPath}: ${e instanceof Error ? e.message : e}`);
     console.error('Fix or delete the file manually, then retry.');

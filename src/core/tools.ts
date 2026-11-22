@@ -20,7 +20,7 @@ import {
   parseFrontmatter,
   walkDir,
 } from './parser.js';
-import { SearchOptions, rankDocuments } from './search.js';
+import { SearchOptions, foldDiacritics, rankDocuments } from './search.js';
 import { executeWorkflowSteps } from './workflow.js';
 
 export interface ToolResponse {
@@ -339,10 +339,20 @@ function extractMatchingSection(body: string, section: string): ToolResponse {
     };
   }
 
-  const matched =
+  let matched =
     sections.find((s) => s.title.toLowerCase() === sectionLower) ||
     sections.find((s) => s.title.toLowerCase().includes(sectionLower)) ||
     sections.find((s) => s.title.length >= 3 && sectionLower.includes(s.title.toLowerCase()));
+
+  if (!matched) {
+    const foldedSection = foldDiacritics(sectionLower);
+    matched =
+      sections.find((s) => foldDiacritics(s.title.toLowerCase()) === foldedSection) ||
+      sections.find((s) => foldDiacritics(s.title.toLowerCase()).includes(foldedSection)) ||
+      sections.find(
+        (s) => s.title.length >= 3 && foldedSection.includes(foldDiacritics(s.title.toLowerCase()))
+      );
+  }
 
   if (!matched) {
     return {

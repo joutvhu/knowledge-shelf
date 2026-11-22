@@ -33,10 +33,12 @@ import {
   syncManifestName,
 } from './git.js';
 import {
+  RegistryEntry,
   computeUnitChecksum,
   getCacheDir,
   getRegistryPath,
   loadRegistry,
+  recordInstalledSource,
   resolveSafeUnitDir,
   saveRegistry,
 } from './registry.js';
@@ -105,16 +107,22 @@ export function cmdList(primaryDir: string, knowledgeDirs: string[]): void {
 
   for (const d of dirs) {
     if (fs.existsSync(d) && fs.existsSync(getRegistryPath(d))) {
+      const isSinglePrimary = d === primaryDir && dirs.length === 1;
       try {
-        const reg = loadRegistry(d);
+        const reg = loadRegistry(d, { exitOnError: isSinglePrimary });
         for (const s of reg.sources) {
           if (!trackedNames.has(s.name)) {
             trackedNames.add(s.name);
             allSources.push({ source: s, layerDir: dirs.length > 1 ? d : undefined });
           }
         }
-      } catch {
-        /* skip invalid registry */
+      } catch (e) {
+        if (isSinglePrimary) {
+          throw e;
+        }
+        console.warn(
+          `  ⚠ Warning: Skipping invalid registry in '${d}': ${e instanceof Error ? e.message : e}`
+        );
       }
     }
   }
@@ -210,6 +218,12 @@ export function cmdInfo(knowledgeDirs: string | string[], args: string[]): void 
 
   if (!name) {
     console.error('Error: Name is required.\nUsage: knowledge-shelf info <name>');
+    process.exit(1);
+  }
+
+  const firstSegment = name.split(/[\\/]+/)[0];
+  if (firstSegment.startsWith('.')) {
+    console.error(`Error: Access denied. '${name}' is a reserved internal path.`);
     process.exit(1);
   }
 
@@ -417,7 +431,16 @@ export function cmdValidate(knowledgeDirs: string | string[], args: string[]): v
 
       if (stat.isDirectory()) {
         const manifestFolders = filterTopLevelManifestFolders(findManifestFolders(localCandidate));
-        if (manifestFolders.length > 0) {
+        const allMdFiles = findMdFiles(localCandidate);
+        const standaloneMds = allMdFiles.filter((md) => {
+          const rmd = path.resolve(md);
+          return !manifestFolders.some((mf) => {
+            const rmf = path.resolve(mf);
+            return rmd === rmf || rmd.startsWith(rmf + path.sep);
+          });
+        });
+
+        if (manifestFolders.length > 0 || standaloneMds.length > 0) {
           let totalErrors = 0;
           let totalWarnings = 0;
           for (const unitDir of manifestFolders) {
@@ -432,18 +455,7 @@ export function cmdValidate(knowledgeDirs: string | string[], args: string[]): v
             totalErrors += errors.length;
             totalWarnings += warnings.length;
           }
-          console.log(
-            `\n${manifestFolders.length} unit(s) validated.  ${totalErrors} error(s), ${totalWarnings} warning(s).`
-          );
-          if (totalErrors > 0) process.exit(1);
-          return;
-        }
-
-        const mdFiles = findMdFiles(localCandidate);
-        if (mdFiles.length > 0) {
-          let totalErrors = 0;
-          let totalWarnings = 0;
-          for (const mdFile of mdFiles) {
+          for (const mdFile of standaloneMds) {
             const displayUnit = path.relative(localCandidate, mdFile).replace(/\\/g, '/');
             console.log(`Validating '${displayUnit}'...`);
             const { errors, warnings } = validateStandaloneMdFile(mdFile);
@@ -451,8 +463,9 @@ export function cmdValidate(knowledgeDirs: string | string[], args: string[]): v
             totalErrors += errors.length;
             totalWarnings += warnings.length;
           }
+          const totalCount = manifestFolders.length + standaloneMds.length;
           console.log(
-            `\n${mdFiles.length} unit(s) validated.  ${totalErrors} error(s), ${totalWarnings} warning(s).`
+            `\n${totalCount} unit(s) validated.  ${totalErrors} error(s), ${totalWarnings} warning(s).`
           );
           if (totalErrors > 0) process.exit(1);
           return;
@@ -620,23 +633,18 @@ export function cmdInstall(knowledgeDir: string, args: string[]): void {
   const upsertRegistryEntry = (unitName: string, originPath: string, destPath: string) => {
     const now = new Date().toISOString();
     const checksum = computeUnitChecksum(destPath);
-    const existing = registry.sources.find((s) => s.name === unitName);
-    if (existing) {
-      existing.url = `local:${originPath}`;
-      existing.commit = 'local';
-      existing.checksum = checksum;
-      existing.updatedAt = now;
-    } else {
-      registry.sources.push({
-        name: unitName,
-        url: `local:${originPath}`,
-        commit: 'local',
-        checksum,
-        trusted: true,
-        installedAt: now,
-        updatedAt: now,
-      });
-    }
+    const existingIndex = registry.sources.findIndex((s) => s.name === unitName);
+    const existing = existingIndex !== -1 ? registry.sources[existingIndex] : undefined;
+    const entry: RegistryEntry = {
+      name: unitName,
+      url: `local:${originPath}`,
+      commit: 'local',
+      checksum,
+      trusted: true,
+      installedAt: existing?.installedAt || now,
+      updatedAt: now,
+    };
+    recordInstalledSource(registry, entry);
   };
 
   // Case 1: Standalone .md file
@@ -926,6 +934,9 @@ export function cmdExport(knowledgeDir: string, args: string[]): void {
     outputPath = path.resolve(process.cwd(), `${path.basename(relName)}${ext}`);
   } else {
     outputPath = path.resolve(expandHome(outputPath));
+    if (format === 'zip' && !outputPath.toLowerCase().endsWith('.zip')) {
+      outputPath = `${outputPath}.zip`;
+    }
   }
 
   console.log(`Exporting '${relName}' to ${outputPath}...`);
@@ -1062,6 +1073,8 @@ export function cmdImport(knowledgeDir: string, args: string[]): void {
 
     let installSource = extractDir;
     if (entries.length === 1 && fs.statSync(path.join(extractDir, entries[0].name)).isDirectory()) {
+      installSource = path.join(extractDir, entries[0].name);
+    } else if (entries.length === 1 && fs.statSync(path.join(extractDir, entries[0].name)).isFile()) {
       installSource = path.join(extractDir, entries[0].name);
     } else if (entries.some((e) => e.name === 'manifest.json')) {
       installSource = extractDir;

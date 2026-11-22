@@ -18,7 +18,7 @@ export interface SearchResultEntry extends DocEntry {
   content_snippets?: string[];
 }
 
-function foldDiacritics(input: string): string {
+export function foldDiacritics(input: string): string {
   return input
     .normalize('NFD')
     .replace(/[\u0300-\u036f]/g, '')

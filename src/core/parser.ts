@@ -155,8 +155,8 @@ export function isGlobPattern(p: string): boolean {
 // Expands {a,b} brace alternatives in a glob pattern into individual patterns.
 // e.g. "src/**/*.{ts,js}" -> ["src/**/*.ts", "src/**/*.js"]
 export function expandBraces(pattern: string): string[] {
-  const match = pattern.match(/\{([^{}]+)\}/);
-  if (!match || !match[1].includes(',')) return [pattern];
+  const match = pattern.match(/\{([^{}]*,[^{}]*)\}/);
+  if (!match) return [pattern];
   const options = match[1].split(',');
   const prefix = pattern.slice(0, match.index!);
   const suffix = pattern.slice(match.index! + match[0].length);

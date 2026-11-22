@@ -734,10 +734,10 @@ export function cmdUpdate(knowledgeDir: string, args: string[]): void {
         console.log(`  Skipping '${source.name}' (archive file no longer exists)`);
         continue;
       }
-      assertSafeArchivePaths(archivePath);
       const extractDir = path.join(cacheDir, `update-archive-${process.pid}-${Date.now()}`);
-      fs.mkdirSync(extractDir, { recursive: true });
       try {
+        assertSafeArchivePaths(archivePath);
+        fs.mkdirSync(extractDir, { recursive: true });
         const lower = archivePath.toLowerCase();
         let res: ReturnType<typeof spawnSync>;
         if (lower.endsWith('.tar.gz') || lower.endsWith('.tgz')) {
@@ -1433,6 +1433,13 @@ export function cmdScaffold(args: string[]): void {
   if (!name) {
     console.error(
       'Error: Name is required.\nUsage: knowledge-shelf scaffold <name> [--type boilerplate|template|toolkit|cookbook|repo] [--output <dir>]'
+    );
+    process.exit(1);
+  }
+
+  if (!isSafeUnitSegment(name)) {
+    console.error(
+      `Error: Invalid unit name '${name}'. Names cannot contain slashes or start with '.' (use a flat name like 'my-unit').`
     );
     process.exit(1);
   }

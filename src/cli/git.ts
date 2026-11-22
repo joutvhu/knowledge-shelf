@@ -326,13 +326,16 @@ export function assertSafeArchivePaths(archivePath: string): void {
   const lower = archivePath.toLowerCase();
   if (lower.endsWith('.tar.gz') || lower.endsWith('.tgz')) {
     const listRes = spawnSync('tar', ['-ztf', archivePath], { stdio: 'pipe', encoding: 'utf-8' });
-    if (listRes.status === 0 && listRes.stdout) {
-      const lines = listRes.stdout.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
-      for (const line of lines) {
-        const normalized = line.replace(/\\/g, '/');
-        if (normalized.startsWith('/') || /^[A-Za-z]:/.test(normalized) || normalized.split('/').includes('..')) {
-          throw new Error(`Archive contains unsafe path: '${line}'`);
-        }
+    if (listRes.status !== 0 || !listRes.stdout) {
+      throw new Error(
+        `Failed to inspect archive '${path.basename(archivePath)}': ${String(listRes.stderr || 'tar command failed')}`
+      );
+    }
+    const lines = listRes.stdout.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+    for (const line of lines) {
+      const normalized = line.replace(/\\/g, '/');
+      if (normalized.startsWith('/') || /^[A-Za-z]:/.test(normalized) || normalized.split('/').includes('..')) {
+        throw new Error(`Archive contains unsafe path: '${line}'`);
       }
     }
   } else if (lower.endsWith('.zip')) {
@@ -344,31 +347,44 @@ export function assertSafeArchivePaths(archivePath: string): void {
           '-NoProfile',
           '-Command',
           `Add-Type -AssemblyName System.IO.Compression.FileSystem; ` +
-            `$z = [System.IO.Compression.ZipFile]::OpenRead('${escSrc}'); ` +
-            `foreach ($e in $z.Entries) { ` +
-            `  $n = $e.FullName.Replace('\\', '/'); ` +
-            `  if ($n.StartsWith('/') -or $n -match '^[A-Za-z]:' -or ($n.Split('/') -contains '..')) { ` +
-            `    $z.Dispose(); exit 2 ` +
-            `  } ` +
-            `}; $z.Dispose()`,
+            `try { ` +
+            `  $z = [System.IO.Compression.ZipFile]::OpenRead('${escSrc}'); ` +
+            `  foreach ($e in $z.Entries) { ` +
+            `    $n = $e.FullName.Replace('\\', '/'); ` +
+            `    if ($n.StartsWith('/') -or $n -match '^[A-Za-z]:' -or ($n.Split('/') -contains '..')) { ` +
+            `      $z.Dispose(); exit 2 ` +
+            `    } ` +
+            `  }; ` +
+            `  $z.Dispose() ` +
+            `} catch { exit 3 }`,
         ],
         { stdio: 'pipe', encoding: 'utf-8' }
       );
       if (checkRes.status === 2) {
         throw new Error('Archive contains unsafe path(s) attempting path traversal.');
       }
+      if (checkRes.status === 3 || checkRes.status !== 0) {
+        throw new Error(
+          `Failed to read zip archive '${path.basename(archivePath)}': ${String(checkRes.stderr || 'invalid archive')}`
+        );
+      }
     } else {
       const listRes = spawnSync('unzip', ['-Z1', archivePath], { stdio: 'pipe', encoding: 'utf-8' });
-      if (listRes.status === 0 && listRes.stdout) {
-        const lines = listRes.stdout.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
-        for (const line of lines) {
-          const normalized = line.replace(/\\/g, '/');
-          if (normalized.startsWith('/') || normalized.split('/').includes('..')) {
-            throw new Error(`Archive contains unsafe path: '${line}'`);
-          }
+      if (listRes.status !== 0 || !listRes.stdout) {
+        throw new Error(
+          `Failed to inspect zip archive '${path.basename(archivePath)}': ${String(listRes.stderr || 'unzip command failed')}`
+        );
+      }
+      const lines = listRes.stdout.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+      for (const line of lines) {
+        const normalized = line.replace(/\\/g, '/');
+        if (normalized.startsWith('/') || normalized.split('/').includes('..')) {
+          throw new Error(`Archive contains unsafe path: '${line}'`);
         }
       }
     }
+  } else {
+    throw new Error(`Unsupported archive format for '${path.basename(archivePath)}'. Expected .zip, .tar.gz, or .tgz.`);
   }
 }
 

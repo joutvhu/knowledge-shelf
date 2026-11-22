@@ -382,6 +382,10 @@ function executePatchStep(
     const sep = existing && !renderedContent.endsWith('\n') ? eol : '';
     updated = `${renderedContent}${sep}${existing}`;
   } else if (mode === 'insert_before' || mode === 'insert_after' || mode === 'replace') {
+    if (!renderedAnchor) {
+      results.errors.push(`Patch mode '${mode}' requires a non-empty anchor.`);
+      return;
+    }
     const idx = existing.indexOf(renderedAnchor);
     if (idx === -1) {
       results.errors.push(`Patch anchor not found in '${targetPath}': ${renderedAnchor}`);

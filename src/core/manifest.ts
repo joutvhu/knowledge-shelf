@@ -492,9 +492,9 @@ export function validateManifestUnitDir(
             }
             if (
               (mode === 'insert_before' || mode === 'insert_after' || mode === 'replace') &&
-              typeof step.anchor !== 'string'
+              (!step.anchor || typeof step.anchor !== 'string')
             ) {
-              errors.push(`${prefix} (patch): mode '${mode}' requires "anchor"`);
+              errors.push(`${prefix} (patch): mode '${mode}' requires non-empty "anchor"`);
             }
           } else if (action === 'mkdir') {
             const p = typeof step.path === 'string' ? step.path.trim() : '';
