@@ -12,6 +12,8 @@ import {
   checkUnitPublishHygiene,
   expandHome,
   findManifestFolders,
+  findMdFiles,
+  isReservedPath,
   isSafeUnitSegment,
   loadManifest,
   resolveInsideDir,
@@ -770,14 +772,67 @@ export function cmdUpdate(knowledgeDir: string, args: string[]): void {
           .readdirSync(extractDir, { withFileTypes: true })
           .filter((e) => !e.name.startsWith('.') && e.name !== '__MACOSX');
 
-        let installSource = extractDir;
-        if (entries.length === 1 && fs.existsSync(path.join(extractDir, entries[0].name))) {
-          installSource = path.join(extractDir, entries[0].name);
-        } else {
-          const directMatch = path.join(extractDir, source.name);
-          if (fs.existsSync(directMatch)) {
-            installSource = directMatch;
+        let installSource: string | null = null;
+        if (source.path) {
+          const cand = resolveInsideDir(extractDir, source.path, true);
+          if (cand && fs.existsSync(cand)) {
+            installSource = cand;
           }
+        }
+        if (!installSource) {
+          const directMatch = resolveInsideDir(extractDir, source.name, true);
+          if (directMatch && fs.existsSync(directMatch)) {
+            installSource = directMatch;
+          } else if (entries.length === 1 && fs.statSync(path.join(extractDir, entries[0].name)).isDirectory()) {
+            const wrapperDir = path.join(extractDir, entries[0].name);
+            const insideWrapper = resolveInsideDir(wrapperDir, source.name, true);
+            if (insideWrapper && fs.existsSync(insideWrapper)) {
+              installSource = insideWrapper;
+            }
+          }
+        }
+        if (!installSource) {
+          // Search any manifest folder whose manifest name or folder name matches source.name
+          const allManifests = findManifestFolders(extractDir);
+          for (const mf of allManifests) {
+            if (path.basename(mf) === source.name) {
+              installSource = mf;
+              break;
+            }
+            const m = loadManifest(mf);
+            if (m?.name === source.name) {
+              installSource = mf;
+              break;
+            }
+          }
+        }
+        if (!installSource) {
+          const allMds = findMdFiles(extractDir);
+          for (const md of allMds) {
+            if (
+              path.basename(md) === source.name ||
+              path.relative(extractDir, md).replace(/\\/g, '/') === source.name
+            ) {
+              installSource = md;
+              break;
+            }
+          }
+        }
+        if (!installSource) {
+          // Single unit archive root
+          if (entries.length === 1 && fs.statSync(path.join(extractDir, entries[0].name)).isDirectory()) {
+            installSource = path.join(extractDir, entries[0].name);
+          } else if (entries.length === 1 && fs.statSync(path.join(extractDir, entries[0].name)).isFile()) {
+            installSource = path.join(extractDir, entries[0].name);
+          } else if (entries.some((e) => e.name === 'manifest.json')) {
+            installSource = extractDir;
+          }
+        }
+
+        if (!installSource || !fs.existsSync(installSource)) {
+          console.error(`  Error: Unit '${source.name}' not found inside archive.`);
+          failed++;
+          continue;
         }
 
         const destDir = resolveSafeUnitDir(knowledgeDir, source.name);
@@ -935,6 +990,7 @@ export function cmdPin(knowledgeDir: string, args: string[]): void {
     const repoName = deriveNameFromUrl(source.url);
     const cloneTarget = getCloneTarget(knowledgeDir, `${repoName}-pin`);
     let installFailed = false;
+    let checkoutError: Error | null = null;
 
     try {
       removeDirSync(cloneTarget);
@@ -956,10 +1012,14 @@ export function cmdPin(knowledgeDir: string, args: string[]): void {
         source.updatedAt = new Date().toISOString();
       }
     } catch (e) {
-      console.error(`Error: Failed to checkout '${version}' for '${name}': ${e instanceof Error ? e.message : e}`);
-      process.exit(1);
+      checkoutError = e instanceof Error ? e : new Error(String(e));
     } finally {
       removeDirSync(cloneTarget);
+    }
+
+    if (checkoutError) {
+      console.error(`Error: Failed to checkout '${version}' for '${name}': ${checkoutError.message}`);
+      process.exit(1);
     }
 
     if (installFailed) {
@@ -1126,7 +1186,6 @@ export function cmdSync(knowledgeDir: string, args: string[]): void {
       }
       const targetRef = s.pin || s.ref;
       if (targetRef) {
-        const installed = regEntry.fullCommit || regEntry.commit;
         const matchedOffline =
           regEntry.commit === targetRef ||
           regEntry.pin === targetRef ||
@@ -1261,7 +1320,7 @@ export function cmdSync(knowledgeDir: string, args: string[]): void {
   if (failed > 0) process.exit(1);
 }
 
-export function cmdCatalog(knowledgeDir: string, args: string[]): void {
+export function cmdCatalog(_knowledgeDir: string, args: string[]): void {
   let url = '';
   let ref = '';
 
@@ -1288,6 +1347,7 @@ export function cmdCatalog(knowledgeDir: string, args: string[]): void {
   const tmpClone = fs.mkdtempSync(path.join(os.tmpdir(), 'ks-catalog-'));
   fs.rmSync(tmpClone, { recursive: true, force: true });
 
+  let exitCode = 0;
   try {
     if (ref) {
       gitCloneAtRef(url, tmpClone, ref);
@@ -1333,9 +1393,12 @@ export function cmdCatalog(knowledgeDir: string, args: string[]): void {
     console.log('');
   } catch (e) {
     console.error(`Error: Failed to inspect repository.\n${e instanceof Error ? e.message : e}`);
-    process.exit(1);
+    exitCode = 1;
   } finally {
     removeDirSync(tmpClone);
+  }
+  if (exitCode !== 0) {
+    process.exit(exitCode);
   }
 }
 
@@ -1701,7 +1764,7 @@ export function publishViaClone(opts: PublishViaCloneOptions): void {
     const destDir = targetRelPath
       ? resolveInsideDir(workClone, targetRelPath, true)
       : workClone;
-    if (!destDir) {
+    if (!destDir || isReservedPath(workClone, destDir)) {
       throw new Error(`Invalid destination path '${targetRelPath}' inside target repository.`);
     }
 
@@ -1877,7 +1940,7 @@ export function cmdPublish(knowledgeDir: string, args: string[]): void {
           }
 
           const safeDest = resolveInsideDir(cloneRoot, path.relative(cloneRoot, destPathInClone), true);
-          if (!safeDest) {
+          if (!safeDest || isReservedPath(cloneRoot, safeDest)) {
             throw new Error(`Destination path escapes repository: '${destPathInClone}'`);
           }
 
@@ -1930,6 +1993,7 @@ export function cmdPublish(knowledgeDir: string, args: string[]): void {
       populateClone: (destInRepo) => {
         removeDirSync(destInRepo);
         copyDirSync(unitDir, destInRepo);
+        syncManifestName(destInRepo, path.basename(destInRepo));
       },
       commitMsg: msg,
       push,

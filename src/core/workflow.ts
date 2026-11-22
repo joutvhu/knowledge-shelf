@@ -9,9 +9,10 @@ import {
   ALLOWED_INTERPRETERS,
   DEFAULT_WORKFLOW_TIMEOUT_MS,
   MAX_WORKFLOW_TIMEOUT_MS,
+  MIN_WORKFLOW_TIMEOUT_MS,
   resolveInsideDir,
 } from './config.js';
-import { Manifest, matchesAnyGlob, walkDir, walkUnitFiles } from './parser.js';
+import { Manifest, matchesAnyGlob, walkUnitFiles } from './parser.js';
 
 export interface WorkflowResults {
   workflow: string;
@@ -438,7 +439,7 @@ async function executeRunStep(
   let rawInterpreter = typeof step.interpreter === 'string' ? step.interpreter.trim() : '';
   let timeoutMs =
     typeof step.timeout_ms === 'number' && step.timeout_ms > 0
-      ? Math.min(step.timeout_ms, MAX_WORKFLOW_TIMEOUT_MS)
+      ? Math.max(MIN_WORKFLOW_TIMEOUT_MS, Math.min(step.timeout_ms, MAX_WORKFLOW_TIMEOUT_MS))
       : DEFAULT_WORKFLOW_TIMEOUT_MS;
 
   if (typeof step.script_ref === 'string' && step.script_ref.trim()) {
@@ -457,7 +458,7 @@ async function executeRunStep(
       typeof scriptDef.timeout_ms === 'number' &&
       scriptDef.timeout_ms > 0
     ) {
-      timeoutMs = Math.min(scriptDef.timeout_ms, MAX_WORKFLOW_TIMEOUT_MS);
+      timeoutMs = Math.max(MIN_WORKFLOW_TIMEOUT_MS, Math.min(scriptDef.timeout_ms, MAX_WORKFLOW_TIMEOUT_MS));
     }
   }
 

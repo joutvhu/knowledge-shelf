@@ -388,7 +388,6 @@ export function parseFrontmatter(content: string): { metadata: Record<string, un
     if (blockKey) {
       const indentMatch = line.match(/^(\s*)(.*)$/);
       const indent = indentMatch ? indentMatch[1].length : 0;
-      const text = indentMatch ? indentMatch[2] : '';
       if (!line.trim()) {
         blockLines.push('');
         continue;

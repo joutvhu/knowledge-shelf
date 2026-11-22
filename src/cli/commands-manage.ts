@@ -11,6 +11,7 @@ import {
   findManifestFolders,
   findMdFiles,
   inspectUnitSecurity,
+  isReservedPath,
   isSafeUnitSegment,
   loadManifest,
   normalizeListField,
@@ -18,15 +19,13 @@ import {
   rankDocuments,
   resolveInsideDir,
   scanDocuments,
-  searchScore,
   validateManifestUnitDir,
   validateStandaloneMdFile,
-  walkDir,
+  walkUnitFiles,
 } from '../core.js';
 import {
   assertSafeArchivePaths,
   collectUnitFolders,
-  copyDirSync,
   formatSize,
   removeDirSync,
   replaceDirSync,
@@ -221,8 +220,8 @@ export function cmdInfo(knowledgeDirs: string | string[], args: string[]): void 
     process.exit(1);
   }
 
-  const firstSegment = name.split(/[\\/]+/)[0];
-  if (firstSegment.startsWith('.')) {
+  const segments = name.split(/[\\/]+/);
+  if (segments.some((seg) => !seg || seg === '.' || seg === '..' || seg.startsWith('.'))) {
     console.error(`Error: Access denied. '${name}' is a reserved internal path.`);
     process.exit(1);
   }
@@ -235,6 +234,10 @@ export function cmdInfo(knowledgeDirs: string | string[], args: string[]): void 
     if (!fs.existsSync(kDir)) continue;
     const directCandidate = resolveInsideDir(kDir, name, true);
     if (directCandidate && fs.existsSync(directCandidate)) {
+      if (isReservedPath(kDir, directCandidate)) {
+        console.error(`Error: Access denied. '${name}' is a reserved internal path.`);
+        process.exit(1);
+      }
       unitDir = directCandidate;
       knowledgeDir = kDir;
       break;
@@ -242,6 +245,10 @@ export function cmdInfo(knowledgeDirs: string | string[], args: string[]): void 
     if (!name.endsWith('.md')) {
       const mdCandidate = resolveInsideDir(kDir, `${name}.md`, true);
       if (mdCandidate && fs.existsSync(mdCandidate)) {
+        if (isReservedPath(kDir, mdCandidate)) {
+          console.error(`Error: Access denied. '${name}' is a reserved internal path.`);
+          process.exit(1);
+        }
         unitDir = mdCandidate;
         knowledgeDir = kDir;
         break;
@@ -257,6 +264,10 @@ export function cmdInfo(knowledgeDirs: string | string[], args: string[]): void 
 
   const stat = fs.statSync(unitDir);
   if (stat.isFile()) {
+    if (!unitDir.toLowerCase().endsWith('.md')) {
+      console.error(`Error: '${name}' is not a Markdown document or knowledge unit.`);
+      process.exit(1);
+    }
     const displayName = path.relative(knowledgeDir, unitDir).replace(/\\/g, '/');
     const content = fs.readFileSync(unitDir, 'utf-8');
     const { metadata } = parseFrontmatter(content);
@@ -303,7 +314,7 @@ export function cmdInfo(knowledgeDirs: string | string[], args: string[]): void 
 
   let fileCount = 0;
   let totalSize = 0;
-  walkDir(unitDir, (filePath) => {
+  walkUnitFiles(unitDir, (filePath) => {
     fileCount++;
     try {
       totalSize += fs.statSync(filePath).size;
@@ -574,7 +585,24 @@ export function cmdValidate(knowledgeDirs: string | string[], args: string[]): v
   }
 }
 
-export function cmdInstall(knowledgeDir: string, args: string[]): void {
+export interface CmdInstallOptions {
+  exitOnError?: boolean;
+}
+
+export function cmdInstall(
+  knowledgeDir: string,
+  args: string[],
+  options: CmdInstallOptions = {}
+): void {
+  const exitOnError = options.exitOnError !== false;
+  const fail = (msg: string): never => {
+    if (exitOnError) {
+      console.error(msg);
+      process.exit(1);
+    }
+    throw new Error(msg);
+  };
+
   let sourceArg = '';
   let customName = '';
   let force = false;
@@ -583,8 +611,7 @@ export function cmdInstall(knowledgeDir: string, args: string[]): void {
   for (let i = 0; i < args.length; i++) {
     if (args[i] === '--name') {
       if (i + 1 >= args.length || args[i + 1].startsWith('-')) {
-        console.error('Error: --name requires an alias argument.');
-        process.exit(1);
+        fail('Error: --name requires an alias argument.');
       }
       customName = args[++i];
     } else if (args[i] === '--force' || args[i] === '-f') {
@@ -592,27 +619,23 @@ export function cmdInstall(knowledgeDir: string, args: string[]): void {
     } else if (args[i] === '--all') {
       installAll = true;
     } else if (args[i].startsWith('-')) {
-      console.error(`Error: Unknown option '${args[i]}' for 'install'.`);
-      process.exit(1);
+      fail(`Error: Unknown option '${args[i]}' for 'install'.`);
     } else if (!sourceArg) {
       sourceArg = args[i];
     } else {
-      console.error(`Error: Unexpected argument '${args[i]}'.`);
-      process.exit(1);
+      fail(`Error: Unexpected argument '${args[i]}'.`);
     }
   }
 
   if (!sourceArg) {
-    console.error(
+    fail(
       'Error: Source path is required.\nUsage: knowledge-shelf install <path> [--name <alias>] [--force] [--all]'
     );
-    process.exit(1);
   }
 
   const resolvedSource = path.resolve(expandHome(sourceArg));
   if (!fs.existsSync(resolvedSource)) {
-    console.error(`Error: Source path not found: ${sourceArg}`);
-    process.exit(1);
+    fail(`Error: Source path not found: ${sourceArg}`);
   }
 
   fs.mkdirSync(knowledgeDir, { recursive: true });
@@ -623,10 +646,9 @@ export function cmdInstall(knowledgeDir: string, args: string[]): void {
     const isMd = customName.toLowerCase().endsWith('.md');
     const checkName = isMd ? customName.slice(0, -3) : customName;
     if (!isSafeUnitSegment(checkName)) {
-      console.error(
+      fail(
         `Error: Invalid unit name '${customName}'. Names cannot contain slashes or start with '.' (use a flat name like 'my-unit').`
       );
-      process.exit(1);
     }
   }
 
@@ -650,8 +672,7 @@ export function cmdInstall(knowledgeDir: string, args: string[]): void {
   // Case 1: Standalone .md file
   if (stat.isFile()) {
     if (installAll) {
-      console.error('Error: --all cannot be used when installing a single file.');
-      process.exit(1);
+      fail('Error: --all cannot be used when installing a single file.');
     }
     const baseName = customName
       ? customName.endsWith('.md')
@@ -659,25 +680,21 @@ export function cmdInstall(knowledgeDir: string, args: string[]): void {
         : `${customName}.md`
       : path.basename(resolvedSource);
     if (path.basename(baseName).toLowerCase() === 'readme.md') {
-      console.error('Error: Standalone doc cannot be named README.md (ignored by knowledge scanner).');
-      process.exit(1);
+      fail('Error: Standalone doc cannot be named README.md (ignored by knowledge scanner).');
     }
     console.log(`Validating '${baseName}'...`);
     const { errors, warnings } = validateStandaloneMdFile(resolvedSource);
     printValidationResults(baseName, errors, warnings);
     if (errors.length > 0) {
-      console.error(`\nError: Validation failed with ${errors.length} error(s). Aborting install.`);
-      process.exit(1);
+      fail(`\nError: Validation failed with ${errors.length} error(s). Aborting install.`);
     }
 
     const destFile = resolveSafeUnitDir(knowledgeDir, baseName);
     if (path.resolve(destFile) === resolvedSource) {
-      console.error(`Error: Source and destination are the same path (${destFile}).`);
-      process.exit(1);
+      fail(`Error: Source and destination are the same path (${destFile}).`);
     }
     if (fs.existsSync(destFile) && !force) {
-      console.error(`Error: '${baseName}' already exists in knowledge folder. Use --force to overwrite.`);
-      process.exit(1);
+      fail(`Error: '${baseName}' already exists in knowledge folder. Use --force to overwrite.`);
     }
 
     fs.mkdirSync(path.dirname(destFile), { recursive: true });
@@ -691,15 +708,13 @@ export function cmdInstall(knowledgeDir: string, args: string[]): void {
   // Case 2: Directory with --all
   if (installAll) {
     if (customName) {
-      console.error('Error: --name cannot be combined with --all.');
-      process.exit(1);
+      fail('Error: --name cannot be combined with --all.');
     }
 
     const { units: manifestFolders, conflicts } = collectUnitFolders(resolvedSource);
     if (conflicts.length > 0) {
       console.error(`Error: Multiple units share the same folder name: ${conflicts.join('; ')}.`);
-      console.error('Install each one individually with --name.');
-      process.exit(1);
+      fail('Install each one individually with --name.');
     }
     const topLevelMds = fs
       .readdirSync(resolvedSource, { withFileTypes: true })
@@ -707,8 +722,7 @@ export function cmdInstall(knowledgeDir: string, args: string[]): void {
       .map((e) => path.join(resolvedSource, e.name));
 
     if (manifestFolders.length === 0 && topLevelMds.length === 0) {
-      console.error(`Error: No knowledge units or standalone .md files found inside '${sourceArg}'.`);
-      process.exit(1);
+      fail(`Error: No knowledge units or standalone .md files found inside '${sourceArg}'.`);
     }
 
     let validationFailures = 0;
@@ -728,8 +742,7 @@ export function cmdInstall(knowledgeDir: string, args: string[]): void {
     }
 
     if (validationFailures > 0) {
-      console.error(`\nError: Validation failed with ${validationFailures} error(s). Aborting install.`);
-      process.exit(1);
+      fail(`\nError: Validation failed with ${validationFailures} error(s). Aborting install.`);
     }
 
     let installed = 0;
@@ -782,10 +795,9 @@ export function cmdInstall(knowledgeDir: string, args: string[]): void {
   // Case 3: Single manifest-based directory
   const manifestPath = path.join(resolvedSource, 'manifest.json');
   if (!fs.existsSync(manifestPath)) {
-    console.error(
+    fail(
       `Error: No manifest.json found in '${sourceArg}'. (If this is a parent folder of multiple units, pass --all)`
     );
-    process.exit(1);
   }
 
   const manifest = loadManifest(resolvedSource);
@@ -802,19 +814,16 @@ export function cmdInstall(knowledgeDir: string, args: string[]): void {
   printValidationResults(unitName, errors, warnings);
 
   if (errors.length > 0) {
-    console.error(`\nError: Validation failed with ${errors.length} error(s). Aborting install.`);
-    process.exit(1);
+    fail(`\nError: Validation failed with ${errors.length} error(s). Aborting install.`);
   }
 
   const destDir = resolveSafeUnitDir(knowledgeDir, unitName);
   if (path.resolve(destDir) === resolvedSource) {
-    console.error(`Error: Source and destination are the same directory (${destDir}).`);
-    process.exit(1);
+    fail(`Error: Source and destination are the same directory (${destDir}).`);
   }
 
   if (fs.existsSync(destDir) && !force) {
-    console.error(`Error: '${unitName}' is already installed. Use --force to overwrite.`);
-    process.exit(1);
+    fail(`Error: '${unitName}' is already installed. Use --force to overwrite.`);
   }
 
   replaceDirSync(knowledgeDir, resolvedSource, destDir);
@@ -1033,6 +1042,7 @@ export function cmdImport(knowledgeDir: string, args: string[]): void {
   const extractDir = path.join(cacheDir, `import-${process.pid}-${Date.now()}`);
   fs.mkdirSync(extractDir, { recursive: true });
 
+  let exitCode = 0;
   try {
     const lower = archivePath.toLowerCase();
     let res: ReturnType<typeof spawnSync>;
@@ -1055,8 +1065,7 @@ export function cmdImport(knowledgeDir: string, args: string[]): void {
         res = spawnSync('unzip', ['-q', archivePath, '-d', extractDir], { stdio: 'pipe', encoding: 'utf-8' });
       }
     } else {
-      console.error('Error: Unsupported archive format. Use .zip, .tar.gz, or .tgz.');
-      process.exit(1);
+      throw new Error('Unsupported archive format. Use .zip, .tar.gz, or .tgz.');
     }
 
     if (res.error || res.status !== 0) {
@@ -1067,8 +1076,7 @@ export function cmdImport(knowledgeDir: string, args: string[]): void {
       .readdirSync(extractDir, { withFileTypes: true })
       .filter((e) => !e.name.startsWith('.') && e.name !== '__MACOSX');
     if (entries.length === 0) {
-      console.error('Error: Archive is empty.');
-      process.exit(1);
+      throw new Error('Archive is empty.');
     }
 
     let installSource = extractDir;
@@ -1106,7 +1114,7 @@ export function cmdImport(knowledgeDir: string, args: string[]): void {
       installArgs.push('--all');
     }
 
-    cmdInstall(knowledgeDir, installArgs);
+    cmdInstall(knowledgeDir, installArgs, { exitOnError: false });
 
     // Replace transient temp extraction path in registry with archive origin & safe trust state
     const registry = loadRegistry(knowledgeDir);
@@ -1114,7 +1122,12 @@ export function cmdImport(knowledgeDir: string, args: string[]): void {
     let changed = false;
     for (const entry of registry.sources) {
       if (entry.url.startsWith(tempPrefix)) {
+        const originPath = entry.url.slice('local:'.length);
+        const subRel = path.relative(extractDir, originPath).replace(/\\/g, '/');
         entry.url = `archive:${archivePath}`;
+        if (subRel && subRel !== '.' && subRel !== entry.name) {
+          entry.path = subRel;
+        }
         if (!trusted) {
           delete entry.trusted;
         }
@@ -1126,9 +1139,12 @@ export function cmdImport(knowledgeDir: string, args: string[]): void {
     }
   } catch (e) {
     console.error(`Error: Failed to import archive.\n${e instanceof Error ? e.message : e}`);
-    process.exit(1);
+    exitCode = 1;
   } finally {
     removeDirSync(extractDir);
+  }
+  if (exitCode !== 0) {
+    process.exit(exitCode);
   }
 }
 

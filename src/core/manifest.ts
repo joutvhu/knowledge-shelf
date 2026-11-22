@@ -14,6 +14,7 @@ import {
 } from './config.js';
 import {
   Manifest,
+  findManifestFolders,
   isGlobPattern,
   normalizeListField,
   parseFrontmatter,
@@ -739,6 +740,21 @@ export function inspectUnitSecurity(unitDir: string): UnitSecuritySummary {
       }
     } catch {
       /* ignore invalid manifest here */
+    }
+  } else {
+    // If unitDir has child manifest folders (e.g. monorepo checkout installed as a single folder)
+    const childFolders = findManifestFolders(unitDir).filter(
+      (f) => path.resolve(f) !== path.resolve(unitDir)
+    );
+    for (const child of childFolders) {
+      const childSec = inspectUnitSecurity(child);
+      const childRel = path.relative(unitDir, child).replace(/\\/g, '/');
+      for (const s of childSec.scriptFiles) {
+        scriptFiles.add(`${childRel}/${s}`);
+      }
+      for (const w of childSec.runWorkflows) {
+        runWorkflows.add(`${childRel}/${w}`);
+      }
     }
   }
 

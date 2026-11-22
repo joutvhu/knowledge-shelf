@@ -42,7 +42,15 @@ function findCaseInsensitive(knowledgeDir: string, name: string): string | null 
   const nameLower = name.toLowerCase().replace(/\\/g, '/').replace(/^\/+/, '');
   const nameWithMd = nameLower.endsWith('.md') ? nameLower : `${nameLower}.md`;
 
-  const mdFiles = findMdFiles(knowledgeDir);
+  const manifestFolders = findManifestFolders(knowledgeDir);
+  const mdFiles = findMdFiles(knowledgeDir).filter((filePath) => {
+    const normalized = path.resolve(filePath);
+    return !manifestFolders.some((mf) => {
+      const normalizedMf = path.resolve(mf);
+      return normalized === normalizedMf || normalized.startsWith(normalizedMf + path.sep);
+    });
+  });
+
   for (const filePath of mdFiles) {
     const rel = path.relative(knowledgeDir, filePath).replace(/\\/g, '/').toLowerCase();
     if (rel === nameLower || rel === nameWithMd) return filePath;
@@ -130,15 +138,35 @@ function isUnitTrusted(layerDir: string, unitName: string): { trusted: boolean; 
     const parsed = JSON.parse(fs.readFileSync(registryPath, 'utf-8')) as {
       sources?: Array<{ name?: string; url?: string; trusted?: boolean }>;
     };
-    const entry = parsed.sources?.find((s) => s.name?.toLowerCase() === unitName.toLowerCase());
+    if (!parsed || !Array.isArray(parsed.sources)) {
+      return { trusted: true };
+    }
+    const normUnit = unitName.replace(/\\/g, '/').toLowerCase();
+
+    // 1. Exact match on source name
+    let entry = parsed.sources.find((s) => s.name?.toLowerCase() === normUnit);
+
+    // 2. Ancestor source match if unitName is inside a subfolder of an installed repo
+    if (!entry && normUnit.includes('/')) {
+      const segments = normUnit.split('/');
+      for (let i = segments.length - 1; i >= 1; i--) {
+        const prefix = segments.slice(0, i).join('/');
+        const match = parsed.sources.find((s) => s.name?.toLowerCase() === prefix);
+        if (match) {
+          entry = match;
+          break;
+        }
+      }
+    }
+
     if (!entry) return { trusted: true };
     if (entry.url?.startsWith('local:')) return { trusted: true };
     if (entry.trusted === true) return { trusted: true };
     return {
       trusted: false,
       reason:
-        `Script execution blocked by strict trust policy for remote unit '${unitName}'. ` +
-        `Run 'knowledge-shelf trust ${unitName}' to allow running its scripts.`,
+        `Script execution blocked by strict trust policy for remote unit '${entry.name}'. ` +
+        `Run 'knowledge-shelf trust ${entry.name}' to allow running its scripts.`,
     };
   } catch {
     return { trusted: false, reason: `Cannot verify trust state for '${unitName}'.` };
@@ -264,7 +292,30 @@ export function toolGetDoc(knowledgeDirs: string | string[], name: string): Tool
 
   // 2. Try standalone .md file across layers
   let foundFilePath: string | null = null;
+  const normalizedRel = path.posix.normalize(name.replace(/\\/g, '/')).replace(/^\/+/, '');
+
   for (const dir of dirs) {
+    // If this layer already defines a manifest unit matching any ancestor folder prefix,
+    // it shadows lower layers for that entire unit — do not leak files from shadowed units.
+    if (normalizedRel.includes('/')) {
+      const segments = normalizedRel.split('/');
+      let shadowed = false;
+      for (let i = segments.length - 1; i >= 1; i--) {
+        const prefix = segments.slice(0, i).join('/');
+        const shadowedFolder = resolveInsideDir(dir, prefix, true);
+        const hasShadowedUnit =
+          (shadowedFolder && fs.existsSync(path.join(shadowedFolder, 'manifest.json'))) ||
+          Boolean(findManifestFolderCaseInsensitive(dir, prefix));
+        if (hasShadowedUnit) {
+          shadowed = true;
+          break;
+        }
+      }
+      if (shadowed) {
+        break;
+      }
+    }
+
     const resolvedTarget = resolveInsideDir(dir, name, true)!;
     if (
       fs.existsSync(resolvedTarget) &&
@@ -426,7 +477,7 @@ export function toolGetResource(
   }
 
   let filePath: string | null = null;
-  const normalizedRel = name.replace(/\\/g, '/').replace(/^\/+/, '');
+  const normalizedRel = path.posix.normalize(name.replace(/\\/g, '/')).replace(/^\/+/, '');
 
   for (const dir of dirs) {
     const resolvedCandidate = resolveInsideDir(dir, name, true)!;

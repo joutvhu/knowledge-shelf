@@ -112,7 +112,14 @@ async function main() {
     return;
   }
 
-  const explicitDirs = cliDirs.length > 0 ? cliDirs : first ? [first] : undefined;
+  const explicitDirs =
+    cliDirs.length > 0
+      ? rest.length > 0
+        ? [...cliDirs, ...rest]
+        : cliDirs
+      : rest.length > 0
+        ? rest
+        : undefined;
   const knowledgeDirs = resolveKnowledgeDirs(explicitDirs, { includeGlobal });
   const server = createKnowledgeServer(knowledgeDirs, { readOnly, strictTrust });
   const transport = new StdioServerTransport();
