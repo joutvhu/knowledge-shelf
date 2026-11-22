@@ -105,6 +105,13 @@ async function main() {
     }
   }
 
+  // Interactive terminal (TTY) with no command or path: show CLI help instead of hanging on MCP stdio
+  if (process.stdin.isTTY && !first) {
+    const { runCli } = await import('./cli.js');
+    runCli(rawArgs);
+    return;
+  }
+
   const explicitDirs = cliDirs.length > 0 ? cliDirs : first ? [first] : undefined;
   const knowledgeDirs = resolveKnowledgeDirs(explicitDirs, { includeGlobal });
   const server = createKnowledgeServer(knowledgeDirs, { readOnly, strictTrust });

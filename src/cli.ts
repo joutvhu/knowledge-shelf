@@ -138,12 +138,12 @@ export function runCli(rawArgs: string[]): void {
     }
   }
 
-  if (args.includes('--help') || args.includes('-h')) {
+  const command = args[0];
+
+  if (!command || args.includes('--help') || args.includes('-h')) {
     printHelp();
     return;
   }
-
-  const command = args[0];
   const primaryDir = cliDirs.length > 0 ? resolveKnowledgeDir(cliDirs[0]) : resolveKnowledgeDir();
   const allDirs =
     cliDirs.length > 0

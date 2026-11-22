@@ -10,6 +10,7 @@ import { execSync, spawnSync } from 'node:child_process';
 import * as path from 'node:path';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
+import { pathToFileURL } from 'node:url';
 
 const CLI_PATH = path.resolve(__dirname, '..', 'dist', 'index.js');
 const FIXTURES_DIR = path.resolve(__dirname, 'fixtures', 'sample-knowledge');
@@ -67,6 +68,34 @@ describe('CLI Commands', () => {
       });
       expect(missingDir.status).toBe(1);
       expect(missingDir.stderr).toContain('--dir requires a directory path');
+    });
+
+    it('should show help when run in interactive TTY mode without arguments without hanging', () => {
+      const targetUrl = JSON.stringify(pathToFileURL(CLI_PATH).href);
+      const res = spawnSync(
+        process.execPath,
+        ['--input-type=module', '-e', `process.stdin.isTTY = true; import(${targetUrl})`],
+        { encoding: 'utf-8', timeout: 5_000 }
+      );
+      expect(res.status).toBe(0);
+      expect(res.stdout).toContain('Knowledge Shelf');
+      expect(res.stdout).toContain('Commands:');
+    });
+
+    it('should show help when run with help subcommand or --help flag', () => {
+      const res1 = spawnSync(process.execPath, [CLI_PATH, 'help'], {
+        encoding: 'utf-8',
+        timeout: 5_000,
+      });
+      expect(res1.status).toBe(0);
+      expect(res1.stdout).toContain('Commands:');
+
+      const res2 = spawnSync(process.execPath, [CLI_PATH, '--help'], {
+        encoding: 'utf-8',
+        timeout: 5_000,
+      });
+      expect(res2.status).toBe(0);
+      expect(res2.stdout).toContain('Commands:');
     });
   });
 
