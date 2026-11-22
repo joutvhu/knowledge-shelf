@@ -2,6 +2,7 @@
 node_modules/
 dist/
 *.tsbuildinfo
+*.tgz
 
 # IDE-specific files
 # IntelliJ / Android Studio

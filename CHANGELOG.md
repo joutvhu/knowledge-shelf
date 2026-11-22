@@ -1,40 +1,26 @@
 # Changelog
 
-## [1.1.1]
-
-### Added
-- Added `--no-verify` flag to `update`, `sync`, and `pin` commands to bypass validation of fetched content.
-- Added `fullCommit` field to `.registry.json` source entries to store full 40-character commit SHAs for exact comparisons during frozen sync.
-
-### Fixed
-- **B1, B2**: Hygiene scanner enhancements: scanned copy set across dot-prefixed folders and `node_modules`, detecting sensitive files (`.env`, `.env.*`, `.npmrc`, `.netrc`, `.pypirc`, `.secret*`), token patterns (GitHub tokens `ghp_`/`gho_`/`github_pat_`, AWS access key IDs `AKIA...`, Slack tokens `xoxb-`/`xoxp-`, PEM private keys), and hardcoded secret assignments, while safely ignoring placeholder expressions.
-- **B3**: Fast-forward publish on existing remote branches based on the remote branch tip (never force-pushes), with clean no-op handling reporting "No changes to publish" without creating empty commits if remote branch content already matches.
-- **B4**: Direct publishing of standalone `.md` files into a remote target repo with frontmatter validation and hygiene checks.
-- **B5**: Fixed `sync --frozen` to support 40-character full commit SHAs (prefix matching for hex SHAs >= 7 characters) and resolved git tags/branches against `regEntry.pin` and remote commits.
-- **B6**: Fixed `sync` to detect local modifications via checksum comparison and skip modified units without overwriting unless `--force` is specified.
-- **B7**: Staging validation and `--no-verify` flag on `update`, `sync`, and `pin` to stage and validate incoming content before replacing installed units, preventing broken remote versions from overwriting working local units.
-- **B8**: Checksum coverage across dot-files and `node_modules` with backward-compatible legacy fallback for older checksums.
-- **B9**: Atomic registry writes via tempfile + rename in `saveRegistry` to prevent corrupted `.registry.json` on unexpected process termination.
-- **B10**: Support for custom `type` categories (any non-empty string) in manifests, schema, and MCP `search_docs` search filter in addition to built-in types.
-- **B11**: Manifest placeholders resolution and enforcement (`default`, `required`, and regex `pattern` validation) in `toolRunWorkflow` for used placeholders.
-- **B12**: Strict shape validation for `scripts.*.args` (`required: boolean`, string `type` and `description`, optional `default`) and documented the field as informational.
-- **B13**: Integer range validation for `timeout_ms` (1000..600000 ms) in scripts and workflows.
-
 ## [1.1.0] - 2026-11-19
 
 ### Added
 - Added `install <path> [--name <alias>] [--force] [--all]` CLI command to validate and install drafted knowledge units or standalone `.md` files from a local directory.
 - Added support for passing direct local paths to `validate` before installing into the knowledge directory.
+- Added `--no-verify` flag to `update`, `sync`, and `pin` commands to bypass validation of fetched content.
+- Added `fullCommit` field to `.registry.json` source entries to store full 40-character commit SHAs for exact comparisons during frozen sync.
+- Added support for publishing standalone `.md` files directly into a remote target repo with frontmatter validation and hygiene checks.
+- Added support for custom `type` categories (any non-empty string) in manifests, schema, and MCP `search_docs` filter in addition to built-in types.
 
 ### Security
 - Enforced strict path containment (`resolveInsideDir`) across `manifest.doc`, case-insensitive document lookups, workflow names, workflow `copy` sources, workflow `copy`/`mkdir` target paths, `.cache/` clone targets, and all CLI commands (`remove`, `add`, `update`, `info`, `export`, `validate`).
 - Sanitized repository names derived from git URLs (`deriveNameFromUrl`) and verified `.cache/` containment (`getCloneTarget`) so URLs ending in `..`, `.`, or `.git` cannot delete the knowledge directory.
 - Hardened Windows `.cmd`/`.bat` script execution (`isSafeCmdArg`) by rejecting arguments containing `cmd.exe` metacharacters (`" % ! ^ & | < >` or control characters) that could trigger command injection or environment variable expansion (BatBadBut class of issues).
 - Protected internal dot-prefixed paths (`.registry.json`, `.cache`, `.git`) from removal via `knowledge-shelf remove`.
+- Hygiene scanner enhancements: scanned copy set across dot-prefixed folders and `node_modules`, detecting sensitive files (`.env`, `.env.*`, `.npmrc`, `.netrc`, `.pypirc`, `.secret*`), token patterns (GitHub tokens `ghp_`/`gho_`/`github_pat_`, AWS access key IDs `AKIA...`, Slack tokens `xoxb-`/`xoxp-`, PEM private keys), and hardcoded secret assignments, while safely ignoring placeholder expressions.
+- Prevented credential leakage: scanner warning messages never include raw secret values.
 
 ### Fixed
 - Fixed data loss in `parseFrontmatter` where documents containing `---` horizontal rules in the body were truncated after the first rule.
-- Fixed `extractSections` and `get_doc_section` to ignore `#` comment lines inside fenced code blocks (`` ``` `` / `~~~`) and prioritize exact heading matches over partial parent heading matches.
+- Fixed `extractSections` and `get_doc_section` to ignore `#` comment lines inside fenced code blocks (`````` / `~~~`) and prioritize exact heading matches over partial parent heading matches.
 - Fixed binary file corruption in workflow `copy` steps (e.g., `.jar`, `.png`, `.woff2` files are now copied as raw buffers instead of UTF-8 text).
 - Fixed binary detection in `get_resource` by checking buffer bytes for `NUL` instead of relying on an unreachable UTF-8 read exception, and set standard MCP `isError: true` on all error tool responses.
 - Fixed `run_workflow` to apply `default` values defined in workflow input schemas when optional inputs are omitted.
@@ -45,6 +31,14 @@
 - Fixed `loadRegistry` silently resetting `.registry.json` to empty on parse errors; it now exits with an error to prevent erasing existing entries.
 - Fixed `add --all` and `install --all` to detect duplicate unit folder names across subdirectories and skip nested child units inside parent manifest units.
 - Constrained `search_docs` `max_results` schema to integers between `1` and `100`.
+- Fixed publish to existing remote branches by basing the branch on the remote tracking branch tip (`refs/remotes/origin/<targetBranch>`), fast-forwarding instead of non-fast-forward divergence, and reporting "No changes to publish" without creating empty commits or pushing when remote content matches.
+- Fixed `sync --frozen` to support 40-character full commit SHAs, prefix matching for hex SHAs >= 7 characters, and remote tags/branches.
+- Fixed `sync` discarding local modifications: detects drift via checksums and skips modified units without overwriting unless `--force` is passed.
+- Fixed `update`, `sync`, and `pin` replacing working units with broken incoming content by staging and validating before applying, with `--no-verify` flag support.
+- Fixed checksum coverage to include dot-files and `node_modules` while preserving backward-compatible legacy fallback for untouched units.
+- Fixed atomic registry writes in `saveRegistry` via unique temporary file and rename with Windows retry loop.
+- Fixed manifest placeholder handling in `toolRunWorkflow`: resolved and enforced `default`, `required`, and regex `pattern` validation for used placeholders.
+- Fixed schema and validator mismatches: validated `scripts.*.args` shape (`required: boolean`, string `type` and `description`) and enforced integer bounds for `timeout_ms` (1000..600000 ms) in scripts and workflows.
 
 ### Changed
 - Extracted shared core logic into `src/core.ts` and MCP server factory into `src/server.ts`, unifying search scoring (with whole-token priority and section heading support) between the MCP server and CLI.

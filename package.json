@@ -14,7 +14,14 @@
     "pretest": "npm run build",
     "test": "vitest run",
     "test:watch": "vitest",
-    "prepublishOnly": "npm run build"
+    "prepublishOnly": "npm run build",
+    "bump": "npm version patch --no-git-tag-version && npm install",
+    "bump:patch": "npm version patch --no-git-tag-version && npm install",
+    "bump:minor": "npm version minor --no-git-tag-version && npm install",
+    "bump:major": "npm version major --no-git-tag-version && npm install",
+    "local:publish": "node scripts/publish-local.mjs",
+    "local:pack": "node scripts/publish-local.mjs --pack-only",
+    "local:uninstall": "npm uninstall -g knowledge-shelf"
   },
   "keywords": [
     "mcp",
