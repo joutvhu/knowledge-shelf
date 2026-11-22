@@ -50,12 +50,13 @@ AI: [searches knowledge] → finds cucumber-boilerplate
     └── coding-standards.md
 ```
 
-AI accesses this through 7 MCP tools:
+AI accesses this through 8 MCP tools:
 
 | Tool              | What AI does with it                                        |
 | ----------------- | ----------------------------------------------------------- |
 | `search_docs`     | Find relevant knowledge by keyword                          |
 | `get_manifest`    | Understand what a unit contains (modules, workflows)        |
+| `get_module`      | Resolve a specific module with its files and dependencies   |
 | `get_doc`         | Read main documentation                                     |
 | `get_doc_section` | Read a specific section                                     |
 | `get_resource`    | Read code files, templates, configs                         |
@@ -100,7 +101,8 @@ Add the configuration below to your MCP client's configuration file. Here are th
         "get_doc",
         "get_doc_section",
         "get_resource",
-        "get_manifest"
+        "get_manifest",
+        "get_module"
       ]
     }
   }
@@ -126,7 +128,8 @@ To use a custom knowledge path:
         "get_doc",
         "get_doc_section",
         "get_resource",
-        "get_manifest"
+        "get_manifest",
+        "get_module"
       ]
     }
   }

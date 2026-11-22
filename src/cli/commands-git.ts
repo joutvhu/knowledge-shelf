@@ -199,10 +199,8 @@ export function installValidated(
       fs.copyFileSync(srcPath, staged);
 
       if (!noVerify) {
-        const vRes = validateStaged(staged, false);
-        const { errors, warnings } = validateStandaloneMdFile(staged);
-        printValidationResults(unitName, errors, warnings);
-        if (!vRes.ok || errors.length > 0) {
+        const ok = validateStaged(staged, unitName, false);
+        if (!ok) {
           console.error(
             `Error: Validation failed for '${unitName}'; keeping the installed version (use --no-verify to bypass).`
           );
@@ -217,17 +215,8 @@ export function installValidated(
       syncManifestName(stageRoot, unitName);
 
       if (!noVerify) {
-        const vRes = validateStaged(stageRoot, true);
-        const manifestPath = path.join(stageRoot, 'manifest.json');
-        let errors: string[] = [];
-        let warnings: string[] = [];
-        if (fs.existsSync(manifestPath)) {
-          const res = validateManifestUnitDir(stageRoot, unitName);
-          errors = res.errors;
-          warnings = res.warnings;
-          printValidationResults(unitName, errors, warnings);
-        }
-        if (!vRes.ok || errors.length > 0) {
+        const ok = validateStaged(stageRoot, unitName, false);
+        if (!ok) {
           console.error(
             `Error: Validation failed for '${unitName}'; keeping the installed version (use --no-verify to bypass).`
           );
@@ -677,6 +666,77 @@ export function cmdUpdate(knowledgeDir: string, args: string[]): void {
       continue;
     }
 
+    if (source.url.startsWith('archive:')) {
+      const archivePath = source.url.slice('archive:'.length);
+      console.log(`Updating '${source.name}' from archive ${archivePath}...`);
+      if (!fs.existsSync(archivePath)) {
+        console.log(`  Skipping '${source.name}' (archive file no longer exists)`);
+        continue;
+      }
+      const extractDir = path.join(cacheDir, `update-archive-${process.pid}-${Date.now()}`);
+      fs.mkdirSync(extractDir, { recursive: true });
+      try {
+        const lower = archivePath.toLowerCase();
+        let res: ReturnType<typeof spawnSync>;
+        if (lower.endsWith('.tar.gz') || lower.endsWith('.tgz')) {
+          res = spawnSync('tar', ['-xzf', archivePath, '-C', extractDir], { stdio: 'pipe', encoding: 'utf-8' });
+        } else if (lower.endsWith('.zip')) {
+          if (process.platform === 'win32') {
+            const escSrc = archivePath.replace(/'/g, "''");
+            const escDst = extractDir.replace(/'/g, "''");
+            res = spawnSync(
+              'powershell',
+              [
+                '-NoProfile',
+                '-Command',
+                `Add-Type -AssemblyName System.IO.Compression.FileSystem; [System.IO.Compression.ZipFile]::ExtractToDirectory('${escSrc}', '${escDst}')`,
+              ],
+              { stdio: 'pipe', encoding: 'utf-8' }
+            );
+          } else {
+            res = spawnSync('unzip', ['-q', archivePath, '-d', extractDir], { stdio: 'pipe', encoding: 'utf-8' });
+          }
+        } else {
+          throw new Error('Unsupported archive format.');
+        }
+
+        if (res.error || res.status !== 0) {
+          throw new Error(String(res.stderr || (res.error ? res.error.message : 'extraction failed')));
+        }
+
+        const entries = fs
+          .readdirSync(extractDir, { withFileTypes: true })
+          .filter((e) => !e.name.startsWith('.') && e.name !== '__MACOSX');
+
+        let installSource = extractDir;
+        if (entries.length === 1 && fs.existsSync(path.join(extractDir, entries[0].name))) {
+          installSource = path.join(extractDir, entries[0].name);
+        } else {
+          const directMatch = path.join(extractDir, source.name);
+          if (fs.existsSync(directMatch)) {
+            installSource = directMatch;
+          }
+        }
+
+        const destDir = resolveSafeUnitDir(knowledgeDir, source.name);
+        const ok = installValidated(knowledgeDir, installSource, destDir, source.name, noVerify);
+        if (!ok) {
+          failed++;
+        } else {
+          source.checksum = computeUnitChecksum(destDir);
+          source.updatedAt = new Date().toISOString();
+          updated++;
+          console.log('  ✓ Updated from archive');
+        }
+      } catch (e) {
+        console.error(`  Error updating '${source.name}': ${e instanceof Error ? e.message : e}`);
+        failed++;
+      } finally {
+        removeDirSync(extractDir);
+      }
+      continue;
+    }
+
     const groupKey = `${source.url}\0${source.branch || ''}`;
     const list = remoteGroups.get(groupKey) || [];
     list.push(source);
@@ -795,9 +855,10 @@ export function cmdPin(knowledgeDir: string, args: string[]): void {
   }
 
   if (version && version !== source.commit) {
-    if (source.url.startsWith('local:')) {
+    if (source.url.startsWith('local:') || source.url.startsWith('archive:')) {
+      const srcType = source.url.startsWith('local:') ? 'local path' : 'archive';
       console.error(
-        `Error: '${name}' was installed from a local path and has no git history; ` +
+        `Error: '${name}' was installed from a ${srcType} and has no git history; ` +
           `cannot pin it to '${version}'. Run 'pin ${name}' without a version to lock it as-is.`
       );
       process.exit(1);
@@ -894,6 +955,10 @@ export function cmdOutdated(knowledgeDir: string, args: string[]): void {
       console.log(`  ${s.name}: local${drift}`);
       continue;
     }
+    if (s.url.startsWith('archive:')) {
+      console.log(`  ${s.name}: archive${drift}`);
+      continue;
+    }
     if (s.pin) {
       console.log(`  ${s.name}: pinned (${s.pin})${drift}`);
       continue;
@@ -956,7 +1021,7 @@ export function cmdSync(knowledgeDir: string, args: string[]): void {
   } else {
     const reg = loadRegistry(knowledgeDir);
     sources = reg.sources
-      .filter((s) => !s.url.startsWith('local:'))
+      .filter((s) => !s.url.startsWith('local:') && !s.url.startsWith('archive:'))
       .map((s) => ({
         name: s.name,
         url: s.url,

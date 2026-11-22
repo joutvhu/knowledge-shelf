@@ -42,15 +42,21 @@ knowledge-shelf init --dir /path/to/custom
 Install knowledge from a git repository.
 
 ```bash
-knowledge-shelf add <url> [--path <subfolder>] [--name <alias>] [--all]
+knowledge-shelf add <url> [--path <subfolder>] [--name <alias>] [--ref <ref>] [--pack <name>] [--all] [--force] [--no-verify] [--trust] [--pin]
 ```
 
 | Option | Description |
 |---|---|
 | `<url>` | Git repository URL (HTTPS or SSH) |
-| `--path <subfolder>` | Install only a specific subfolder.  Uses sparse checkout for speed. |
+| `--path <subfolder>` | Install only a specific subfolder. Uses sparse checkout for speed. |
 | `--name <alias>` | Custom name for the installed unit (default: derived from URL or path) |
+| `--ref <ref>` | Specific branch, tag, or commit to checkout |
+| `--pack <name>` | Install a named bundle of units declared in repo's `shelf.json` |
 | `--all` | Auto-detect and install ALL subfolders with `manifest.json` (monorepo mode) |
+| `--force`, `-f` | Overwrite existing installed units |
+| `--no-verify` | Skip manifest / document validation before installing |
+| `--trust` | Mark remote source as trusted for script execution under `--strict-trust` |
+| `--pin` | Automatically pin source to installed commit/ref to prevent updates |
 
 **Examples:**
 ```bash
@@ -332,12 +338,12 @@ Validate, hygiene-check, and publish a knowledge unit folder or a standalone `.m
 
 - **Standalone `.md` publishing:** Accepts either a manifest-based unit directory or a standalone `.md` file. Validates markdown frontmatter and copies the file to the target repo at `--path` if given, or at the repo root under its own filename if omitted.
 - **Path destination (`--path <dest-path>`):** For a directory unit, specifies the destination subfolder in the target repo. For a standalone `.md` file, specifies the destination path/file in the target repo.
-- **Default branch:** If `--branch` is omitted, defaults to `knowledge/<name>` (where `<name>` is the unit name or markdown basename).
+- **Default branch:** If `--branch` is omitted, defaults to `knowledge/<name>-<version>` for manifest units and `knowledge/<name>` for standalone markdown files.
 - **Fast-forward onto existing remote branches:** If the target branch exists on the remote, `publish` fetches and bases the working branch on the remote branch tip, applying the unit content as a new commit on top of it.
 - **Never force-pushes:** `publish` pushes strictly as a fast-forward and never uses `--force` on git push. `--force` on the command line only overrides pre-publish hygiene check warnings (e.g., detected secrets, sensitive files). If push is rejected by the remote, `publish` fails with exit code 1 without altering remote history. If the unit already matches the branch content, it prints "No changes to publish" and exits 0.
 
-### `import <archive.zip|.tar.gz> [--name <alias>] [--force]`
-Extract, validate, and install a packaged knowledge unit or standalone `.md` file from a `.zip` or `.tar.gz` archive.
+### `import <archive.zip|.tar.gz> [--name <alias>] [--force] [--trust]`
+Extract, validate, and install a packaged knowledge unit or standalone `.md` file from a `.zip` or `.tar.gz` archive. Use `--trust` to mark the imported archive unit as trusted for script execution under `--strict-trust`.
 
 ### `trust <name>` / `untrust <name>`
 Manage per-unit script execution trust when running the MCP server with `--strict-trust`.

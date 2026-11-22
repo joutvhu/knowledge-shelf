@@ -102,6 +102,8 @@ export function collectStepPlaceholders(step: Record<string, unknown>, out: Set<
     case 'patch':
       if (typeof step.target === 'string') collectPlaceholders(step.target, out);
       if (typeof step.content === 'string') collectPlaceholders(step.content, out);
+      if (typeof step.anchor === 'string') collectPlaceholders(step.anchor, out);
+      if (typeof step.skip_if_contains === 'string') collectPlaceholders(step.skip_if_contains, out);
       break;
     case 'mkdir':
       if (typeof step.path === 'string') collectPlaceholders(step.path, out);

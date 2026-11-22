@@ -116,13 +116,13 @@ export function resolveKnowledgeDir(explicitDir?: string): string {
     return path.resolve(expandHome(explicitDir));
   }
 
-  if (process.env.KNOWLEDGE_DIR) {
-    return path.resolve(expandHome(process.env.KNOWLEDGE_DIR));
-  }
-
   if (process.env.KNOWLEDGE_DIRS) {
     const first = process.env.KNOWLEDGE_DIRS.split(path.delimiter).map((s) => s.trim()).find(Boolean);
     if (first) return path.resolve(expandHome(first));
+  }
+
+  if (process.env.KNOWLEDGE_DIR) {
+    return path.resolve(expandHome(process.env.KNOWLEDGE_DIR));
   }
 
   const found = findWalkUpRegistryDir(process.cwd());

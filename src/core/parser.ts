@@ -152,6 +152,23 @@ export function isGlobPattern(p: string): boolean {
   return /[*?[\]{}]/.test(p);
 }
 
+// Expands {a,b} brace alternatives in a glob pattern into individual patterns.
+// e.g. "src/**/*.{ts,js}" -> ["src/**/*.ts", "src/**/*.js"]
+export function expandBraces(pattern: string): string[] {
+  const match = pattern.match(/\{([^{}]+)\}/);
+  if (!match || !match[1].includes(',')) return [pattern];
+  const options = match[1].split(',');
+  const prefix = pattern.slice(0, match.index!);
+  const suffix = pattern.slice(match.index! + match[0].length);
+  const expanded: string[] = [];
+  for (const opt of options) {
+    for (const sub of expandBraces(`${prefix}${opt}${suffix}`)) {
+      expanded.push(sub);
+    }
+  }
+  return expanded;
+}
+
 /**
  * Converts a POSIX-style relative glob pattern (supporting `**`, `*`, `?`) to a RegExp.
  */
@@ -192,7 +209,8 @@ export function globToRegExp(pattern: string): RegExp {
 
 export function matchesAnyGlob(relPath: string, patterns: string[]): boolean {
   const normalized = relPath.replace(/\\/g, '/');
-  return patterns.some((pat) => globToRegExp(pat).test(normalized));
+  const expanded = patterns.flatMap(expandBraces);
+  return expanded.some((pat) => globToRegExp(pat).test(normalized));
 }
 
 /**
@@ -235,21 +253,28 @@ export function resolveUnitFiles(
       continue;
     }
 
-    if (isGlobPattern(pat)) {
-      const rx = globToRegExp(pat);
-      for (const rel of getAllUnitFiles()) {
-        if (rx.test(rel) && !matchesAnyGlob(rel, excludePatterns)) {
-          matchedSet.add(rel);
+    const hadGlob = isGlobPattern(pat);
+    const expandedSubPatterns = expandBraces(pat);
+
+    for (const subPat of expandedSubPatterns) {
+      if (isGlobPattern(subPat)) {
+        const rx = globToRegExp(subPat);
+        for (const rel of getAllUnitFiles()) {
+          if (rx.test(rel) && !matchesAnyGlob(rel, excludePatterns)) {
+            matchedSet.add(rel);
+          }
         }
-      }
-    } else {
-      const resolved = resolveInsideDir(unitDir, pat, true);
-      if (!resolved) {
-        escapedPatterns.push(rawPattern);
-      } else if (!fs.existsSync(resolved)) {
-        missingLiterals.push(rawPattern);
-      } else if (!matchesAnyGlob(pat, excludePatterns)) {
-        matchedSet.add(pat);
+      } else {
+        const resolved = resolveInsideDir(unitDir, subPat, true);
+        if (!resolved) {
+          escapedPatterns.push(rawPattern);
+        } else if (!fs.existsSync(resolved)) {
+          if (!hadGlob) {
+            missingLiterals.push(rawPattern);
+          }
+        } else if (!matchesAnyGlob(subPat, excludePatterns)) {
+          matchedSet.add(subPat);
+        }
       }
     }
   }

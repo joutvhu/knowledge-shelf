@@ -485,6 +485,10 @@ async function executeRunStep(
       return;
     }
     cwd = cwdCheck.resolvedPath;
+    if (!options.dryRun && (!fs.existsSync(cwd) || !fs.statSync(cwd).isDirectory())) {
+      results.errors.push(`Working directory not found: ${cwd}`);
+      return;
+    }
   }
 
   const ext = path.extname(resolvedScript).toLowerCase();

@@ -13,6 +13,7 @@ import {
   inspectUnitSecurity,
   normalizeListField,
   parseFrontmatter,
+  rankDocuments,
   resolveInsideDir,
   scanDocuments,
   searchScore,
@@ -716,10 +717,27 @@ export function cmdInstall(knowledgeDir: string, args: string[]): void {
 }
 
 export function cmdSearch(knowledgeDirs: string[], args: string[]): void {
-  const query = args.join(' ').trim();
+  let typeFilter: string | undefined;
+  const terms: string[] = [];
 
-  if (!query) {
-    console.error('Error: Query is required.\nUsage: knowledge-shelf search <keywords>');
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === '--type' || args[i] === '-t') {
+      if (i + 1 >= args.length || args[i + 1].startsWith('-')) {
+        console.error('Error: --type requires a type filter.');
+        process.exit(1);
+      }
+      typeFilter = args[++i];
+    } else if (args[i].startsWith('-')) {
+      console.error(`Error: Unknown option '${args[i]}' for 'search'.`);
+      process.exit(1);
+    } else {
+      terms.push(args[i]);
+    }
+  }
+
+  const query = terms.join(' ').trim();
+  if (!query && !typeFilter) {
+    console.error('Error: Query is required.\nUsage: knowledge-shelf search <keywords> [--type <type>]');
     process.exit(1);
   }
 
@@ -729,34 +747,19 @@ export function cmdSearch(knowledgeDirs: string[], args: string[]): void {
     return;
   }
 
-  const queryTerms = query.split(/\s+/).filter(Boolean);
-  const scored: Array<{ name: string; title: string; description: string; score: number; type: string }> = [];
-
-  for (const doc of docs) {
-    const score = searchScore(doc, queryTerms);
-    if (score > 0) {
-      scored.push({
-        name: doc.name,
-        title: doc.title,
-        description: doc.description,
-        score,
-        type: doc.has_manifest ? doc.type || 'manifest' : 'standalone',
-      });
-    }
-  }
-
-  scored.sort((a, b) => b.score - a.score);
-  const results = scored.slice(0, 10);
+  const results = rankDocuments(docs, query, { type: typeFilter }).slice(0, 10);
+  const displayQuery = query || `(type: ${typeFilter})`;
 
   if (results.length === 0) {
-    console.log(`No results for "${query}".`);
+    console.log(`No results for "${displayQuery}".`);
     return;
   }
 
-  console.log(`\nResults for "${query}" (${results.length} found):\n`);
+  console.log(`\nResults for "${displayQuery}" (${results.length} found):\n`);
   for (const r of results) {
     const desc = r.description ? `  ${r.description.slice(0, 80)}` : '';
-    console.log(`  ${r.name}  [${r.type}]  (score: ${r.score})`);
+    const kind = r.has_manifest ? r.type || 'manifest' : 'standalone';
+    console.log(`  ${r.name}  [${kind}]  (score: ${r.relevance_score})`);
     if (desc) console.log(`  ${desc}`);
     console.log('');
   }

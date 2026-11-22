@@ -431,14 +431,23 @@ export function toolGetResource(
       break;
     }
 
-    // If this layer already defines a manifest unit matching the top-level folder segment,
+    // If this layer already defines a manifest unit matching any ancestor folder prefix,
     // it shadows lower layers for that entire unit — do not leak files from shadowed units.
-    if (firstSegment) {
-      const shadowedFolder = resolveInsideDir(dir, firstSegment, true);
-      const hasShadowedUnit =
-        (shadowedFolder && fs.existsSync(path.join(shadowedFolder, 'manifest.json'))) ||
-        Boolean(findManifestFolderCaseInsensitive(dir, firstSegment));
-      if (hasShadowedUnit) {
+    if (normalizedRel.includes('/')) {
+      const segments = normalizedRel.split('/');
+      let shadowed = false;
+      for (let i = segments.length - 1; i >= 1; i--) {
+        const prefix = segments.slice(0, i).join('/');
+        const shadowedFolder = resolveInsideDir(dir, prefix, true);
+        const hasShadowedUnit =
+          (shadowedFolder && fs.existsSync(path.join(shadowedFolder, 'manifest.json'))) ||
+          Boolean(findManifestFolderCaseInsensitive(dir, prefix));
+        if (hasShadowedUnit) {
+          shadowed = true;
+          break;
+        }
+      }
+      if (shadowed) {
         break;
       }
     }

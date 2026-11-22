@@ -87,7 +87,7 @@ Commands:
   export <name> [--output <path>] [--format zip|tar]
       Package a knowledge unit or standalone .md file as a zip or tar.gz archive.
 
-  import <archive> [--name <alias>] [--force]
+  import <archive> [--name <alias>] [--force] [--trust]
       Validate and install a knowledge unit from a .zip or .tar.gz archive.
 
   remove <name>
@@ -103,8 +103,8 @@ Global Options:
   --dir <path>       Explicit knowledge directory (repeatable for layered MCP/search/list).
   --read-only        (MCP server) Disable side-effecting workflow execution (dry_run still allowed).
   --strict-trust     (MCP server) Block script execution in untrusted remote units.
-  --include-global   (MCP server) Append ~/.knowledge after explicit --dir layers.
-  --no-global        (MCP server) Do not auto-append ~/.knowledge.
+  --include-global   (MCP server / CLI) Append ~/.knowledge after explicit --dir layers.
+  --no-global        (MCP server / CLI) Do not auto-append ~/.knowledge.
 
 Resolution Order:
   1. --dir flag(s) (highest priority; first dir is primary writable dir)
@@ -117,22 +117,33 @@ Resolution Order:
 export function runCli(rawArgs: string[]): void {
   const cliDirs: string[] = [];
   const args: string[] = [];
+  let includeGlobal: boolean | undefined;
 
   for (let i = 0; i < rawArgs.length; i++) {
-    if (rawArgs[i] === '--dir') {
+    const arg = rawArgs[i];
+    if (arg === '--dir') {
       if (i + 1 >= rawArgs.length || rawArgs[i + 1].startsWith('-')) {
         console.error('Error: --dir requires a directory path.');
         process.exit(1);
       }
       cliDirs.push(rawArgs[++i]);
+    } else if (arg === '--include-global') {
+      includeGlobal = true;
+    } else if (arg === '--no-global') {
+      includeGlobal = false;
+    } else if (arg === '--read-only' || arg === '--strict-trust') {
+      // Allowed global MCP flags ignored for CLI subcommands
     } else {
-      args.push(rawArgs[i]);
+      args.push(arg);
     }
   }
 
   const command = args[0];
   const primaryDir = cliDirs.length > 0 ? resolveKnowledgeDir(cliDirs[0]) : resolveKnowledgeDir();
-  const allDirs = cliDirs.length > 0 ? resolveKnowledgeDirs(cliDirs) : resolveKnowledgeDirs();
+  const allDirs =
+    cliDirs.length > 0
+      ? resolveKnowledgeDirs(cliDirs, { includeGlobal })
+      : resolveKnowledgeDirs(undefined, { includeGlobal });
 
   switch (command) {
     case 'add':

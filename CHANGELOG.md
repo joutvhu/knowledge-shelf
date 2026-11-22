@@ -37,8 +37,15 @@
 - Fixed `update`, `sync`, and `pin` replacing working units with broken incoming content by staging and validating before applying, with `--no-verify` flag support.
 - Fixed checksum coverage to include dot-files and `node_modules` while preserving backward-compatible legacy fallback for untouched units.
 - Fixed atomic registry writes in `saveRegistry` via unique temporary file and rename with Windows retry loop.
-- Fixed manifest placeholder handling in `toolRunWorkflow`: resolved and enforced `default`, `required`, and regex `pattern` validation for used placeholders.
+- Fixed manifest placeholder handling in `toolRunWorkflow`: resolved and enforced `default`, `required`, and regex `pattern` validation for used placeholders, and collected placeholders in `patch` step `anchor` and `skip_if_contains`.
 - Fixed schema and validator mismatches: validated `scripts.*.args` shape (`required: boolean`, string `type` and `description`) and enforced integer bounds for `timeout_ms` (1000..600000 ms) in scripts and workflows.
+- Fixed `outdated`, `update`, `sync`, and `pin` commands to properly handle `archive:` sources without attempting git SSH connections.
+- Fixed environment variable precedence between `resolveKnowledgeDir` and `resolveKnowledgeDirs` so `KNOWLEDGE_DIRS` consistently takes priority over `KNOWLEDGE_DIR`.
+- Fixed multi-layer resource shadowing in `toolGetResource` for nested manifest units across directory layers.
+- Fixed glob pattern matching in manifests to support `{a,b}` brace expansion in `resolveUnitFiles` and `matchesAnyGlob`.
+- Fixed CLI flag handling so global flags (`--include-global`, `--no-global`, `--read-only`, `--strict-trust`) work seamlessly with subcommands.
+- Added `schemas/` to package distribution files in `package.json`.
+- Improved error messaging for workflow `run` steps when the target `cwd` does not exist on disk.
 
 ### Changed
 - Extracted shared core logic into `src/core.ts` and MCP server factory into `src/server.ts`, unifying search scoring (with whole-token priority and section heading support) between the MCP server and CLI.
