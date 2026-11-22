@@ -30,6 +30,7 @@ export interface ValidationResult {
 export interface ValidationContext {
   expectedUnitName?: string;
   installedUnits?: Set<string>;
+  allowAnyName?: boolean;
 }
 
 export interface UnitSecuritySummary {
@@ -162,7 +163,7 @@ export function validateManifestUnitDir(
   }
   if (!manifest.description) errors.push('Missing required field: description');
 
-  if (manifest.name && manifest.name !== expectedName && manifest.name !== folderBase) {
+  if (!ctx.allowAnyName && manifest.name && manifest.name !== expectedName && manifest.name !== folderBase) {
     errors.push(`manifest.name "${manifest.name}" does not match folder name "${expectedName}"`);
   }
 

@@ -392,7 +392,11 @@ function executePatchStep(
       updated = `${existing.slice(0, idx)}${renderedContent}${sep}${existing.slice(idx)}`;
     } else if (mode === 'insert_after') {
       const afterIdx = idx + renderedAnchor.length;
-      const sep = renderedContent.startsWith('\n') ? '' : eol;
+      const needsSep =
+        !renderedAnchor.endsWith('\n') &&
+        !renderedContent.startsWith('\n') &&
+        !renderedContent.startsWith('\r\n');
+      const sep = needsSep ? eol : '';
       updated = `${existing.slice(0, afterIdx)}${sep}${renderedContent}${existing.slice(afterIdx)}`;
     } else {
       updated = `${existing.slice(0, idx)}${renderedContent}${existing.slice(idx + renderedAnchor.length)}`;
@@ -440,7 +444,7 @@ async function executeRunStep(
       results.errors.push(`Unknown script_ref '${refKey}' in manifest.scripts.`);
       return;
     }
-    if (!scriptRel) scriptRel = scriptDef.file;
+    scriptRel = scriptDef.file;
     if (!rawInterpreter && typeof scriptDef.interpreter === 'string') {
       rawInterpreter = scriptDef.interpreter.trim();
     }

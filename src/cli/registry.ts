@@ -5,7 +5,7 @@
 import * as crypto from 'node:crypto';
 import fs from 'node:fs';
 import * as path from 'node:path';
-import { resolveInsideDir, walkDir, walkUnitFiles } from '../core.js';
+import { isReservedPath, resolveInsideDir, walkDir, walkUnitFiles } from '../core.js';
 
 export interface RegistryEntry {
   name: string;
@@ -86,13 +86,22 @@ export function getCacheDir(knowledgeDir: string): string {
 }
 
 export function resolveSafeUnitDir(knowledgeDir: string, name: string): string {
-  if (!name || name === '.' || name === '..') {
+  const trimmed = (name || '').trim();
+  if (!trimmed || trimmed === '.' || trimmed === '..') {
     console.error(`Error: Invalid knowledge unit name '${name}'.`);
     process.exit(1);
   }
-  const resolved = resolveInsideDir(knowledgeDir, name, true);
+  const resolved = resolveInsideDir(knowledgeDir, trimmed, true);
   if (!resolved) {
     console.error(`Error: Access denied. '${name}' is outside the knowledge directory.`);
+    process.exit(1);
+  }
+  const segments = trimmed.split(/[\\/]+/);
+  if (
+    isReservedPath(knowledgeDir, resolved) ||
+    segments.some((seg) => !seg || seg === '.' || seg === '..' || seg.startsWith('.'))
+  ) {
+    console.error(`Error: Access denied. '${name}' is a reserved internal path or starts with '.'.`);
     process.exit(1);
   }
   return resolved;

@@ -60,7 +60,7 @@ Commands:
   info <name>
       Show detailed information about an installed knowledge unit.
 
-  search <keywords>
+  search <keywords> [--type <type>]
       Search installed knowledge by keyword (same scoring as MCP search_docs tool).
 
   list
@@ -87,7 +87,7 @@ Commands:
   export <name> [--output <path>] [--format zip|tar]
       Package a knowledge unit or standalone .md file as a zip or tar.gz archive.
 
-  import <archive> [--name <alias>] [--force] [--trust]
+  import <archive> [--name <alias>] [--force] [--all] [--trust]
       Validate and install a knowledge unit from a .zip or .tar.gz archive.
 
   remove <name>

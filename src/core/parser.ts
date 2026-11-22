@@ -149,7 +149,7 @@ export function findManifestFolders(knowledgeDir: string): string[] {
 // ---------------------------------------------------------------------------
 
 export function isGlobPattern(p: string): boolean {
-  return /[*?[\]{}]/.test(p);
+  return /[*?]/.test(p) || (p.includes('{') && p.includes('}') && p.includes(','));
 }
 
 // Expands {a,b} brace alternatives in a glob pattern into individual patterns.
@@ -242,7 +242,7 @@ export function resolveUnitFiles(
     if (!pat) continue;
 
     // Quick path escape check even for globs (e.g. "../secret/*")
-    const literalPrefix = pat.split(/[*?[\]{}]/)[0] || '.';
+    const literalPrefix = pat.split(/[*?{]/)[0] || '.';
     if (pat.startsWith('/') || /^[A-Za-z]:/.test(pat) || pat.split('/').includes('..')) {
       escapedPatterns.push(rawPattern);
       continue;

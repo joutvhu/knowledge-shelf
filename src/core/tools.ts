@@ -510,8 +510,8 @@ export function toolGetResource(
       const totalLines = lines.length;
       const startLine = Math.max(1, options.offset ?? 1);
       const maxLines = Math.max(1, options.limit ?? 200);
-      const slice = lines.slice(startLine - 1, startLine - 1 + maxLines);
-      const endLine = startLine - 1 + slice.length;
+      const slice = startLine > totalLines ? [] : lines.slice(startLine - 1, startLine - 1 + maxLines);
+      const endLine = slice.length > 0 ? startLine - 1 + slice.length : startLine;
       const header = `[lines ${startLine}-${endLine} of ${totalLines}]`;
       return { text: `${header}\n${slice.join('\n')}` };
     }

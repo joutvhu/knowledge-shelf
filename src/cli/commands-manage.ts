@@ -11,6 +11,7 @@ import {
   findManifestFolders,
   findMdFiles,
   inspectUnitSecurity,
+  isSafeUnitSegment,
   loadManifest,
   normalizeListField,
   parseFrontmatter,
@@ -23,6 +24,7 @@ import {
   walkDir,
 } from '../core.js';
 import {
+  assertSafeArchivePaths,
   collectUnitFolders,
   copyDirSync,
   formatSize,
@@ -33,13 +35,15 @@ import {
 import {
   computeUnitChecksum,
   getCacheDir,
+  getRegistryPath,
   loadRegistry,
   resolveSafeUnitDir,
   saveRegistry,
 } from './registry.js';
 
-function isSafeUnitSegment(name: string): boolean {
-  return Boolean(name) && !name.startsWith('.') && !name.includes('/') && !name.includes('\\') && name !== '..';
+function filterTopLevelManifestFolders(folders: string[]): string[] {
+  const resolved = folders.map((f) => path.resolve(f));
+  return resolved.filter((f) => !resolved.some((other) => other !== f && f.startsWith(other + path.sep)));
 }
 
 export function rejectUnknownFlags(args: string[], command: string): void {
@@ -95,32 +99,50 @@ export function cmdInit(knowledgeDir: string): void {
 }
 
 export function cmdList(primaryDir: string, knowledgeDirs: string[]): void {
-  const registry = loadRegistry(primaryDir);
-  const trackedNames = new Set(registry.sources.map((s) => s.name));
+  const dirs = knowledgeDirs && knowledgeDirs.length > 0 ? knowledgeDirs : [primaryDir];
+  const allSources: Array<{ source: any; layerDir?: string }> = [];
+  const trackedNames = new Set<string>();
 
-  const allDocs = scanDocuments(knowledgeDirs);
+  for (const d of dirs) {
+    if (fs.existsSync(d) && fs.existsSync(getRegistryPath(d))) {
+      try {
+        const reg = loadRegistry(d);
+        for (const s of reg.sources) {
+          if (!trackedNames.has(s.name)) {
+            trackedNames.add(s.name);
+            allSources.push({ source: s, layerDir: dirs.length > 1 ? d : undefined });
+          }
+        }
+      } catch {
+        /* skip invalid registry */
+      }
+    }
+  }
+
+  const allDocs = scanDocuments(dirs);
   const unmanaged = allDocs.filter((d) => !trackedNames.has(d.name));
 
-  if (registry.sources.length === 0 && unmanaged.length === 0) {
+  if (allSources.length === 0 && unmanaged.length === 0) {
     console.log('No knowledge sources installed.');
     console.log(`Knowledge directory: ${primaryDir}`);
     return;
   }
 
   console.log(
-    knowledgeDirs.length > 1
-      ? `Knowledge directories: ${knowledgeDirs.join(', ')}\n`
+    dirs.length > 1
+      ? `Knowledge directories: ${dirs.join(', ')}\n`
       : `Knowledge directory: ${primaryDir}\n`
   );
 
-  if (registry.sources.length > 0) {
+  if (allSources.length > 0) {
     console.log('Installed sources:\n');
-    for (const source of registry.sources) {
+    for (const { source, layerDir } of allSources) {
       const pathInfo = source.path ? ` (path: ${source.path})` : '';
       const branchInfo = source.branch ? ` [${source.branch}]` : '';
       const pinInfo = source.pin ? ` [pinned: ${source.pin}]` : '';
       const trustInfo = source.trusted ? ' [trusted]' : '';
-      console.log(`  ${source.name}${branchInfo}${pinInfo}${trustInfo}`);
+      const layerInfo = layerDir ? ` (${layerDir})` : '';
+      console.log(`  ${source.name}${branchInfo}${pinInfo}${trustInfo}${layerInfo}`);
       console.log(`    URL:       ${source.url}${pathInfo}`);
       console.log(`    Commit:    ${source.commit}`);
       console.log(`    Updated:   ${source.updatedAt}`);
@@ -142,7 +164,7 @@ export function cmdList(primaryDir: string, knowledgeDirs: string[]): void {
   }
 
   console.log(
-    `Total: ${registry.sources.length} tracked source(s), ${unmanaged.length} local/unmanaged unit(s)`
+    `Total: ${allSources.length} tracked source(s), ${unmanaged.length} local/unmanaged unit(s)`
   );
 }
 
@@ -394,7 +416,7 @@ export function cmdValidate(knowledgeDirs: string | string[], args: string[]): v
       }
 
       if (stat.isDirectory()) {
-        const manifestFolders = findManifestFolders(localCandidate);
+        const manifestFolders = filterTopLevelManifestFolders(findManifestFolders(localCandidate));
         if (manifestFolders.length > 0) {
           let totalErrors = 0;
           let totalWarnings = 0;
@@ -442,61 +464,93 @@ export function cmdValidate(knowledgeDirs: string | string[], args: string[]): v
     }
   }
 
-  if (!fs.existsSync(knowledgeDir)) {
-    console.error(`Error: Knowledge directory not found: ${knowledgeDir}`);
-    process.exit(1);
-  }
-
-  if (targetArg) {
-    resolveSafeUnitDir(knowledgeDir, targetArg);
-  }
-
-  const allManifestFolders = findManifestFolders(knowledgeDir);
-  const toValidate = targetArg
-    ? allManifestFolders.filter((folder) => {
-        const rel = path.relative(knowledgeDir, folder).replace(/\\/g, '/');
-        return rel === targetArg.replace(/\\/g, '/') || path.basename(folder) === targetArg;
-      })
-    : allManifestFolders;
-
-  if (targetArg && toValidate.length === 0) {
-    const targetDir = path.join(knowledgeDir, targetArg);
-    const targetMd = targetArg.endsWith('.md') ? targetDir : `${targetDir}.md`;
-    if (fs.existsSync(targetMd) && fs.statSync(targetMd).isFile()) {
-      const display = path.relative(knowledgeDir, targetMd).replace(/\\/g, '/');
-      console.log(`Validating '${display}'...`);
-      const { errors, warnings } = validateStandaloneMdFile(targetMd);
-      printValidationResults(display, errors, warnings);
-      console.log(`\n1 unit(s) validated.  ${errors.length} error(s), ${warnings.length} warning(s).`);
-      if (errors.length > 0) process.exit(1);
-      return;
-    }
-    if (!fs.existsSync(targetDir)) {
-      console.error(`Error: '${targetArg}' not found.`);
-      process.exit(1);
-    }
-    console.log('No manifest-based units to validate.');
-    return;
-  }
-
   let validatedCount = 0;
   let totalErrors = 0;
   let totalWarnings = 0;
 
-  for (const unitDir of toValidate) {
-    const displayUnit = path.relative(knowledgeDir, unitDir).replace(/\\/g, '/');
-    const manifestPath = path.join(unitDir, 'manifest.json');
-    if (!fs.existsSync(manifestPath)) continue;
-
-    validatedCount++;
-    console.log(`Validating '${displayUnit}'...`);
-    const { errors, warnings } = validateManifestUnitDir(unitDir, {
-      expectedUnitName: displayUnit,
-      installedUnits,
+  if (targetArg) {
+    if (!fs.existsSync(knowledgeDir)) {
+      console.error(`Error: Knowledge directory not found: ${knowledgeDir}`);
+      process.exit(1);
+    }
+    resolveSafeUnitDir(knowledgeDir, targetArg);
+    const allManifestFolders = filterTopLevelManifestFolders(findManifestFolders(knowledgeDir));
+    const toValidate = allManifestFolders.filter((folder) => {
+      const rel = path.relative(knowledgeDir, folder).replace(/\\/g, '/');
+      return rel === targetArg.replace(/\\/g, '/') || path.basename(folder) === targetArg;
     });
-    printValidationResults(displayUnit, errors, warnings);
-    totalErrors += errors.length;
-    totalWarnings += warnings.length;
+
+    if (toValidate.length === 0) {
+      const targetDir = path.join(knowledgeDir, targetArg);
+      const targetMd = targetArg.endsWith('.md') ? targetDir : `${targetDir}.md`;
+      if (fs.existsSync(targetMd) && fs.statSync(targetMd).isFile()) {
+        const display = path.relative(knowledgeDir, targetMd).replace(/\\/g, '/');
+        console.log(`Validating '${display}'...`);
+        const { errors, warnings } = validateStandaloneMdFile(targetMd);
+        printValidationResults(display, errors, warnings);
+        console.log(`\n1 unit(s) validated.  ${errors.length} error(s), ${warnings.length} warning(s).`);
+        if (errors.length > 0) process.exit(1);
+        return;
+      }
+      if (!fs.existsSync(targetDir)) {
+        console.error(`Error: '${targetArg}' not found.`);
+        process.exit(1);
+      }
+      console.log('No manifest-based units to validate.');
+      return;
+    }
+
+    for (const unitDir of toValidate) {
+      const displayUnit = path.relative(knowledgeDir, unitDir).replace(/\\/g, '/');
+      validatedCount++;
+      console.log(`Validating '${displayUnit}'...`);
+      const { errors, warnings } = validateManifestUnitDir(unitDir, {
+        expectedUnitName: displayUnit,
+        installedUnits,
+      });
+      printValidationResults(displayUnit, errors, warnings);
+      totalErrors += errors.length;
+      totalWarnings += warnings.length;
+    }
+  } else {
+    const existingDirs = dirs.filter((d) => fs.existsSync(d));
+    if (existingDirs.length === 0) {
+      console.error(`Error: Knowledge directory not found: ${dirs[0]}`);
+      process.exit(1);
+    }
+
+    for (const kDir of existingDirs) {
+      const manifestFolders = filterTopLevelManifestFolders(findManifestFolders(kDir));
+      for (const unitDir of manifestFolders) {
+        const displayUnit = path.relative(kDir, unitDir).replace(/\\/g, '/');
+        validatedCount++;
+        console.log(`Validating '${displayUnit}'...`);
+        const { errors, warnings } = validateManifestUnitDir(unitDir, {
+          expectedUnitName: displayUnit,
+          installedUnits,
+        });
+        printValidationResults(displayUnit, errors, warnings);
+        totalErrors += errors.length;
+        totalWarnings += warnings.length;
+      }
+
+      const mdFiles = findMdFiles(kDir);
+      for (const mdFile of mdFiles) {
+        const isInside = manifestFolders.some((mf) => {
+          const rmf = path.resolve(mf);
+          const rmd = path.resolve(mdFile);
+          return rmd === rmf || rmd.startsWith(rmf + path.sep);
+        });
+        if (isInside) continue;
+        const displayDoc = path.relative(kDir, mdFile).replace(/\\/g, '/');
+        validatedCount++;
+        console.log(`Validating '${displayDoc}'...`);
+        const { errors, warnings } = validateStandaloneMdFile(mdFile);
+        printValidationResults(displayDoc, errors, warnings);
+        totalErrors += errors.length;
+        totalWarnings += warnings.length;
+      }
+    }
   }
 
   if (validatedCount > 0) {
@@ -551,6 +605,17 @@ export function cmdInstall(knowledgeDir: string, args: string[]): void {
   fs.mkdirSync(knowledgeDir, { recursive: true });
   const registry = loadRegistry(knowledgeDir);
   const stat = fs.statSync(resolvedSource);
+
+  if (customName) {
+    const isMd = customName.toLowerCase().endsWith('.md');
+    const checkName = isMd ? customName.slice(0, -3) : customName;
+    if (!isSafeUnitSegment(checkName)) {
+      console.error(
+        `Error: Invalid unit name '${customName}'. Names cannot contain slashes or start with '.' (use a flat name like 'my-unit').`
+      );
+      process.exit(1);
+    }
+  }
 
   const upsertRegistryEntry = (unitName: string, originPath: string, destPath: string) => {
     const now = new Date().toISOString();
@@ -724,7 +789,7 @@ export function cmdInstall(knowledgeDir: string, args: string[]): void {
   console.log(`Validating '${unitName}'...`);
   const { errors, warnings } = validateManifestUnitDir(
     resolvedSource,
-    unitName
+    { expectedUnitName: unitName, allowAnyName: Boolean(customName) }
   );
   printValidationResults(unitName, errors, warnings);
 
@@ -911,6 +976,7 @@ export function cmdImport(knowledgeDir: string, args: string[]): void {
   let archiveArg = '';
   let customName = '';
   let force = false;
+  let importAll = false;
   let trusted = false;
 
   for (let i = 0; i < args.length; i++) {
@@ -922,6 +988,8 @@ export function cmdImport(knowledgeDir: string, args: string[]): void {
       customName = args[++i];
     } else if (args[i] === '--force' || args[i] === '-f') {
       force = true;
+    } else if (args[i] === '--all') {
+      importAll = true;
     } else if (args[i] === '--trust') {
       trusted = true;
     } else if (args[i].startsWith('-')) {
@@ -936,7 +1004,7 @@ export function cmdImport(knowledgeDir: string, args: string[]): void {
   }
 
   if (!archiveArg) {
-    console.error('Error: Archive path is required.\nUsage: knowledge-shelf import <archive.zip|.tar.gz> [--name <alias>] [--force]');
+    console.error('Error: Archive path is required.\nUsage: knowledge-shelf import <archive.zip|.tar.gz> [--name <alias>] [--force] [--all]');
     process.exit(1);
   }
 
@@ -945,6 +1013,8 @@ export function cmdImport(knowledgeDir: string, args: string[]): void {
     console.error(`Error: Archive not found: ${archiveArg}`);
     process.exit(1);
   }
+
+  assertSafeArchivePaths(archivePath);
 
   fs.mkdirSync(knowledgeDir, { recursive: true });
   const cacheDir = getCacheDir(knowledgeDir);
@@ -991,7 +1061,7 @@ export function cmdImport(knowledgeDir: string, args: string[]): void {
     }
 
     let installSource = extractDir;
-    if (entries.length === 1) {
+    if (entries.length === 1 && fs.statSync(path.join(extractDir, entries[0].name)).isDirectory()) {
       installSource = path.join(extractDir, entries[0].name);
     } else if (entries.some((e) => e.name === 'manifest.json')) {
       installSource = extractDir;
@@ -1007,10 +1077,19 @@ export function cmdImport(knowledgeDir: string, args: string[]): void {
       }
     }
 
+    const hasManifestDirectly = fs.existsSync(path.join(installSource, 'manifest.json'));
+    const isSingleDoc = !hasManifestDirectly && fs.statSync(installSource).isFile();
+    const shouldPassAll =
+      importAll ||
+      (!hasManifestDirectly &&
+        !isSingleDoc &&
+        !customName &&
+        (findManifestFolders(installSource).length > 0 || findMdFiles(installSource).length > 0));
+
     const installArgs = [installSource];
     if (customName) installArgs.push('--name', customName);
     if (force) installArgs.push('--force');
-    if (entries.length > 1 && !fs.existsSync(path.join(extractDir, 'manifest.json'))) {
+    if (shouldPassAll) {
       installArgs.push('--all');
     }
 

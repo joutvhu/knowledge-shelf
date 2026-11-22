@@ -30,6 +30,10 @@ export const ALLOWED_INTERPRETERS = new Set([
 
 export const ROOT_PLACEHOLDER_RE = /^\{\{[A-Za-z0-9_]+\}\}(?:[/\\].*)?$/;
 
+export function isSafeUnitSegment(name: string): boolean {
+  return Boolean(name) && !name.startsWith('.') && !name.includes('/') && !name.includes('\\') && name !== '..';
+}
+
 export const MIN_WORKFLOW_TIMEOUT_MS = 1_000;
 export const DEFAULT_WORKFLOW_TIMEOUT_MS = 120_000;
 export const MAX_WORKFLOW_TIMEOUT_MS = 600_000;
@@ -124,9 +128,6 @@ export function resolveKnowledgeDir(explicitDir?: string): string {
   if (process.env.KNOWLEDGE_DIR) {
     return path.resolve(expandHome(process.env.KNOWLEDGE_DIR));
   }
-
-  const agentsLocal = findWalkUpAgentsKnowledgeDir(process.cwd());
-  if (agentsLocal) return agentsLocal;
 
   const found = findWalkUpRegistryDir(process.cwd());
   if (found) return found;

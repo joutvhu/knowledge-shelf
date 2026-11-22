@@ -321,3 +321,54 @@ export function formatSize(bytes: number): string {
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
+
+export function assertSafeArchivePaths(archivePath: string): void {
+  const lower = archivePath.toLowerCase();
+  if (lower.endsWith('.tar.gz') || lower.endsWith('.tgz')) {
+    const listRes = spawnSync('tar', ['-ztf', archivePath], { stdio: 'pipe', encoding: 'utf-8' });
+    if (listRes.status === 0 && listRes.stdout) {
+      const lines = listRes.stdout.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+      for (const line of lines) {
+        const normalized = line.replace(/\\/g, '/');
+        if (normalized.startsWith('/') || /^[A-Za-z]:/.test(normalized) || normalized.split('/').includes('..')) {
+          throw new Error(`Archive contains unsafe path: '${line}'`);
+        }
+      }
+    }
+  } else if (lower.endsWith('.zip')) {
+    if (process.platform === 'win32') {
+      const escSrc = archivePath.replace(/'/g, "''");
+      const checkRes = spawnSync(
+        'powershell',
+        [
+          '-NoProfile',
+          '-Command',
+          `Add-Type -AssemblyName System.IO.Compression.FileSystem; ` +
+            `$z = [System.IO.Compression.ZipFile]::OpenRead('${escSrc}'); ` +
+            `foreach ($e in $z.Entries) { ` +
+            `  $n = $e.FullName.Replace('\\', '/'); ` +
+            `  if ($n.StartsWith('/') -or $n -match '^[A-Za-z]:' -or ($n.Split('/') -contains '..')) { ` +
+            `    $z.Dispose(); exit 2 ` +
+            `  } ` +
+            `}; $z.Dispose()`,
+        ],
+        { stdio: 'pipe', encoding: 'utf-8' }
+      );
+      if (checkRes.status === 2) {
+        throw new Error('Archive contains unsafe path(s) attempting path traversal.');
+      }
+    } else {
+      const listRes = spawnSync('unzip', ['-Z1', archivePath], { stdio: 'pipe', encoding: 'utf-8' });
+      if (listRes.status === 0 && listRes.stdout) {
+        const lines = listRes.stdout.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+        for (const line of lines) {
+          const normalized = line.replace(/\\/g, '/');
+          if (normalized.startsWith('/') || normalized.split('/').includes('..')) {
+            throw new Error(`Archive contains unsafe path: '${line}'`);
+          }
+        }
+      }
+    }
+  }
+}
+

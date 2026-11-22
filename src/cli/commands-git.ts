@@ -12,6 +12,7 @@ import {
   checkUnitPublishHygiene,
   expandHome,
   findManifestFolders,
+  isSafeUnitSegment,
   loadManifest,
   resolveInsideDir,
   validateManifestUnitDir,
@@ -24,6 +25,7 @@ import {
 } from './commands-manage.js';
 import {
   assertGitAvailable,
+  assertSafeArchivePaths,
   assertSafeGitArg,
   collectUnitFolders,
   copyDirSync,
@@ -59,10 +61,6 @@ import {
   resolveSafeUnitDir,
   saveRegistry,
 } from './registry.js';
-
-function isSafeUnitSegment(name: string): boolean {
-  return Boolean(name) && !name.startsWith('.') && !name.includes('/') && !name.includes('\\') && name !== '..';
-}
 
 export function validateStaged(
   stagedPath: string,
@@ -736,6 +734,7 @@ export function cmdUpdate(knowledgeDir: string, args: string[]): void {
         console.log(`  Skipping '${source.name}' (archive file no longer exists)`);
         continue;
       }
+      assertSafeArchivePaths(archivePath);
       const extractDir = path.join(cacheDir, `update-archive-${process.pid}-${Date.now()}`);
       fs.mkdirSync(extractDir, { recursive: true });
       try {
@@ -1374,7 +1373,10 @@ export function cmdIndex(args: string[]): void {
   const outFile = outputPath ? path.resolve(expandHome(outputPath)) : path.join(targetDir, 'shelf.json');
   const existing = loadShelfCatalog(targetDir);
 
-  const { units: folders } = collectUnitFolders(targetDir);
+  const { units: folders, conflicts } = collectUnitFolders(targetDir);
+  if (conflicts.length > 0) {
+    console.warn(`Warning: Multiple units share the same folder name: ${conflicts.join('; ')}.`);
+  }
   const units: ShelfCatalogUnit[] = folders.map((f) => {
     const m = loadManifest(f);
     const rel = path.relative(targetDir, f).replace(/\\/g, '/');
@@ -1397,6 +1399,7 @@ export function cmdIndex(args: string[]): void {
     ...(existing?.packs ? { packs: existing.packs } : {}),
   };
 
+  fs.mkdirSync(path.dirname(outFile), { recursive: true });
   fs.writeFileSync(outFile, JSON.stringify(catalog, null, 2) + '\n', 'utf-8');
   console.log(`✓ Generated ${outFile} (${units.length} unit(s))`);
 }

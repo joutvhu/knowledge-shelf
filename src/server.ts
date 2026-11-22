@@ -312,7 +312,7 @@ export function createKnowledgeServer(
         const docs = scanDocuments(knowledgeDirs);
         return {
           resources: docs.map((d) => ({
-            uri: `knowledge://${d.name}`,
+            uri: `knowledge://${encodeURI(d.name)}`,
             name: d.title || d.name,
             description: d.description || undefined,
             mimeType: 'text/markdown',
