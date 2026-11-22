@@ -1,6 +1,6 @@
 # Changelog
 
-## [1.1.0] - 2026-11-19
+## [1.1.0] - 2026-11-23
 
 ### Added
 - Added `install <path> [--name <alias>] [--force] [--all]` CLI command to validate and install drafted knowledge units or standalone `.md` files from a local directory.
@@ -12,6 +12,8 @@
 
 ### Security
 - Enforced strict path containment (`resolveInsideDir`) across `manifest.doc`, case-insensitive document lookups, workflow names, workflow `copy` sources, workflow `copy`/`mkdir` target paths, `.cache/` clone targets, and all CLI commands (`remove`, `add`, `update`, `info`, `export`, `validate`).
+- Blocked reserved, dot-prefixed (`.hidden`, `.cache`, `.registry.json`), and slash-containing unit names in `resolveSafeUnitDir()` and `cmdInstall`.
+- Added Zip Slip and Tar Slip traversal protection in `assertSafeArchivePaths` for `import` and `update` archive extraction.
 - Sanitized repository names derived from git URLs (`deriveNameFromUrl`) and verified `.cache/` containment (`getCloneTarget`) so URLs ending in `..`, `.`, or `.git` cannot delete the knowledge directory.
 - Hardened Windows `.cmd`/`.bat` script execution (`isSafeCmdArg`) by rejecting arguments containing `cmd.exe` metacharacters (`" % ! ^ & | < >` or control characters) that could trigger command injection or environment variable expansion (BatBadBut class of issues).
 - Protected internal dot-prefixed paths (`.registry.json`, `.cache`, `.git`) from removal via `knowledge-shelf remove`.
@@ -19,6 +21,17 @@
 - Prevented credential leakage: scanner warning messages never include raw secret values.
 
 ### Fixed
+- Fixed `resolveKnowledgeDir()` choosing `.agents/knowledges` as the primary writable directory, which broke `knowledge-shelf install ./.agents/knowledges/<name>` with a self-destination error.
+- Fixed `cmdIndex` failing with `ENOENT` when `--output` path targets a non-existent parent directory, and added warnings when duplicate unit names conflict.
+- Fixed `cmdValidate` across multiple `--dir` layers to inspect all configured directories and filter out nested template `manifest.json` files from false validation failures.
+- Fixed `cmdImport` on wrapped multi-unit archives (e.g. GitHub release zips with a single top-level folder) to automatically detect multiple units and install all of them.
+- Fixed `cmdList` with multiple `--dir` layers to aggregate tracked sources across all layer registries instead of marking them as unmanaged.
+- Fixed glob matching in `isGlobPattern` and `resolveUnitFiles` to treat Next.js route brackets (e.g. `[id]`) as literals, correctly flagging missing literal files.
+- Fixed `toolGetResource` offset handling when `offset` exceeds total line count so lines header is not inverted.
+- Fixed `toolRunWorkflow` patch action `insert_after` to prevent inserting duplicate blank lines when anchors or contents already end/start with newlines.
+- Fixed `toolRunWorkflow` script execution to prioritize `manifest.scripts[script_ref]` file consistently with manifest validation.
+- Percent-encoded resource names in MCP `server.registerResource` list handler for RFC-compliant URIs.
+- Added `--type` to `search` help text and `--all` to `import` help text.
 - Fixed data loss in `parseFrontmatter` where documents containing `---` horizontal rules in the body were truncated after the first rule.
 - Fixed `extractSections` and `get_doc_section` to ignore `#` comment lines inside fenced code blocks (`````` / `~~~`) and prioritize exact heading matches over partial parent heading matches.
 - Fixed binary file corruption in workflow `copy` steps (e.g., `.jar`, `.png`, `.woff2` files are now copied as raw buffers instead of UTF-8 text).
