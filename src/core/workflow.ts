@@ -10,6 +10,7 @@ import {
   DEFAULT_WORKFLOW_TIMEOUT_MS,
   MAX_WORKFLOW_TIMEOUT_MS,
   MIN_WORKFLOW_TIMEOUT_MS,
+  canonicalizePath,
   resolveInsideDir,
 } from './config.js';
 import { Manifest, matchesAnyGlob, walkUnitFiles } from './parser.js';
@@ -72,9 +73,9 @@ export function resolveSafeOutputTarget(
     return { error: `Input '${rootKey}' ('${rootVal || ''}') must be an absolute path.` };
   }
 
-  const rootBase = path.resolve(rootVal);
-  const subRel = replacePlaceholders(prefixMatch[2] || '', inputs);
-  if (!subRel) {
+  const rootBase = canonicalizePath(rootVal);
+  const subRel = replacePlaceholders(prefixMatch[2] || '', inputs).trim();
+  if (!subRel || subRel === '.' || subRel === './' || subRel === '.\\') {
     return { resolvedPath: rootBase };
   }
 
@@ -172,14 +173,15 @@ function evaluateWhenCondition(
       return false;
     }
     const existsOnDisk = fs.existsSync(check.resolvedPath);
+    const normCheck = check.resolvedPath.replace(/\\/g, '/');
+    const checkKey = process.platform === 'win32' ? normCheck.toLowerCase() : normCheck;
     const existsInDryRun =
       Boolean(results.dry_run) &&
-      (results.files_created.includes(check.resolvedPath) ||
-        results.files_created.some((f) => {
-          const normF = f.replace(/\\/g, '/');
-          const normCheck = check.resolvedPath!.replace(/\\/g, '/');
-          return normF === normCheck || normF.startsWith(normCheck + '/');
-        }));
+      results.files_created.some((f) => {
+        const normF = f.replace(/\\/g, '/');
+        const fKey = process.platform === 'win32' ? normF.toLowerCase() : normF;
+        return fKey === checkKey || fKey.startsWith(checkKey + '/');
+      });
     if (!existsOnDisk && !existsInDryRun) return false;
   }
 
@@ -190,14 +192,15 @@ function evaluateWhenCondition(
       return false;
     }
     const existsOnDisk = fs.existsSync(check.resolvedPath);
+    const normCheck = check.resolvedPath.replace(/\\/g, '/');
+    const checkKey = process.platform === 'win32' ? normCheck.toLowerCase() : normCheck;
     const existsInDryRun =
       Boolean(results.dry_run) &&
-      (results.files_created.includes(check.resolvedPath) ||
-        results.files_created.some((f) => {
-          const normF = f.replace(/\\/g, '/');
-          const normCheck = check.resolvedPath!.replace(/\\/g, '/');
-          return normF === normCheck || normF.startsWith(normCheck + '/');
-        }));
+      results.files_created.some((f) => {
+        const normF = f.replace(/\\/g, '/');
+        const fKey = process.platform === 'win32' ? normF.toLowerCase() : normF;
+        return fKey === checkKey || fKey.startsWith(checkKey + '/');
+      });
     if (existsOnDisk || existsInDryRun) return false;
   }
 
@@ -599,6 +602,17 @@ async function executeRunStep(
     process.platform === 'win32'
   ) {
     [bin, spawnArgs, verbatim] = buildSpawnArgs('powershell');
+    result = await runProcessAsync(bin, spawnArgs, cwd, verbatim, timeoutMs);
+  }
+
+  // Fallback from python to python3 if python is not installed
+  if (
+    result.error &&
+    (result.error as NodeJS.ErrnoException).code === 'ENOENT' &&
+    normalizedInterp === 'python' &&
+    !rawInterpreter
+  ) {
+    [bin, spawnArgs, verbatim] = buildSpawnArgs('python3');
     result = await runProcessAsync(bin, spawnArgs, cwd, verbatim, timeoutMs);
   }
 

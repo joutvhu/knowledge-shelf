@@ -288,6 +288,8 @@ export function resolveUnitFiles(
           if (!hadGlob) {
             missingLiterals.push(rawPattern);
           }
+        } else if (fs.statSync(resolved).isDirectory()) {
+          // If a literal or expanded subpattern resolves to a directory, skip it
         } else if (!matchesAnyGlob(subPat, excludePatterns)) {
           matchedSet.add(subPat);
         }

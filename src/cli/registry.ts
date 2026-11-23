@@ -86,7 +86,7 @@ export function getCacheDir(knowledgeDir: string): string {
 }
 
 export function resolveSafeUnitDir(knowledgeDir: string, name: string): string {
-  const trimmed = (name || '').trim();
+  const trimmed = (name || '').trim().replace(/[\\/]+$/, '');
   if (!trimmed || trimmed === '.' || trimmed === '..') {
     console.error(`Error: Invalid knowledge unit name '${name}'.`);
     process.exit(1);

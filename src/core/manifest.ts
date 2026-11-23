@@ -14,6 +14,7 @@ import {
 } from './config.js';
 import {
   Manifest,
+  expandBraces,
   findManifestFolders,
   isGlobPattern,
   normalizeListField,
@@ -235,12 +236,15 @@ export function validateManifestUnitDir(
           }
           if (validEntries.length > 0) {
             for (const file of validEntries) {
-              if (!isGlobPattern(file)) {
-                const resolvedDirCheck = resolveInsideDir(unitDir, file, true);
-                if (resolvedDirCheck && fs.existsSync(resolvedDirCheck) && fs.statSync(resolvedDirCheck).isDirectory()) {
-                  errors.push(
-                    `modules.${modName}.files: '${file}' is a directory (files list must contain file paths or glob patterns, not directories)`
-                  );
+              const expanded = expandBraces(file);
+              for (const sub of expanded) {
+                if (!isGlobPattern(sub)) {
+                  const resolvedDirCheck = resolveInsideDir(unitDir, sub, true);
+                  if (resolvedDirCheck && fs.existsSync(resolvedDirCheck) && fs.statSync(resolvedDirCheck).isDirectory()) {
+                    errors.push(
+                      `modules.${modName}.files: '${sub}' is a directory (files list must contain file paths or glob patterns, not directories)`
+                    );
+                  }
                 }
               }
             }

@@ -313,6 +313,7 @@ export function cmdAdd(knowledgeDir: string, args: string[]): void {
 
   const repoName = deriveNameFromUrl(url);
   const cloneTarget = getCloneTarget(knowledgeDir, repoName);
+  const isRootSubPath = subPath === '.' || subPath === './';
 
   console.log(`Cloning ${url}${ref ? ` (ref: ${ref})` : ''}...`);
   removeDirSync(cloneTarget);
@@ -320,7 +321,7 @@ export function cmdAdd(knowledgeDir: string, args: string[]): void {
   try {
     if (ref) {
       gitCloneAtRef(url, cloneTarget, ref);
-    } else if (subPath && !addAll && !packName) {
+    } else if (subPath && !isRootSubPath && !addAll && !packName) {
       gitCloneSparse(url, cloneTarget, subPath);
     } else {
       gitClone(url, cloneTarget);
@@ -550,7 +551,7 @@ export function cmdAdd(knowledgeDir: string, args: string[]): void {
   }
 
   // Single unit or file mode
-  const sourceDir = subPath ? resolveInsideDir(cloneTarget, subPath, true) : cloneTarget;
+  const sourceDir = subPath && !isRootSubPath ? resolveInsideDir(cloneTarget, subPath, true) : cloneTarget;
   if (!sourceDir || !fs.existsSync(sourceDir)) {
     console.error(`Error: Path '${subPath}' not found in repository.`);
     removeDirSync(cloneTarget);
@@ -595,7 +596,7 @@ export function cmdAdd(knowledgeDir: string, args: string[]): void {
     const entry: RegistryEntry = {
       name,
       url,
-      path: subPath || undefined,
+      path: (subPath && !isRootSubPath) ? subPath : undefined,
       ...(branch ? { branch } : {}),
       commit,
       ...(fullCommit ? { fullCommit } : {}),
@@ -615,8 +616,8 @@ export function cmdAdd(knowledgeDir: string, args: string[]): void {
     return;
   }
 
-  let derivedDefault = subPath ? path.basename(subPath) : repoName;
-  if (!customName && !subPath) {
+  let derivedDefault = subPath && !isRootSubPath ? path.basename(subPath) : repoName;
+  if (!customName && (!subPath || isRootSubPath)) {
     const rootManifest = loadManifest(sourceDir);
     if (rootManifest?.name && isSafeUnitSegment(rootManifest.name)) {
       derivedDefault = rootManifest.name;
@@ -663,7 +664,7 @@ export function cmdAdd(knowledgeDir: string, args: string[]): void {
   const entry: RegistryEntry = {
     name,
     url,
-    path: subPath || undefined,
+    path: (subPath && !isRootSubPath) ? subPath : undefined,
     ...(branch ? { branch } : {}),
     commit,
     ...(fullCommit ? { fullCommit } : {}),
@@ -710,8 +711,15 @@ export function cmdUpdate(knowledgeDir: string, args: string[]): void {
     return;
   }
 
-  const toUpdate = targetName ? registry.sources.filter((s) => s.name === targetName) : registry.sources;
-  if (targetName && toUpdate.length === 0) {
+  const cleanTargetName = targetName ? targetName.trim().replace(/[\\/]+$/, '') : '';
+  const toUpdate = cleanTargetName
+    ? registry.sources.filter(
+        (s) =>
+          s.name === cleanTargetName ||
+          (!cleanTargetName.toLowerCase().endsWith('.md') && s.name === `${cleanTargetName}.md`)
+      )
+    : registry.sources;
+  if (cleanTargetName && toUpdate.length === 0) {
     console.error(`Error: '${targetName}' not found in registry.`);
     process.exit(1);
   }
@@ -721,6 +729,7 @@ export function cmdUpdate(knowledgeDir: string, args: string[]): void {
 
   let updated = 0;
   let failed = 0;
+  const updatedEntries: RegistryEntry[] = [];
 
   // Separate local vs remote sources; group remote sources by (url, branch) to deduplicate clones
   const remoteGroups = new Map<string, RegistryEntry[]>();
@@ -754,6 +763,7 @@ export function cmdUpdate(knowledgeDir: string, args: string[]): void {
         source.checksum = computeUnitChecksum(destDir);
         source.updatedAt = new Date().toISOString();
         updated++;
+        updatedEntries.push(source);
         console.log('  ✓ Updated from local path');
       } catch (e) {
         console.error(`  Error updating '${source.name}': ${e}`);
@@ -882,6 +892,7 @@ export function cmdUpdate(knowledgeDir: string, args: string[]): void {
           source.checksum = computeUnitChecksum(destDir);
           source.updatedAt = new Date().toISOString();
           updated++;
+          updatedEntries.push(source);
           console.log('  ✓ Updated from archive');
         }
       } catch (e) {
@@ -960,7 +971,8 @@ export function cmdUpdate(knowledgeDir: string, args: string[]): void {
           continue;
         }
 
-        const sourceDir = source.path ? resolveInsideDir(cloneTarget, source.path, true) : cloneTarget;
+        const isRootPath = source.path === '.' || source.path === './';
+        const sourceDir = source.path && !isRootPath ? resolveInsideDir(cloneTarget, source.path, true) : cloneTarget;
         if (!sourceDir || !fs.existsSync(sourceDir)) {
           console.error(`  Error: Path '${source.path}' no longer exists in repo.`);
           failed++;
@@ -978,6 +990,7 @@ export function cmdUpdate(knowledgeDir: string, args: string[]): void {
         source.checksum = computeUnitChecksum(destDir);
         source.updatedAt = new Date().toISOString();
         updated++;
+        updatedEntries.push(source);
         console.log(`  ✓ Updated to ${newCommit}`);
       }
     } catch (e) {
@@ -990,9 +1003,9 @@ export function cmdUpdate(knowledgeDir: string, args: string[]): void {
     }
   }
 
-  if (updated > 0) {
+  if (updatedEntries.length > 0) {
     mutateRegistry(knowledgeDir, (reg) => {
-      for (const s of toUpdate) {
+      for (const s of updatedEntries) {
         const existing = reg.sources.find((item) => item.name === s.name);
         if (existing) {
           existing.commit = s.commit;
@@ -1013,7 +1026,7 @@ export function cmdPin(knowledgeDir: string, args: string[]): void {
   const noVerify = args.includes('--no-verify');
   const cleanArgs = args.filter((a) => a !== '--no-verify');
   rejectUnknownFlags(cleanArgs, 'pin');
-  const name = cleanArgs[0];
+  let name = cleanArgs[0] ? cleanArgs[0].trim().replace(/[\\/]+$/, '') : '';
   const version = cleanArgs[1];
 
   if (!name) {
@@ -1026,12 +1039,16 @@ export function cmdPin(knowledgeDir: string, args: string[]): void {
   }
 
   const registry = loadRegistry(knowledgeDir);
-  const source = registry.sources.find((s) => s.name === name);
+  let source = registry.sources.find((s) => s.name === name);
+  if (!source && !name.toLowerCase().endsWith('.md')) {
+    source = registry.sources.find((s) => s.name === `${name}.md`);
+  }
 
   if (!source) {
     console.error(`Error: '${name}' not found in registry.`);
     process.exit(1);
   }
+  name = source.name;
 
   if (version && version !== source.commit) {
     if (source.url.startsWith('local:') || source.url.startsWith('archive:')) {
@@ -1052,7 +1069,8 @@ export function cmdPin(knowledgeDir: string, args: string[]): void {
       removeDirSync(cloneTarget);
       gitCloneAtRef(source.url, cloneTarget, version);
 
-      const sourceDir = source.path ? resolveInsideDir(cloneTarget, source.path, true) : cloneTarget;
+      const isRootPath = source.path === '.' || source.path === './';
+      const sourceDir = source.path && !isRootPath ? resolveInsideDir(cloneTarget, source.path, true) : cloneTarget;
       if (!sourceDir || !fs.existsSync(sourceDir)) {
         throw new Error(`Path '${source.path}' not found at ref '${version}'.`);
       }
@@ -1099,7 +1117,7 @@ export function cmdPin(knowledgeDir: string, args: string[]): void {
 
 export function cmdUnpin(knowledgeDir: string, args: string[]): void {
   rejectUnknownFlags(args, 'unpin');
-  const name = args[0];
+  let name = args[0] ? args[0].trim().replace(/[\\/]+$/, '') : '';
 
   if (!name) {
     console.error('Error: Name is required.\nUsage: knowledge-shelf unpin <name>');
@@ -1111,12 +1129,16 @@ export function cmdUnpin(knowledgeDir: string, args: string[]): void {
   }
 
   const registry = loadRegistry(knowledgeDir);
-  const source = registry.sources.find((s) => s.name === name);
+  let source = registry.sources.find((s) => s.name === name);
+  if (!source && !name.toLowerCase().endsWith('.md')) {
+    source = registry.sources.find((s) => s.name === `${name}.md`);
+  }
 
   if (!source) {
     console.error(`Error: '${name}' not found in registry.`);
     process.exit(1);
   }
+  name = source.name;
 
   if (!source.pin) {
     console.log(`'${name}' is not pinned.`);
@@ -1351,7 +1373,8 @@ export function cmdSync(knowledgeDir: string, args: string[]): void {
           continue;
         }
 
-        const sourceDir = s.path ? resolveInsideDir(cloneTarget, s.path, true) : cloneTarget;
+        const isRootPath = s.path === '.' || s.path === './';
+        const sourceDir = s.path && !isRootPath ? resolveInsideDir(cloneTarget, s.path, true) : cloneTarget;
         if (!sourceDir || !fs.existsSync(sourceDir)) {
           console.error(`  Error: Path '${s.path}' not found in repo for '${s.name}'.`);
           failed++;
@@ -1878,7 +1901,8 @@ export function publishViaClone(opts: PublishViaCloneOptions): void {
       }
     }
 
-    const destDir = targetRelPath
+    const isRootTarget = !targetRelPath || targetRelPath === '.' || targetRelPath === './';
+    const destDir = !isRootTarget
       ? resolveInsideDir(workClone, targetRelPath, true)
       : workClone;
     if (!destDir || isReservedPath(workClone, destDir)) {
@@ -2044,7 +2068,8 @@ export function cmdPublish(knowledgeDir: string, args: string[]): void {
         targetRelPath: undefined,
         populateClone: (cloneRoot) => {
           let destPathInClone: string;
-          if (subPath) {
+          const isRootSubpath = subPath === '.' || subPath === './';
+          if (subPath && !isRootSubpath) {
             const isDirLike = subPath.endsWith('/') || subPath.endsWith('\\');
             const resolvedPath = resolveInsideDir(cloneRoot, subPath, true);
             if (!resolvedPath) {
@@ -2102,7 +2127,8 @@ export function cmdPublish(knowledgeDir: string, args: string[]): void {
   const manifest = loadManifest(unitDir);
   const version = manifest?.version || '1.0.0';
   const targetBranch = branchName || `knowledge/${unitName}-${version}`;
-  const destSubpath = subPath || unitName;
+  const isRootSubpath = subPath === '.' || subPath === './';
+  const destSubpath = isRootSubpath ? undefined : (subPath || unitName);
   const msg = commitMessage || `chore(knowledge): publish ${unitName} v${version}`;
 
   try {
@@ -2111,9 +2137,11 @@ export function cmdPublish(knowledgeDir: string, args: string[]): void {
       targetBranch,
       targetRelPath: destSubpath,
       populateClone: (destInRepo) => {
-        removeDirSync(destInRepo);
+        if (destSubpath) {
+          removeDirSync(destInRepo);
+        }
         copyDirSync(unitDir, destInRepo);
-        syncManifestName(destInRepo, path.basename(destInRepo));
+        syncManifestName(destInRepo, destSubpath ? path.basename(destInRepo) : unitName);
       },
       commitMsg: msg,
       push,

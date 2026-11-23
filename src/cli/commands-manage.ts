@@ -217,7 +217,7 @@ export function cmdList(primaryDir: string, knowledgeDirs: string[], args: strin
 
 export function cmdRemove(knowledgeDir: string, args: string[]): void {
   rejectUnknownFlags(args, 'remove');
-  let name = args[0];
+  let name = (args[0] || '').trim().replace(/[\\/]+$/, '');
 
   if (!name) {
     console.error('Error: Name is required.\nUsage: knowledge-shelf remove <name>');
@@ -274,9 +274,9 @@ export function cmdRemove(knowledgeDir: string, args: string[]): void {
 
 export function cmdInfo(knowledgeDirs: string | string[], args: string[]): void {
   rejectUnknownFlags(args, 'info');
-  const name = args[0];
+  const rawName = args[0];
 
-  if (!name) {
+  if (!rawName) {
     console.error('Error: Name is required.\nUsage: knowledge-shelf info <name>');
     process.exit(1);
   }
@@ -285,8 +285,9 @@ export function cmdInfo(knowledgeDirs: string | string[], args: string[]): void 
     process.exit(1);
   }
 
+  const name = rawName.trim().replace(/[\\/]+$/, '');
   const segments = name.split(/[\\/]+/);
-  if (segments.some((seg) => !seg || seg === '.' || seg === '..' || seg.startsWith('.'))) {
+  if (!name || segments.some((seg) => !seg || seg === '.' || seg === '..' || seg.startsWith('.'))) {
     console.error(`Error: Access denied. '${name}' is a reserved internal path.`);
     process.exit(1);
   }
@@ -504,7 +505,7 @@ export function cmdValidate(knowledgeDirs: string | string[], args: string[]): v
     console.error(`Error: Unexpected argument '${args[1]}'. 'validate' takes at most one target.`);
     process.exit(1);
   }
-  const targetArg = args[0];
+  const targetArg = args[0] ? args[0].trim().replace(/[\\/]+$/, '') : '';
   const dirs = Array.isArray(knowledgeDirs) ? knowledgeDirs : [knowledgeDirs];
 
   const installedUnits = dirs.some((d) => fs.existsSync(d))
@@ -841,10 +842,13 @@ export function cmdInstall(
       console.error(`Error: Multiple units share the same folder name: ${conflicts.join('; ')}.`);
       fail('Install each one individually with --name.');
     }
-    const topLevelMds = fs
-      .readdirSync(resolvedSource, { withFileTypes: true })
-      .filter((e) => e.isFile() && e.name.toLowerCase().endsWith('.md') && e.name.toLowerCase() !== 'readme.md')
-      .map((e) => path.join(resolvedSource, e.name));
+    const hasRootManifest = fs.existsSync(path.join(resolvedSource, 'manifest.json'));
+    const topLevelMds = hasRootManifest
+      ? []
+      : fs
+          .readdirSync(resolvedSource, { withFileTypes: true })
+          .filter((e) => e.isFile() && e.name.toLowerCase().endsWith('.md') && e.name.toLowerCase() !== 'readme.md')
+          .map((e) => path.join(resolvedSource, e.name));
 
     if (manifestFolders.length === 0 && topLevelMds.length === 0) {
       fail(`Error: No knowledge units or standalone .md files found inside '${sourceArg}'.`);
@@ -962,6 +966,10 @@ export function cmdInstall(
 
 export function cmdSearch(knowledgeDirs: string[], args: string[]): void {
   let typeFilter: string | undefined;
+  let unitFilter: string | undefined;
+  let includeContent: boolean | undefined;
+  let maxResults = 10;
+  const tagFilters: string[] = [];
   const terms: string[] = [];
 
   for (let i = 0; i < args.length; i++) {
@@ -971,6 +979,31 @@ export function cmdSearch(knowledgeDirs: string[], args: string[]): void {
         process.exit(1);
       }
       typeFilter = args[++i];
+    } else if (args[i] === '--tag' || args[i] === '--tags') {
+      if (i + 1 >= args.length || args[i + 1].startsWith('-')) {
+        console.error('Error: --tag requires a tag argument.');
+        process.exit(1);
+      }
+      tagFilters.push(args[++i]);
+    } else if (args[i] === '--unit' || args[i] === '-u') {
+      if (i + 1 >= args.length || args[i + 1].startsWith('-')) {
+        console.error('Error: --unit requires a unit name.');
+        process.exit(1);
+      }
+      unitFilter = args[++i];
+    } else if (args[i] === '--content' || args[i] === '--include-content') {
+      includeContent = true;
+    } else if (args[i] === '--max' || args[i] === '-m') {
+      if (i + 1 >= args.length || args[i + 1].startsWith('-')) {
+        console.error('Error: --max requires a number.');
+        process.exit(1);
+      }
+      const num = parseInt(args[++i], 10);
+      if (isNaN(num) || num <= 0) {
+        console.error('Error: --max requires a positive integer.');
+        process.exit(1);
+      }
+      maxResults = num;
     } else if (args[i].startsWith('-')) {
       console.error(`Error: Unknown option '${args[i]}' for 'search'.`);
       process.exit(1);
@@ -980,8 +1013,8 @@ export function cmdSearch(knowledgeDirs: string[], args: string[]): void {
   }
 
   const query = terms.join(' ').trim();
-  if (!query && !typeFilter) {
-    console.error('Error: Query is required.\nUsage: knowledge-shelf search <keywords> [--type <type>]');
+  if (!query && !typeFilter && !unitFilter && tagFilters.length === 0) {
+    console.error('Error: Query is required.\nUsage: knowledge-shelf search <keywords> [--type <type>] [--tag <tag>] [--unit <unit>] [--content] [--max <n>]');
     process.exit(1);
   }
 
@@ -991,8 +1024,13 @@ export function cmdSearch(knowledgeDirs: string[], args: string[]): void {
     return;
   }
 
-  const results = rankDocuments(docs, query, { type: typeFilter }).slice(0, 10);
-  const displayQuery = query || `(type: ${typeFilter})`;
+  const results = rankDocuments(docs, query, {
+    type: typeFilter,
+    unit: unitFilter,
+    tags: tagFilters.length > 0 ? tagFilters : undefined,
+    includeContent,
+  }).slice(0, maxResults);
+  const displayQuery = query || `(filters: ${[typeFilter ? `type=${typeFilter}` : '', unitFilter ? `unit=${unitFilter}` : '', tagFilters.length > 0 ? `tags=${tagFilters.join(',')}` : ''].filter(Boolean).join(' ')})`;
 
   if (results.length === 0) {
     console.log(`No results for "${displayQuery}".`);
@@ -1005,6 +1043,11 @@ export function cmdSearch(knowledgeDirs: string[], args: string[]): void {
     const kind = r.has_manifest ? r.type || 'manifest' : 'standalone';
     console.log(`  ${r.name}  [${kind}]  (score: ${r.relevance_score})`);
     if (desc) console.log(`  ${desc}`);
+    if (r.content_snippets && r.content_snippets.length > 0) {
+      for (const snippet of r.content_snippets) {
+        console.log(`    > ${snippet}`);
+      }
+    }
     console.log('');
   }
 }
@@ -1042,6 +1085,8 @@ export function cmdExport(knowledgeDir: string, args: string[]): void {
     console.error('Error: Name is required.\nUsage: knowledge-shelf export <name> [--output <path>] [--format zip|tar]');
     process.exit(1);
   }
+
+  name = name.trim().replace(/[\\/]+$/, '');
 
   if (format !== 'zip' && format !== 'tar') {
     console.error(`Error: Unsupported format '${format}'. Use 'zip' or 'tar'.`);
@@ -1292,7 +1337,7 @@ export function cmdImport(knowledgeDir: string, args: string[]): void {
 
 export function cmdTrust(knowledgeDir: string, args: string[], trusted: boolean): void {
   rejectUnknownFlags(args, trusted ? 'trust' : 'untrust');
-  const name = args[0];
+  let name = (args[0] || '').trim().replace(/[\\/]+$/, '');
   if (!name) {
     console.error(`Error: Name is required.\nUsage: knowledge-shelf ${trusted ? 'trust' : 'untrust'} <name>`);
     process.exit(1);
@@ -1304,10 +1349,14 @@ export function cmdTrust(knowledgeDir: string, args: string[], trusted: boolean)
 
   let found = false;
   mutateRegistry(knowledgeDir, (registry) => {
-    const entry = registry.sources.find((s) => s.name === name);
+    let entry = registry.sources.find((s) => s.name === name);
+    if (!entry && !name.toLowerCase().endsWith('.md')) {
+      entry = registry.sources.find((s) => s.name === `${name}.md`);
+    }
     if (!entry) {
       return;
     }
+    name = entry.name;
     found = true;
     if (trusted) {
       entry.trusted = true;

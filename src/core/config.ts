@@ -136,8 +136,9 @@ export function resolveKnowledgeDir(explicitDir?: string): string {
   } else if (process.env.KNOWLEDGE_DIR) {
     resolved = path.resolve(expandHome(process.env.KNOWLEDGE_DIR));
   } else {
-    const found = findWalkUpRegistryDir(process.cwd());
-    resolved = found ? found : getDefaultGlobalKnowledgeDir();
+    const agentsLocal = findWalkUpAgentsKnowledgeDir(process.cwd());
+    const registryDir = findWalkUpRegistryDir(process.cwd());
+    resolved = agentsLocal ? agentsLocal : registryDir ? registryDir : getDefaultGlobalKnowledgeDir();
   }
 
   try {

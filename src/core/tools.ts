@@ -628,24 +628,39 @@ export function toolGetManifest(knowledgeDirs: string | string[], name: string):
     };
   }
 
-  const manifest = loadManifest(folder);
-  if (!manifest) {
-    return {
-      text: JSON.stringify(
-        {
-          error: `No manifest.json in '${name}'.`,
-          hint: 'This is a standalone knowledge folder without structured metadata.',
-        },
-        null,
-        2
-      ),
-      isError: true,
-    };
+  const manifestPath = path.join(folder, 'manifest.json');
+  if (fs.existsSync(manifestPath)) {
+    try {
+      const content = fs.readFileSync(manifestPath, 'utf-8');
+      const manifest = JSON.parse(content) as Record<string, unknown>;
+      const copy = { ...manifest };
+      copy._directory = folder;
+      return { text: JSON.stringify(copy, null, 2) };
+    } catch (e) {
+      return {
+        text: JSON.stringify(
+          {
+            error: `Invalid manifest.json in '${name}': ${e instanceof Error ? e.message : e}`,
+          },
+          null,
+          2
+        ),
+        isError: true,
+      };
+    }
   }
 
-  const copy = { ...manifest } as Record<string, unknown>;
-  copy._directory = folder;
-  return { text: JSON.stringify(copy, null, 2) };
+  return {
+    text: JSON.stringify(
+      {
+        error: `No manifest.json in '${name}'.`,
+        hint: 'This is a standalone knowledge folder without structured metadata.',
+      },
+      null,
+      2
+    ),
+    isError: true,
+  };
 }
 
 export function toolGetModule(
@@ -852,6 +867,22 @@ export async function toolRunWorkflow(
     }
     if (Object.prototype.hasOwnProperty.call(inputValues, k) && !re.test(inputValues[k])) {
       return patternError(`Input '${k}' does not match pattern '${d.pattern}'.`);
+    }
+  }
+
+  // Also validate pattern for any provided input matching a manifest placeholder with a pattern
+  for (const [k, d] of Object.entries(manifestPh)) {
+    if (!isRecord(d) || typeof d.pattern !== 'string' || Object.prototype.hasOwnProperty.call(defs, k)) continue;
+    if (Object.prototype.hasOwnProperty.call(inputValues, k)) {
+      let re: RegExp;
+      try {
+        re = new RegExp(d.pattern);
+      } catch (err: any) {
+        return patternError(`Input '${k}' has an invalid pattern '${d.pattern}': ${err?.message || err}`);
+      }
+      if (!re.test(inputValues[k])) {
+        return patternError(`Input '${k}' does not match pattern '${d.pattern}'.`);
+      }
     }
   }
 

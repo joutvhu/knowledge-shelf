@@ -60,7 +60,7 @@ Commands:
   info <name>
       Show detailed information about an installed knowledge unit.
 
-  search <keywords> [--type <type>]
+  search <keywords> [--type <type>] [--tag <tag>] [--unit <unit>] [--content] [--max <n>]
       Search installed knowledge by keyword (same scoring as MCP search_docs tool).
 
   list

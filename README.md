@@ -136,7 +136,7 @@ To use a custom knowledge path:
 }
 ```
 
-> **Tip:** You can set a global `KNOWLEDGE_DIR` environment variable (e.g., to `~/.kiro/knowledge/` or an absolute path) to persistently change the default directory for both CLI commands and MCP Server operations without passing paths or cờ (flags) manually.
+> **Tip:** You can set a global `KNOWLEDGE_DIR` environment variable (e.g., to `~/.kiro/knowledge/` or an absolute path) to persistently change the default directory for both CLI commands and MCP Server operations without passing paths or flags manually.
 
 ## Two Knowledge Formats
 
