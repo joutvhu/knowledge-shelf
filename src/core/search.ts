@@ -100,7 +100,13 @@ function extractBodySnippets(body: string, terms: string[], maxSnippets = 2): st
     const line = lines[i].trim();
     if (!line) continue;
     const lower = foldDiacritics(line.toLowerCase());
-    if (terms.some((t) => lower.includes(foldDiacritics(t.toLowerCase())))) {
+    const hasMatch = terms.some((t) => {
+      const ft = foldDiacritics(t.toLowerCase());
+      if (!ft || !lower.includes(ft)) return false;
+      if (t.length <= 2 && !matchesToken(lower, ft)) return false;
+      return true;
+    });
+    if (hasMatch) {
       snippets.push(line.length > 160 ? line.slice(0, 157) + '...' : line);
     }
   }
@@ -166,7 +172,10 @@ export function rankDocuments(
       const bodyLower = foldDiacritics(extras.docBody.toLowerCase());
       for (const term of queryTerms) {
         const ft = foldDiacritics(term.toLowerCase());
-        if (ft && bodyLower.includes(ft)) bodyHits++;
+        if (ft && bodyLower.includes(ft)) {
+          if (term.length <= 2 && !matchesToken(bodyLower, ft)) continue;
+          bodyHits++;
+        }
       }
       if (bodyHits > 0) {
         score += bodyHits * 2;
@@ -174,7 +183,13 @@ export function rankDocuments(
       }
       for (const ref of extras.references) {
         const refLower = foldDiacritics(ref.body.toLowerCase());
-        if (queryTerms.some((term) => refLower.includes(foldDiacritics(term.toLowerCase())))) {
+        const hasRefHit = queryTerms.some((term) => {
+          const ft = foldDiacritics(term.toLowerCase());
+          if (!ft || !refLower.includes(ft)) return false;
+          if (term.length <= 2 && !matchesToken(refLower, ft)) return false;
+          return true;
+        });
+        if (hasRefHit) {
           score += 1;
           if (contentSnippets.length < 3) {
             contentSnippets.push(...extractBodySnippets(ref.body, queryTerms, 1));

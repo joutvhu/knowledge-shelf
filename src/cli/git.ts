@@ -226,6 +226,9 @@ export function deriveNameFromUrl(url: string): string {
 
 export function collectUnitFolders(baseDir: string): { units: string[]; conflicts: string[] } {
   const base = path.resolve(baseDir);
+  if (fs.existsSync(path.join(base, 'manifest.json'))) {
+    return { units: [base], conflicts: [] };
+  }
   const all = findManifestFolders(baseDir)
     .map((f) => path.resolve(f))
     .filter((f) => f !== base);

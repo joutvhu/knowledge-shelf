@@ -454,7 +454,7 @@ export function extractTitle(metadata: Record<string, unknown>, body: string, fi
   const sections = extractSections(body);
   const h1 = sections.find((s) => s.level === 1);
   if (h1) return h1.title;
-  return path.basename(filename, '.md').replace(/[-_]/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+  return path.basename(filename).replace(/\.md$/i, '').replace(/[-_]/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
 /**

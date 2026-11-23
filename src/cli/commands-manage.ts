@@ -47,6 +47,19 @@ function filterTopLevelManifestFolders(folders: string[]): string[] {
   return resolved.filter((f) => !resolved.some((other) => other !== f && f.startsWith(other + path.sep)));
 }
 
+function isSamePath(p1: string, p2: string): boolean {
+  const resolveCanon = (p: string) => {
+    try {
+      return fs.existsSync(p) ? fs.realpathSync(p) : path.resolve(p);
+    } catch {
+      return path.resolve(p);
+    }
+  };
+  const r1 = resolveCanon(p1);
+  const r2 = resolveCanon(p2);
+  return process.platform === 'win32' ? r1.toLowerCase() === r2.toLowerCase() : r1 === r2;
+}
+
 export function rejectUnknownFlags(args: string[], command: string): void {
   const unknown = args.find((a) => a.startsWith('-'));
   if (unknown) {
@@ -83,6 +96,10 @@ export function printSecurityNotice(unitName: string, unitDir: string): void {
 
 export function cmdInit(knowledgeDir: string, args: string[] = []): void {
   rejectUnknownFlags(args, 'init');
+  if (args.length > 0) {
+    console.error(`Error: Unexpected argument '${args[0]}'.`);
+    process.exit(1);
+  }
   fs.mkdirSync(knowledgeDir, { recursive: true });
   fs.mkdirSync(getCacheDir(knowledgeDir), { recursive: true });
 
@@ -129,7 +146,15 @@ export function cmdList(primaryDir: string, knowledgeDirs: string[], args: strin
   }
 
   const allDocs = scanDocuments(dirs);
-  const unmanaged = allDocs.filter((d) => !trackedNames.has(d.name));
+  const unmanaged = allDocs.filter((d) => {
+    const dNameNorm = process.platform === 'win32' ? d.name.toLowerCase() : d.name;
+    for (const tracked of trackedNames) {
+      const tNorm = process.platform === 'win32' ? tracked.toLowerCase() : tracked;
+      if (dNameNorm === tNorm) return false;
+      if (dNameNorm.startsWith(tNorm + '/')) return false;
+    }
+    return true;
+  });
 
   if (allSources.length === 0 && unmanaged.length === 0) {
     console.log('No knowledge sources installed.');
@@ -185,6 +210,10 @@ export function cmdRemove(knowledgeDir: string, args: string[]): void {
     console.error('Error: Name is required.\nUsage: knowledge-shelf remove <name>');
     process.exit(1);
   }
+  if (args.length > 1) {
+    console.error(`Error: Unexpected argument '${args[1]}'. 'remove' takes exactly one name.`);
+    process.exit(1);
+  }
 
   let destDir = resolveSafeUnitDir(knowledgeDir, name);
   const registry = loadRegistry(knowledgeDir);
@@ -209,8 +238,9 @@ export function cmdRemove(knowledgeDir: string, args: string[]): void {
       process.exit(1);
     }
     if (fs.existsSync(destDir)) {
+      const isDir = fs.statSync(destDir).isDirectory();
       removeDirSync(destDir);
-      console.log(`✓ Removed directory '${name}' (was not in registry)`);
+      console.log(`✓ Removed ${isDir ? 'directory' : 'file'} '${name}' (was not in registry)`);
     } else {
       console.error(`Error: '${name}' not found.`);
       process.exit(1);
@@ -218,6 +248,7 @@ export function cmdRemove(knowledgeDir: string, args: string[]): void {
     return;
   }
 
+  const isDir = fs.existsSync(destDir) && fs.statSync(destDir).isDirectory();
   removeDirSync(destDir);
   registry.sources.splice(idx, 1);
   saveRegistry(knowledgeDir, registry);
@@ -231,6 +262,10 @@ export function cmdInfo(knowledgeDirs: string | string[], args: string[]): void 
 
   if (!name) {
     console.error('Error: Name is required.\nUsage: knowledge-shelf info <name>');
+    process.exit(1);
+  }
+  if (args.length > 1) {
+    console.error(`Error: Unexpected argument '${args[1]}'. 'info' takes exactly one name.`);
     process.exit(1);
   }
 
@@ -691,7 +726,7 @@ export function cmdInstall(
       fail('Error: --all cannot be used when installing a single file.');
     }
     const baseName = customName
-      ? customName.endsWith('.md')
+      ? customName.toLowerCase().endsWith('.md')
         ? customName
         : `${customName}.md`
       : path.basename(resolvedSource);
@@ -706,7 +741,7 @@ export function cmdInstall(
     }
 
     const destFile = resolveSafeUnitDir(knowledgeDir, baseName);
-    if (path.resolve(destFile) === resolvedSource) {
+    if (isSamePath(destFile, resolvedSource)) {
       fail(`Error: Source and destination are the same path (${destFile}).`);
     }
     if (fs.existsSync(destFile) && !force) {
@@ -767,7 +802,7 @@ export function cmdInstall(
     for (const unitDir of manifestFolders) {
       const unitName = path.basename(unitDir);
       const destDir = resolveSafeUnitDir(knowledgeDir, unitName);
-      if (path.resolve(destDir) === path.resolve(unitDir)) {
+      if (isSamePath(destDir, unitDir)) {
         console.log(`  Skipping '${unitName}' (source and destination are the same directory)`);
         skipped++;
         continue;
@@ -787,7 +822,7 @@ export function cmdInstall(
     for (const mdFile of topLevelMds) {
       const docName = path.basename(mdFile);
       const destFile = resolveSafeUnitDir(knowledgeDir, docName);
-      if (path.resolve(destFile) === path.resolve(mdFile)) {
+      if (isSamePath(destFile, mdFile)) {
         console.log(`  Skipping '${docName}' (source and destination are the same path)`);
         skipped++;
         continue;
@@ -834,7 +869,7 @@ export function cmdInstall(
   }
 
   const destDir = resolveSafeUnitDir(knowledgeDir, unitName);
-  if (path.resolve(destDir) === resolvedSource) {
+  if (isSamePath(destDir, resolvedSource)) {
     fail(`Error: Source and destination are the same directory (${destDir}).`);
   }
 
@@ -1176,6 +1211,10 @@ export function cmdTrust(knowledgeDir: string, args: string[], trusted: boolean)
   const name = args[0];
   if (!name) {
     console.error(`Error: Name is required.\nUsage: knowledge-shelf ${trusted ? 'trust' : 'untrust'} <name>`);
+    process.exit(1);
+  }
+  if (args.length > 1) {
+    console.error(`Error: Unexpected argument '${args[1]}'. '${trusted ? 'trust' : 'untrust'}' takes exactly one name.`);
     process.exit(1);
   }
 

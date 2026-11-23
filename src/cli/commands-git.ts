@@ -332,6 +332,9 @@ export function cmdAdd(knowledgeDir: string, args: string[]): void {
   const commit = gitGetCommit(cloneTarget);
   const fullCommit = gitGetFullCommit(cloneTarget);
   const branch = gitGetBranch(cloneTarget);
+  const pinVal = pinAfter
+    ? (ref && ref !== branch ? ref : commit)
+    : (ref && !branch ? ref : undefined);
 
   let stageSeq = 0;
   const installUnitFromSource = (
@@ -373,7 +376,7 @@ export function cmdAdd(knowledgeDir: string, args: string[]): void {
       ...(branch ? { branch } : {}),
       commit,
       ...(fullCommit ? { fullCommit } : {}),
-      ...(pinAfter || (ref && !branch) ? { pin: ref || commit } : {}),
+      ...(pinVal ? { pin: pinVal } : {}),
       checksum,
       ...(trusted ? { trusted: true } : {}),
       installedAt: existing?.installedAt || now,
@@ -444,15 +447,18 @@ export function cmdAdd(knowledgeDir: string, args: string[]): void {
       process.exit(1);
     }
 
-    const topLevelMds = fs
-      .readdirSync(baseDir, { withFileTypes: true })
-      .filter(
-        (e) =>
-          e.isFile() &&
-          e.name.toLowerCase().endsWith('.md') &&
-          e.name.toLowerCase() !== 'readme.md'
-      )
-      .map((e) => path.join(baseDir, e.name));
+    const hasRootManifest = fs.existsSync(path.join(baseDir, 'manifest.json'));
+    const topLevelMds = hasRootManifest
+      ? []
+      : fs
+          .readdirSync(baseDir, { withFileTypes: true })
+          .filter(
+            (e) =>
+              e.isFile() &&
+              e.name.toLowerCase().endsWith('.md') &&
+              e.name.toLowerCase() !== 'readme.md'
+          )
+          .map((e) => path.join(baseDir, e.name));
 
     const registry = loadRegistry(knowledgeDir);
     let installed = 0;
@@ -460,8 +466,16 @@ export function cmdAdd(knowledgeDir: string, args: string[]): void {
     let invalid = 0;
 
     for (const sourceDir of manifestFolders) {
-      const unitName = path.basename(sourceDir);
-      const sourcePath = path.relative(cloneTarget, sourceDir).replace(/\\/g, '/');
+      let unitName = path.basename(sourceDir);
+      if (sourceDir === baseDir) {
+        const rootManifest = loadManifest(sourceDir);
+        if (rootManifest?.name && isSafeUnitSegment(rootManifest.name)) {
+          unitName = rootManifest.name;
+        } else {
+          unitName = repoName;
+        }
+      }
+      const sourcePath = path.relative(cloneTarget, sourceDir).replace(/\\/g, '/') || undefined;
       const status = installUnitFromSource(unitName, sourceDir, sourcePath, registry, false);
       if (status === 'installed') {
         console.log(`  ✓ Installed '${unitName}'`);
@@ -502,7 +516,7 @@ export function cmdAdd(knowledgeDir: string, args: string[]): void {
         ...(branch ? { branch } : {}),
         commit,
         ...(fullCommit ? { fullCommit } : {}),
-        ...(pinAfter || (ref && !branch) ? { pin: ref || commit } : {}),
+        ...(pinVal ? { pin: pinVal } : {}),
         checksum,
         ...(trusted ? { trusted: true } : {}),
         installedAt: existing?.installedAt || now,
@@ -571,7 +585,7 @@ export function cmdAdd(knowledgeDir: string, args: string[]): void {
       ...(branch ? { branch } : {}),
       commit,
       ...(fullCommit ? { fullCommit } : {}),
-      ...(pinAfter || (ref && !branch) ? { pin: ref || commit } : {}),
+      ...(pinVal ? { pin: pinVal } : {}),
       checksum,
       ...(trusted ? { trusted: true } : {}),
       installedAt: existing?.installedAt || now,
@@ -637,7 +651,7 @@ export function cmdAdd(knowledgeDir: string, args: string[]): void {
     ...(branch ? { branch } : {}),
     commit,
     ...(fullCommit ? { fullCommit } : {}),
-    ...(pinAfter || (ref && !branch) ? { pin: ref || commit } : {}),
+    ...(pinVal ? { pin: pinVal } : {}),
     checksum,
     ...(trusted ? { trusted: true } : {}),
     installedAt: existing?.installedAt || now,
@@ -976,6 +990,10 @@ export function cmdPin(knowledgeDir: string, args: string[]): void {
     console.error('Error: Name is required.\nUsage: knowledge-shelf pin <name> [tag|commit]');
     process.exit(1);
   }
+  if (cleanArgs.length > 2) {
+    console.error(`Error: Unexpected argument '${cleanArgs[2]}'. 'pin' takes at most two arguments.`);
+    process.exit(1);
+  }
 
   const registry = loadRegistry(knowledgeDir);
   const source = registry.sources.find((s) => s.name === name);
@@ -1047,6 +1065,10 @@ export function cmdUnpin(knowledgeDir: string, args: string[]): void {
 
   if (!name) {
     console.error('Error: Name is required.\nUsage: knowledge-shelf unpin <name>');
+    process.exit(1);
+  }
+  if (args.length > 1) {
+    console.error(`Error: Unexpected argument '${args[1]}'. 'unpin' takes exactly one name.`);
     process.exit(1);
   }
 
@@ -1391,16 +1413,18 @@ export function cmdCatalog(_knowledgeDir: string, args: string[]): void {
     }
 
     // Fallback: auto-scan manifest.json folders & standalone md files
-    const folders = findManifestFolders(tmpClone);
-    const topLevelMds = fs
-      .readdirSync(tmpClone, { withFileTypes: true })
-      .filter(
-        (e) =>
-          e.isFile() &&
-          e.name.toLowerCase().endsWith('.md') &&
-          e.name.toLowerCase() !== 'readme.md'
-      )
-      .map((e) => path.join(tmpClone, e.name));
+    const { units: folders } = collectUnitFolders(tmpClone);
+    const topLevelMds = fs.existsSync(path.join(tmpClone, 'manifest.json'))
+      ? []
+      : fs
+          .readdirSync(tmpClone, { withFileTypes: true })
+          .filter(
+            (e) =>
+              e.isFile() &&
+              e.name.toLowerCase().endsWith('.md') &&
+              e.name.toLowerCase() !== 'readme.md'
+          )
+          .map((e) => path.join(tmpClone, e.name));
 
     const totalCount = folders.length + topLevelMds.length;
     console.log(`\nRepository: ${deriveNameFromUrl(url)} (no shelf.json; discovered ${totalCount} unit(s))\n`);
@@ -1428,6 +1452,7 @@ export function cmdCatalog(_knowledgeDir: string, args: string[]): void {
 
 export function cmdIndex(args: string[]): void {
   let targetDir = process.cwd();
+  let targetDirSet = false;
   let outputPath = '';
   let repoName = '';
 
@@ -1447,8 +1472,12 @@ export function cmdIndex(args: string[]): void {
     } else if (args[i].startsWith('-')) {
       console.error(`Error: Unknown option '${args[i]}' for 'index'.`);
       process.exit(1);
-    } else {
+    } else if (!targetDirSet) {
       targetDir = path.resolve(expandHome(args[i]));
+      targetDirSet = true;
+    } else {
+      console.error(`Error: Unexpected argument '${args[i]}' for 'index'.`);
+      process.exit(1);
     }
   }
 

@@ -104,7 +104,7 @@ async function main() {
     if (
       first.startsWith('-') ||
       rest.length > 1 ||
-      (process.stdin.isTTY && !looksLikePath)
+      !looksLikePath
     ) {
       const { runCli } = await import('./cli.js');
       runCli(rawArgs);

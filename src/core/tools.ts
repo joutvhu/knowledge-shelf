@@ -58,9 +58,9 @@ function findCaseInsensitive(knowledgeDir: string, name: string): string | null 
 
   // Fallback to filename stem match only when caller did not specify a directory path
   if (!nameLower.includes('/')) {
-    const targetStem = path.basename(nameLower, '.md');
+    const targetStem = path.basename(nameLower).replace(/\.md$/i, '');
     for (const filePath of mdFiles) {
-      if (path.basename(filePath, '.md').toLowerCase() === targetStem) return filePath;
+      if (path.basename(filePath).replace(/\.md$/i, '').toLowerCase() === targetStem) return filePath;
     }
   }
 
@@ -293,34 +293,14 @@ export function toolGetDoc(knowledgeDirs: string | string[], name: string): Tool
     }
   }
 
-  // 2. Try standalone .md file across layers
+  // 2. Try standalone or nested .md file across layers
   let foundFilePath: string | null = null;
   const normalizedRel = path.posix.normalize(name.replace(/\\/g, '/')).replace(/^\/+/, '');
 
   for (const dir of dirs) {
-    // If this layer already defines a manifest unit matching any ancestor folder prefix,
-    // it shadows lower layers for that entire unit — do not leak files from shadowed units.
-    if (normalizedRel.includes('/')) {
-      const segments = normalizedRel.split('/');
-      let shadowed = false;
-      for (let i = segments.length - 1; i >= 1; i--) {
-        const prefix = segments.slice(0, i).join('/');
-        const shadowedFolder = resolveInsideDir(dir, prefix, true);
-        const hasShadowedUnit =
-          (shadowedFolder && fs.existsSync(path.join(shadowedFolder, 'manifest.json'))) ||
-          Boolean(findManifestFolderCaseInsensitive(dir, prefix));
-        if (hasShadowedUnit) {
-          shadowed = true;
-          break;
-        }
-      }
-      if (shadowed) {
-        break;
-      }
-    }
-
-    const resolvedTarget = resolveInsideDir(dir, name, true)!;
+    const resolvedTarget = resolveInsideDir(dir, name, true);
     if (
+      resolvedTarget &&
       fs.existsSync(resolvedTarget) &&
       !fs.statSync(resolvedTarget).isDirectory() &&
       resolvedTarget.toLowerCase().endsWith('.md')
@@ -340,6 +320,27 @@ export function toolGetDoc(knowledgeDirs: string | string[], name: string): Tool
       }
       foundFilePath = safeFound;
       break;
+    }
+
+    // If this layer already defines a manifest unit matching any ancestor folder prefix,
+    // it shadows lower layers for that entire unit — do not leak files from shadowed units.
+    if (normalizedRel.includes('/')) {
+      const segments = normalizedRel.split('/');
+      let shadowed = false;
+      for (let i = segments.length - 1; i >= 1; i--) {
+        const prefix = segments.slice(0, i).join('/');
+        const shadowedFolder = resolveInsideDir(dir, prefix, true);
+        const hasShadowedUnit =
+          (shadowedFolder && fs.existsSync(path.join(shadowedFolder, 'manifest.json'))) ||
+          Boolean(findManifestFolderCaseInsensitive(dir, prefix));
+        if (hasShadowedUnit) {
+          shadowed = true;
+          break;
+        }
+      }
+      if (shadowed) {
+        break;
+      }
     }
   }
 
@@ -841,6 +842,25 @@ export async function toolRunWorkflow(
     const trustCheck = isUnitTrusted(layerDir, unitRel);
     if (!trustCheck.trusted) {
       blockRunReason = trustCheck.reason;
+      if (!options.dryRun && steps.some((s) => s.action === 'run')) {
+        return {
+          text: JSON.stringify(
+            {
+              workflow,
+              steps_executed: 0,
+              files_created: [],
+              files_skipped: [],
+              scripts_run: [],
+              messages: [],
+              errors: [trustCheck.reason],
+              summary: '0 files created, 0 skipped, 0 scripts run, 1 errors',
+            },
+            null,
+            2
+          ),
+          isError: true,
+        };
+      }
     }
   }
 

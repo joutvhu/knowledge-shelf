@@ -233,6 +233,16 @@ export function validateManifestUnitDir(
             }
           }
           if (validEntries.length > 0) {
+            for (const file of validEntries) {
+              if (!isGlobPattern(file)) {
+                const resolvedDirCheck = resolveInsideDir(unitDir, file, true);
+                if (resolvedDirCheck && fs.existsSync(resolvedDirCheck) && fs.statSync(resolvedDirCheck).isDirectory()) {
+                  errors.push(
+                    `modules.${modName}.files: '${file}' is a directory (files list must contain file paths or glob patterns, not directories)`
+                  );
+                }
+              }
+            }
             const resolved = resolveUnitFiles(unitDir, validEntries, excludeList);
             for (const esc of resolved.escapedPatterns) {
               errors.push(`modules.${modName}.files: path escapes unit folder: ${esc}`);
@@ -381,6 +391,19 @@ export function validateManifestUnitDir(
     }
   }
 
+  // Placeholders validation
+  if (manifest.placeholders !== undefined && isRecord(manifest.placeholders)) {
+    for (const [phKey, phDef] of Object.entries(manifest.placeholders)) {
+      if (isRecord(phDef) && typeof phDef.pattern === 'string') {
+        try {
+          new RegExp(phDef.pattern);
+        } catch (e: any) {
+          errors.push(`placeholders.${phKey}: invalid regex pattern '${phDef.pattern}': ${e?.message || e}`);
+        }
+      }
+    }
+  }
+
   // Workflows validation
   const declaredManifestPlaceholders = new Set(
     isRecord(manifest.placeholders) ? Object.keys(manifest.placeholders) : []
@@ -413,6 +436,19 @@ export function validateManifestUnitDir(
         }
 
         const wfInputs = new Set(isRecord(wfDef.inputs) ? Object.keys(wfDef.inputs) : []);
+        if (isRecord(wfDef.inputs)) {
+          for (const [inKey, inDef] of Object.entries(wfDef.inputs)) {
+            if (isRecord(inDef) && typeof inDef.pattern === 'string') {
+              try {
+                new RegExp(inDef.pattern);
+              } catch (e: any) {
+                errors.push(
+                  `${displayRel}: input '${inKey}' invalid regex pattern '${inDef.pattern}': ${e?.message || e}`
+                );
+              }
+            }
+          }
+        }
         const usedPlaceholders = new Set<string>();
 
         for (let i = 0; i < wfDef.steps.length; i++) {
@@ -441,6 +477,22 @@ export function validateManifestUnitDir(
                 errors.push(
                   `${prefix}: "when" must specify input + (equals|not_equals|in) or exists/not_exists`
                 );
+              }
+              if (typeof step.when.exists === 'string') {
+                const cond = step.when.exists.trim();
+                if (!ROOT_PLACEHOLDER_RE.test(cond)) {
+                  errors.push(
+                    `${prefix}: when.exists path '${step.when.exists}' must start with a root placeholder (e.g. {{TARGET}}/...)`
+                  );
+                }
+              }
+              if (typeof step.when.not_exists === 'string') {
+                const cond = step.when.not_exists.trim();
+                if (!ROOT_PLACEHOLDER_RE.test(cond)) {
+                  errors.push(
+                    `${prefix}: when.not_exists path '${step.when.not_exists}' must start with a root placeholder (e.g. {{TARGET}}/...)`
+                  );
+                }
               }
             }
           }
