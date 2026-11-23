@@ -316,6 +316,17 @@ export function toolGetDoc(knowledgeDirs: string | string[], name: string): Tool
       foundFilePath = resolvedTarget;
       break;
     }
+    const nameWithMd = name.toLowerCase().endsWith('.md') ? name : `${name}.md`;
+    const resolvedTargetWithMd = resolveInsideDir(dir, nameWithMd, true);
+    if (
+      resolvedTargetWithMd &&
+      fs.existsSync(resolvedTargetWithMd) &&
+      !fs.statSync(resolvedTargetWithMd).isDirectory() &&
+      resolvedTargetWithMd.toLowerCase().endsWith('.md')
+    ) {
+      foundFilePath = resolvedTargetWithMd;
+      break;
+    }
     const found = findCaseInsensitive(dir, name);
     if (found) {
       const relFound = path.relative(dir, found);

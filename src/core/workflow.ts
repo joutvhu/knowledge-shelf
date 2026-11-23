@@ -356,6 +356,19 @@ function executePatchStep(
   const renderedAnchor = replacePlaceholders(anchorTemplate, inputs);
   const skipMarker = skipIfContainsTemplate ? replacePlaceholders(skipIfContainsTemplate, inputs) : '';
 
+  const VALID_PATCH_MODES = new Set(['insert_before', 'insert_after', 'append', 'prepend', 'replace']);
+  if (!VALID_PATCH_MODES.has(mode)) {
+    results.errors.push(`Unknown patch mode '${mode}'.`);
+    return;
+  }
+  if (
+    (mode === 'insert_before' || mode === 'insert_after' || mode === 'replace') &&
+    !renderedAnchor
+  ) {
+    results.errors.push(`Patch mode '${mode}' requires a non-empty anchor.`);
+    return;
+  }
+
   let existing = '';
   if (fs.existsSync(targetPath)) {
     if (!fs.statSync(targetPath).isFile()) {

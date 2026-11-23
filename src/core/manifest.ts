@@ -93,6 +93,7 @@ export function collectStepPlaceholders(step: Record<string, unknown>, out: Set<
   if (!isRecord(step)) return;
   const w = isRecord(step.when) ? step.when : null;
   if (w) {
+    if (typeof w.input === 'string' && w.input.trim()) out.add(w.input.trim());
     if (typeof w.exists === 'string') collectPlaceholders(w.exists, out);
     if (typeof w.not_exists === 'string') collectPlaceholders(w.not_exists, out);
   }

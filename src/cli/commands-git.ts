@@ -59,9 +59,11 @@ import {
   loadRegistry,
   loadShelfCatalog,
   loadTeamConfig,
+  mutateRegistry,
   recordInstalledSource,
   resolveSafeUnitDir,
   saveRegistry,
+  withRegistryLock,
 } from './registry.js';
 
 export function validateStaged(
@@ -1054,9 +1056,17 @@ export function cmdPin(knowledgeDir: string, args: string[]): void {
     }
   }
 
-  source.pin = version || source.commit;
-  saveRegistry(knowledgeDir, registry);
-  console.log(`✓ Pinned '${name}' to ${source.pin}`);
+  mutateRegistry(knowledgeDir, (reg) => {
+    const s = reg.sources.find((item) => item.name === name);
+    if (s) {
+      s.pin = version || s.commit;
+      if (source.commit) s.commit = source.commit;
+      if (source.fullCommit) s.fullCommit = source.fullCommit;
+      if (source.checksum) s.checksum = source.checksum;
+      if (source.updatedAt) s.updatedAt = source.updatedAt;
+    }
+  });
+  console.log(`✓ Pinned '${name}' to ${version || source.commit}`);
   console.log(`  This source will be skipped during 'update'.  Use 'unpin ${name}' to unlock.`);
 }
 
@@ -1086,8 +1096,12 @@ export function cmdUnpin(knowledgeDir: string, args: string[]): void {
     return;
   }
 
-  delete source.pin;
-  saveRegistry(knowledgeDir, registry);
+  mutateRegistry(knowledgeDir, (reg) => {
+    const s = reg.sources.find((item) => item.name === name);
+    if (s) {
+      delete s.pin;
+    }
+  });
   console.log(`✓ Unpinned '${name}'.  It will be updated normally.`);
 }
 

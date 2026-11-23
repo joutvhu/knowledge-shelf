@@ -90,6 +90,10 @@ function findWalkUpRegistryDir(startDir: string): string | null {
     if (fs.existsSync(path.join(current, '.registry.json'))) {
       return current;
     }
+    const agentsCandidate = path.join(current, '.agents', 'knowledges');
+    if (fs.existsSync(path.join(agentsCandidate, '.registry.json'))) {
+      return agentsCandidate;
+    }
     const candidate = path.join(current, 'knowledge');
     if (fs.existsSync(path.join(candidate, '.registry.json'))) {
       return candidate;

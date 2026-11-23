@@ -37,9 +37,11 @@ import {
   getCacheDir,
   getRegistryPath,
   loadRegistry,
+  mutateRegistry,
   recordInstalledSource,
   resolveSafeUnitDir,
   saveRegistry,
+  withRegistryLock,
 } from './registry.js';
 
 function filterTopLevelManifestFolders(folders: string[]): string[] {
@@ -220,7 +222,7 @@ export function cmdRemove(knowledgeDir: string, args: string[]): void {
   }
 
   let destDir = resolveSafeUnitDir(knowledgeDir, name);
-  const registry = loadRegistry(knowledgeDir);
+  let registry = loadRegistry(knowledgeDir);
   let idx = registry.sources.findIndex((s) => s.name === name);
 
   if (idx === -1 && !name.toLowerCase().endsWith('.md')) {
@@ -253,8 +255,12 @@ export function cmdRemove(knowledgeDir: string, args: string[]): void {
   }
 
   removeDirSync(destDir);
-  registry.sources.splice(idx, 1);
-  saveRegistry(knowledgeDir, registry);
+  mutateRegistry(knowledgeDir, (reg) => {
+    const targetIdx = reg.sources.findIndex((s) => s.name === name);
+    if (targetIdx !== -1) {
+      reg.sources.splice(targetIdx, 1);
+    }
+  });
 
   console.log(`✓ Removed '${name}'`);
 }
@@ -325,7 +331,23 @@ export function cmdInfo(knowledgeDirs: string | string[], args: string[]): void 
     const content = fs.readFileSync(unitDir, 'utf-8');
     const { metadata } = parseFrontmatter(content);
     const registry = loadRegistry(knowledgeDir);
-    const source = registry.sources.find((s) => s.name === displayName || s.name === name);
+    const findSource = (targetName: string) => {
+      const normTarget = targetName.toLowerCase().replace(/\\/g, '/');
+      let found = registry.sources.find((s) => s.name.toLowerCase().replace(/\\/g, '/') === normTarget);
+      if (!found && normTarget.includes('/')) {
+        const segments = normTarget.split('/');
+        for (let i = segments.length - 1; i >= 1; i--) {
+          const prefix = segments.slice(0, i).join('/');
+          const match = registry.sources.find((s) => s.name.toLowerCase().replace(/\\/g, '/') === prefix);
+          if (match) {
+            found = match;
+            break;
+          }
+        }
+      }
+      return found;
+    };
+    const source = findSource(displayName) || findSource(name);
 
     console.log(`\n  ${displayName}`);
     console.log(`  ${'─'.repeat(displayName.length + 4)}`);
@@ -377,7 +399,23 @@ export function cmdInfo(knowledgeDirs: string | string[], args: string[]): void 
   });
 
   const registry = loadRegistry(knowledgeDir);
-  const source = registry.sources.find((s) => s.name === name);
+  const findSource = (targetName: string) => {
+    const normTarget = targetName.toLowerCase().replace(/\\/g, '/');
+    let found = registry.sources.find((s) => s.name.toLowerCase().replace(/\\/g, '/') === normTarget);
+    if (!found && normTarget.includes('/')) {
+      const segments = normTarget.split('/');
+      for (let i = segments.length - 1; i >= 1; i--) {
+        const prefix = segments.slice(0, i).join('/');
+        const match = registry.sources.find((s) => s.name.toLowerCase().replace(/\\/g, '/') === prefix);
+        if (match) {
+          found = match;
+          break;
+        }
+      }
+    }
+    return found;
+  };
+  const source = findSource(name);
 
   console.log(`\n  ${name}`);
   console.log(`  ${'─'.repeat(name.length + 4)}`);
@@ -647,6 +685,9 @@ export function cmdValidate(knowledgeDirs: string | string[], args: string[]): v
 
 export interface CmdInstallOptions {
   exitOnError?: boolean;
+  originArchive?: string;
+  extractDir?: string;
+  defaultTrusted?: boolean;
 }
 
 export function cmdInstall(
@@ -699,7 +740,6 @@ export function cmdInstall(
   }
 
   fs.mkdirSync(knowledgeDir, { recursive: true });
-  const registry = loadRegistry(knowledgeDir);
   const stat = fs.statSync(resolvedSource);
 
   if (customName) {
@@ -713,20 +753,39 @@ export function cmdInstall(
   }
 
   const upsertRegistryEntry = (unitName: string, originPath: string, destPath: string) => {
-    const now = new Date().toISOString();
-    const checksum = computeUnitChecksum(destPath);
-    const existingIndex = registry.sources.findIndex((s) => s.name === unitName);
-    const existing = existingIndex !== -1 ? registry.sources[existingIndex] : undefined;
-    const entry: RegistryEntry = {
-      name: unitName,
-      url: `local:${originPath}`,
-      commit: 'local',
-      checksum,
-      trusted: true,
-      installedAt: existing?.installedAt || now,
-      updatedAt: now,
-    };
-    recordInstalledSource(registry, entry);
+    mutateRegistry(knowledgeDir, (reg) => {
+      const now = new Date().toISOString();
+      const checksum = computeUnitChecksum(destPath);
+      const existingIndex = reg.sources.findIndex((s) => s.name === unitName);
+      const existing = existingIndex !== -1 ? reg.sources[existingIndex] : undefined;
+
+      let url = `local:${originPath}`;
+      let subPath: string | undefined = undefined;
+      let isTrusted: boolean | undefined = true;
+
+      if (options.originArchive) {
+        url = `archive:${options.originArchive}`;
+        if (options.extractDir) {
+          const rel = path.relative(options.extractDir, originPath).replace(/\\/g, '/');
+          if (rel && rel !== '.' && rel !== unitName) {
+            subPath = rel;
+          }
+        }
+        isTrusted = options.defaultTrusted ? true : undefined;
+      }
+
+      const entry: RegistryEntry = {
+        name: unitName,
+        url,
+        ...(subPath ? { path: subPath } : {}),
+        commit: 'local',
+        checksum,
+        ...(isTrusted ? { trusted: true } : {}),
+        installedAt: existing?.installedAt || now,
+        updatedAt: now,
+      };
+      recordInstalledSource(reg, entry);
+    });
   };
 
   // Case 1: Standalone .md file
@@ -760,7 +819,6 @@ export function cmdInstall(
     fs.mkdirSync(path.dirname(destFile), { recursive: true });
     fs.copyFileSync(resolvedSource, destFile);
     upsertRegistryEntry(baseName, resolvedSource, destFile);
-    saveRegistry(knowledgeDir, registry);
     console.log(`✓ Installed standalone knowledge '${baseName}'`);
     return;
   }
@@ -847,7 +905,6 @@ export function cmdInstall(
       installed++;
     }
 
-    saveRegistry(knowledgeDir, registry);
     console.log(`\nDone. ${installed} installed, ${skipped} skipped.`);
     return;
   }
@@ -892,7 +949,6 @@ export function cmdInstall(
   }
 
   upsertRegistryEntry(unitName, resolvedSource, destDir);
-  saveRegistry(knowledgeDir, registry);
   console.log(`✓ Installed '${unitName}'`);
   printSecurityNotice(unitName, destDir);
 }
@@ -1186,29 +1242,37 @@ export function cmdImport(knowledgeDir: string, args: string[]): void {
       installArgs.push('--all');
     }
 
-    cmdInstall(knowledgeDir, installArgs, { exitOnError: false });
+    cmdInstall(knowledgeDir, installArgs, {
+      exitOnError: false,
+      originArchive: archivePath,
+      extractDir,
+      defaultTrusted: trusted,
+    });
 
-    // Replace transient temp extraction path in registry with archive origin & safe trust state
-    const registry = loadRegistry(knowledgeDir);
-    const tempPrefix = `local:${extractDir}`;
-    let changed = false;
-    for (const entry of registry.sources) {
-      if (entry.url.startsWith(tempPrefix)) {
-        const originPath = entry.url.slice('local:'.length);
-        const subRel = path.relative(extractDir, originPath).replace(/\\/g, '/');
-        entry.url = `archive:${archivePath}`;
-        if (subRel && subRel !== '.' && subRel !== entry.name) {
-          entry.path = subRel;
+    // Replace transient temp extraction path in registry with archive origin & safe trust state (robust fallback)
+    mutateRegistry(knowledgeDir, (registry) => {
+      const normExtract = path.resolve(extractDir).toLowerCase();
+      for (const entry of registry.sources) {
+        if (entry.url.startsWith('local:')) {
+          const originPath = entry.url.slice('local:'.length);
+          const normOrigin = path.resolve(originPath).toLowerCase();
+          if (
+            normOrigin === normExtract ||
+            normOrigin.startsWith(normExtract + path.sep) ||
+            normOrigin.startsWith(normExtract + '/')
+          ) {
+            const subRel = path.relative(extractDir, originPath).replace(/\\/g, '/');
+            entry.url = `archive:${archivePath}`;
+            if (subRel && subRel !== '.' && subRel !== entry.name) {
+              entry.path = subRel;
+            }
+            if (!trusted) {
+              delete entry.trusted;
+            }
+          }
         }
-        if (!trusted) {
-          delete entry.trusted;
-        }
-        changed = true;
       }
-    }
-    if (changed) {
-      saveRegistry(knowledgeDir, registry);
-    }
+    });
   } catch (e) {
     console.error(`Error: Failed to import archive.\n${e instanceof Error ? e.message : e}`);
     exitCode = 1;
@@ -1232,21 +1296,21 @@ export function cmdTrust(knowledgeDir: string, args: string[], trusted: boolean)
     process.exit(1);
   }
 
-  const registry = loadRegistry(knowledgeDir);
-  const entry = registry.sources.find((s) => s.name === name);
-  if (!entry) {
-    console.error(`Error: '${name}' not found in registry.`);
-    process.exit(1);
-  }
+  mutateRegistry(knowledgeDir, (registry) => {
+    const entry = registry.sources.find((s) => s.name === name);
+    if (!entry) {
+      console.error(`Error: '${name}' not found in registry.`);
+      process.exit(1);
+    }
 
-  if (trusted) {
-    entry.trusted = true;
-  } else if (entry.url?.startsWith('local:')) {
-    entry.trusted = false;
-  } else {
-    delete entry.trusted;
-  }
-  saveRegistry(knowledgeDir, registry);
+    if (trusted) {
+      entry.trusted = true;
+    } else if (entry.url?.startsWith('local:')) {
+      entry.trusted = false;
+    } else {
+      delete entry.trusted;
+    }
+  });
   console.log(
     trusted
       ? `✓ Marked '${name}' as trusted for workflow script execution.`

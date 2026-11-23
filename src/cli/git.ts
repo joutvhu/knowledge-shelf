@@ -103,7 +103,7 @@ export function gitCloneSparse(url: string, targetDir: string, sparsePath: strin
     gitClone(url, targetDir, branch);
     return;
   }
-  const sparseResult = spawnSync('git', ['sparse-checkout', 'set', '--', sparsePath], {
+  const sparseResult = spawnSync('git', ['sparse-checkout', 'set', '--no-cone', '--', sparsePath], {
     cwd: targetDir,
     stdio: 'pipe',
     encoding: 'utf-8',

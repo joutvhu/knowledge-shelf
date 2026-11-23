@@ -135,6 +135,86 @@ export function loadRegistry(knowledgeDir: string, options: LoadRegistryOptions 
   }
 }
 
+const activeLocks = new Set<string>();
+
+/**
+ * Executes `fn` with a re-entrant cross-process file lock on `.registry.lock`.
+ */
+export function withRegistryLock<T>(knowledgeDir: string, fn: () => T, timeoutMs = 15000): T {
+  const dir = path.resolve(knowledgeDir);
+  const lockKey = process.platform === 'win32' ? dir.toLowerCase() : dir;
+
+  if (activeLocks.has(lockKey)) {
+    return fn();
+  }
+
+  fs.mkdirSync(dir, { recursive: true });
+  const lockFile = path.join(dir, '.registry.lock');
+  const startTime = Date.now();
+  let fd: number | null = null;
+
+  while (true) {
+    try {
+      fd = fs.openSync(lockFile, 'wx');
+      fs.writeFileSync(fd, `${process.pid}\n${Date.now()}\n`, 'utf-8');
+      activeLocks.add(lockKey);
+      break;
+    } catch (err: any) {
+      if (err && err.code === 'EEXIST') {
+        try {
+          const stat = fs.statSync(lockFile);
+          if (Date.now() - stat.mtimeMs > 30000) {
+            fs.unlinkSync(lockFile);
+            continue;
+          }
+        } catch {
+          continue;
+        }
+
+        if (Date.now() - startTime > timeoutMs) {
+          throw new Error(`Timeout waiting for registry lock on ${knowledgeDir}`);
+        }
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 25);
+      } else {
+        throw err;
+      }
+    }
+  }
+
+  try {
+    return fn();
+  } finally {
+    activeLocks.delete(lockKey);
+    if (fd !== null) {
+      try {
+        fs.closeSync(fd);
+      } catch {
+        /* ignore */
+      }
+      try {
+        fs.unlinkSync(lockFile);
+      } catch {
+        /* ignore */
+      }
+    }
+  }
+}
+
+/**
+ * Atomic load-modify-save cycle under registry lock to prevent lost updates.
+ */
+export function mutateRegistry(
+  knowledgeDir: string,
+  mutator: (registry: Registry) => void
+): Registry {
+  return withRegistryLock(knowledgeDir, () => {
+    const registry = loadRegistry(knowledgeDir);
+    mutator(registry);
+    saveRegistry(knowledgeDir, registry);
+    return registry;
+  });
+}
+
 function renameWithRetry(source: string, destination: string): void {
   const maxAttempts = 5;
   const retryCodes = new Set(['EPERM', 'EBUSY', 'EACCES']);
@@ -158,30 +238,32 @@ function renameWithRetry(source: string, destination: string): void {
 }
 
 export function saveRegistry(knowledgeDir: string, registry: Registry): void {
-  const registryPath = getRegistryPath(knowledgeDir);
-  const dir = path.dirname(registryPath);
-  fs.mkdirSync(dir, { recursive: true });
+  withRegistryLock(knowledgeDir, () => {
+    const registryPath = getRegistryPath(knowledgeDir);
+    const dir = path.dirname(registryPath);
+    fs.mkdirSync(dir, { recursive: true });
 
-  const base = path.basename(registryPath);
-  const prefix = base.startsWith('.') ? base : '.' + base;
-  const tmp = path.join(
-    dir,
-    `${prefix}.${process.pid}.${Date.now()}.${crypto.randomBytes(4).toString('hex')}.tmp`
-  );
+    const base = path.basename(registryPath);
+    const prefix = base.startsWith('.') ? base : '.' + base;
+    const tmp = path.join(
+      dir,
+      `${prefix}.${process.pid}.${Date.now()}.${crypto.randomBytes(4).toString('hex')}.tmp`
+    );
 
-  try {
-    fs.writeFileSync(tmp, JSON.stringify(registry, null, 2), 'utf-8');
-    renameWithRetry(tmp, registryPath);
-  } catch (e) {
-    if (fs.existsSync(tmp)) {
-      try {
-        fs.unlinkSync(tmp);
-      } catch {
-        /* best effort */
+    try {
+      fs.writeFileSync(tmp, JSON.stringify(registry, null, 2), 'utf-8');
+      renameWithRetry(tmp, registryPath);
+    } catch (e) {
+      if (fs.existsSync(tmp)) {
+        try {
+          fs.unlinkSync(tmp);
+        } catch {
+          /* best effort */
+        }
       }
+      throw e;
     }
-    throw e;
-  }
+  });
 }
 
 function hashFiles(root: string, files: string[]): string {
