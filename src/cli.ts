@@ -54,7 +54,7 @@ Commands:
   scaffold <name> [--type boilerplate|template|toolkit|cookbook|repo] [--output <dir>]
       Generate a starter knowledge unit or shareable knowledge repository with CI workflow.
 
-  publish <unit> --to <git-url> [--path <subpath>] [--branch <branch>] [--push] [--force]
+  publish <unit> --to <git-url> [--path <subpath>] [--branch <branch>] [--message <message>] [--push] [--force]
       Validate, hygiene-check, and commit/push a unit to a shared git repository branch.
 
   info <name>
@@ -121,7 +121,14 @@ export function runCli(rawArgs: string[]): void {
 
   for (let i = 0; i < rawArgs.length; i++) {
     const arg = rawArgs[i];
-    if (arg === '--dir') {
+    if (arg.startsWith('--dir=')) {
+      const dirVal = arg.slice('--dir='.length);
+      if (!dirVal) {
+        console.error('Error: --dir requires a directory path.');
+        process.exit(1);
+      }
+      cliDirs.push(dirVal);
+    } else if (arg === '--dir') {
       if (i + 1 >= rawArgs.length || rawArgs[i + 1].startsWith('-')) {
         console.error('Error: --dir requires a directory path.');
         process.exit(1);
@@ -180,7 +187,7 @@ export function runCli(rawArgs: string[]): void {
       break;
     case 'list':
     case 'ls':
-      cmdList(primaryDir, allDirs);
+      cmdList(primaryDir, allDirs, args.slice(1));
       break;
     case 'outdated':
     case 'status':
@@ -216,7 +223,7 @@ export function runCli(rawArgs: string[]): void {
       cmdRemove(primaryDir, args.slice(1));
       break;
     case 'init':
-      cmdInit(primaryDir);
+      cmdInit(primaryDir, args.slice(1));
       break;
     case 'version':
     case '--version':

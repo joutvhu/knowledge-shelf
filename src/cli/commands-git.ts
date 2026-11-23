@@ -504,6 +504,7 @@ export function cmdAdd(knowledgeDir: string, args: string[]): void {
         ...(fullCommit ? { fullCommit } : {}),
         ...(pinAfter || (ref && !branch) ? { pin: ref || commit } : {}),
         checksum,
+        ...(trusted ? { trusted: true } : {}),
         installedAt: existing?.installedAt || now,
         updatedAt: now,
       };
@@ -879,6 +880,7 @@ export function cmdUpdate(knowledgeDir: string, args: string[]): void {
     for (const source of group) {
       const destDir = resolveSafeUnitDir(knowledgeDir, source.name);
       if (
+        !force &&
         remoteSha &&
         source.commit &&
         source.commit.length >= 4 &&
@@ -886,7 +888,13 @@ export function cmdUpdate(knowledgeDir: string, args: string[]): void {
         fs.existsSync(destDir)
       ) {
         console.log(`Updating '${source.name}'...`);
-        console.log(`  Already up to date (${source.commit})`);
+        if (hasLocalModifications(destDir, source.checksum)) {
+          console.log(
+            `  ⚠ Skipping '${source.name}' (local modifications detected; pass --force to overwrite)`
+          );
+        } else {
+          console.log(`  Already up to date (${source.commit})`);
+        }
         continue;
       }
       pending.push(source);
@@ -908,7 +916,7 @@ export function cmdUpdate(knowledgeDir: string, args: string[]): void {
         console.log(`Updating '${source.name}'...`);
         const destDir = resolveSafeUnitDir(knowledgeDir, source.name);
 
-        if (newCommit === source.commit && fs.existsSync(destDir)) {
+        if (!force && newCommit === source.commit && fs.existsSync(destDir)) {
           console.log(`  Already up to date (${newCommit})`);
           continue;
         }

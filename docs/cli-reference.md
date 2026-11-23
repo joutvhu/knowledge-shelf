@@ -337,8 +337,10 @@ Generate a starter knowledge unit or a shareable monorepo skeleton (including `s
 ### `index [dir] [--output <shelf.json>]`
 Scan a directory of knowledge units and generate or update `shelf.json`.
 
-### `publish <path> --to <git-url> [--path <dest-path>] [--branch <branch>] [--push] [--force]`
+### `publish <path> --to <git-url> [--path <dest-path>] [--branch <branch>] [--message <message>] [--push] [--force]`
 Validate, hygiene-check, and publish a knowledge unit folder or a standalone `.md` file to a target git repository.
+
+- **Commit message (`--message`, `-m <message>`):** Custom commit message. Defaults to `chore(knowledge): publish <unit> v<version>` (or `chore(knowledge): publish <file>` for standalone documents).
 
 - **Standalone `.md` publishing:** Accepts either a manifest-based unit directory or a standalone `.md` file. Validates markdown frontmatter and copies the file to the target repo at `--path` if given, or at the repo root under its own filename if omitted.
 - **Path destination (`--path <dest-path>`):** For a directory unit, specifies the destination subfolder in the target repo. For a standalone `.md` file, specifies the destination path/file in the target repo.

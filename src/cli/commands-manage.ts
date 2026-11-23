@@ -81,7 +81,8 @@ export function printSecurityNotice(unitName: string, unitDir: string): void {
   console.log(`  ⚠ Security notice: '${unitName}' contains executable code (${parts.join('; ')}).`);
 }
 
-export function cmdInit(knowledgeDir: string): void {
+export function cmdInit(knowledgeDir: string, args: string[] = []): void {
+  rejectUnknownFlags(args, 'init');
   fs.mkdirSync(knowledgeDir, { recursive: true });
   fs.mkdirSync(getCacheDir(knowledgeDir), { recursive: true });
 
@@ -99,7 +100,8 @@ export function cmdInit(knowledgeDir: string): void {
   console.log(`✓ Initialized knowledge directory: ${knowledgeDir}`);
 }
 
-export function cmdList(primaryDir: string, knowledgeDirs: string[]): void {
+export function cmdList(primaryDir: string, knowledgeDirs: string[], args: string[] = []): void {
+  rejectUnknownFlags(args, 'list');
   const dirs = knowledgeDirs && knowledgeDirs.length > 0 ? knowledgeDirs : [primaryDir];
   const allSources: Array<{ source: any; layerDir?: string }> = [];
   const trackedNames = new Set<string>();
@@ -177,16 +179,27 @@ export function cmdList(primaryDir: string, knowledgeDirs: string[]): void {
 
 export function cmdRemove(knowledgeDir: string, args: string[]): void {
   rejectUnknownFlags(args, 'remove');
-  const name = args[0];
+  let name = args[0];
 
   if (!name) {
     console.error('Error: Name is required.\nUsage: knowledge-shelf remove <name>');
     process.exit(1);
   }
 
-  const destDir = resolveSafeUnitDir(knowledgeDir, name);
+  let destDir = resolveSafeUnitDir(knowledgeDir, name);
   const registry = loadRegistry(knowledgeDir);
-  const idx = registry.sources.findIndex((s) => s.name === name);
+  let idx = registry.sources.findIndex((s) => s.name === name);
+
+  if (idx === -1 && !name.endsWith('.md')) {
+    const mdName = `${name}.md`;
+    const mdCandidate = resolveSafeUnitDir(knowledgeDir, mdName);
+    const mdIdx = registry.sources.findIndex((s) => s.name === mdName);
+    if (mdIdx !== -1 || fs.existsSync(mdCandidate)) {
+      name = mdName;
+      destDir = mdCandidate;
+      idx = mdIdx;
+    }
+  }
 
   if (idx === -1) {
     const topSegment = path.relative(knowledgeDir, destDir).split(path.sep)[0];
@@ -945,6 +958,12 @@ export function cmdExport(knowledgeDir: string, args: string[]): void {
     outputPath = path.resolve(expandHome(outputPath));
     if (format === 'zip' && !outputPath.toLowerCase().endsWith('.zip')) {
       outputPath = `${outputPath}.zip`;
+    } else if (
+      format === 'tar' &&
+      !outputPath.toLowerCase().endsWith('.tar.gz') &&
+      !outputPath.toLowerCase().endsWith('.tgz')
+    ) {
+      outputPath = `${outputPath}.tar.gz`;
     }
   }
 

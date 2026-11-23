@@ -171,7 +171,10 @@ function evaluateWhenCondition(
       results.errors.push(check.error || `Invalid 'when.exists' path: ${w.exists}`);
       return false;
     }
-    if (!fs.existsSync(check.resolvedPath)) return false;
+    const existsOnDisk = fs.existsSync(check.resolvedPath);
+    const existsInDryRun =
+      Boolean(results.dry_run) && results.files_created.includes(check.resolvedPath);
+    if (!existsOnDisk && !existsInDryRun) return false;
   }
 
   if (typeof w.not_exists === 'string') {
@@ -180,7 +183,10 @@ function evaluateWhenCondition(
       results.errors.push(check.error || `Invalid 'when.not_exists' path: ${w.not_exists}`);
       return false;
     }
-    if (fs.existsSync(check.resolvedPath)) return false;
+    const existsOnDisk = fs.existsSync(check.resolvedPath);
+    const existsInDryRun =
+      Boolean(results.dry_run) && results.files_created.includes(check.resolvedPath);
+    if (existsOnDisk || existsInDryRun) return false;
   }
 
   return true;

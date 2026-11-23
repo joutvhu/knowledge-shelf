@@ -54,7 +54,14 @@ async function main() {
 
   for (let i = 0; i < rawArgs.length; i++) {
     const arg = rawArgs[i];
-    if (arg === '--dir') {
+    if (arg.startsWith('--dir=')) {
+      const dirVal = arg.slice('--dir='.length);
+      if (!dirVal) {
+        console.error('Error: --dir requires a directory path.');
+        process.exit(1);
+      }
+      cliDirs.push(dirVal);
+    } else if (arg === '--dir') {
       if (i + 1 >= rawArgs.length || rawArgs[i + 1].startsWith('-')) {
         console.error('Error: --dir requires a directory path.');
         process.exit(1);
