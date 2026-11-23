@@ -173,7 +173,13 @@ function evaluateWhenCondition(
     }
     const existsOnDisk = fs.existsSync(check.resolvedPath);
     const existsInDryRun =
-      Boolean(results.dry_run) && results.files_created.includes(check.resolvedPath);
+      Boolean(results.dry_run) &&
+      (results.files_created.includes(check.resolvedPath) ||
+        results.files_created.some((f) => {
+          const normF = f.replace(/\\/g, '/');
+          const normCheck = check.resolvedPath!.replace(/\\/g, '/');
+          return normF === normCheck || normF.startsWith(normCheck + '/');
+        }));
     if (!existsOnDisk && !existsInDryRun) return false;
   }
 
@@ -185,7 +191,13 @@ function evaluateWhenCondition(
     }
     const existsOnDisk = fs.existsSync(check.resolvedPath);
     const existsInDryRun =
-      Boolean(results.dry_run) && results.files_created.includes(check.resolvedPath);
+      Boolean(results.dry_run) &&
+      (results.files_created.includes(check.resolvedPath) ||
+        results.files_created.some((f) => {
+          const normF = f.replace(/\\/g, '/');
+          const normCheck = check.resolvedPath!.replace(/\\/g, '/');
+          return normF === normCheck || normF.startsWith(normCheck + '/');
+        }));
     if (existsOnDisk || existsInDryRun) return false;
   }
 
@@ -621,6 +633,9 @@ function executeMkdirStep(
   }
   if (!dryRun) {
     fs.mkdirSync(targetCheck.resolvedPath, { recursive: true });
+  }
+  if (!results.files_created.includes(targetCheck.resolvedPath)) {
+    results.files_created.push(targetCheck.resolvedPath);
   }
 }
 

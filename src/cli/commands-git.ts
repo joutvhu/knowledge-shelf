@@ -338,57 +338,58 @@ export function cmdAdd(knowledgeDir: string, args: string[]): void {
     ? (ref && ref !== branch ? ref : commit)
     : (ref && !branch ? ref : undefined);
 
-  let stageSeq = 0;
+  const registry = loadRegistry(knowledgeDir);
+  const installedEntries: RegistryEntry[] = [];
   const installUnitFromSource = (
-    unitName: string,
-    sourceDir: string,
-    sourceSubPath: string | undefined,
-    registry: ReturnType<typeof loadRegistry>,
-    syncName: boolean
-  ): 'installed' | 'skipped' | 'invalid' => {
-    const destDir = resolveSafeUnitDir(knowledgeDir, unitName);
-    const existing = registry.sources.find((s) => s.name === unitName);
-    if ((existing || fs.existsSync(destDir)) && !force) {
-      return 'skipped';
-    }
+      unitName: string,
+      sourceDir: string,
+      sourceSubPath: string | undefined,
+      syncName: boolean
+    ): 'installed' | 'skipped' | 'invalid' => {
+      const destDir = resolveSafeUnitDir(knowledgeDir, unitName);
+      const existing = registry.sources.find((s) => s.name === unitName);
+      if ((existing || fs.existsSync(destDir)) && !force) {
+        return 'skipped';
+      }
 
-    const stageDir = getCloneTarget(knowledgeDir, `.add-stage-${process.pid}-${Date.now()}-${++stageSeq}`);
-    removeDirSync(stageDir);
-    try {
-      copyDirSync(sourceDir, stageDir);
-      if (syncName) {
-        syncManifestName(stageDir, unitName);
-      }
-      if (!validateStagedDirectory(stageDir, unitName, noVerify)) {
-        console.error(`Error: Validation failed for '${unitName}'. Use --no-verify to bypass.`);
-        removeDirSync(stageDir);
-        return 'invalid';
-      }
-      replaceDirSync(knowledgeDir, stageDir, destDir);
-    } finally {
+      const stageDir = getCloneTarget(knowledgeDir, `.add-stage-${process.pid}-${Date.now()}-${++stageSeq}`);
       removeDirSync(stageDir);
-    }
+      try {
+        copyDirSync(sourceDir, stageDir);
+        if (syncName) {
+          syncManifestName(stageDir, unitName);
+        }
+        if (!validateStagedDirectory(stageDir, unitName, noVerify)) {
+          console.error(`Error: Validation failed for '${unitName}'. Use --no-verify to bypass.`);
+          removeDirSync(stageDir);
+          return 'invalid';
+        }
+        replaceDirSync(knowledgeDir, stageDir, destDir);
+      } finally {
+        removeDirSync(stageDir);
+      }
 
-    const now = new Date().toISOString();
-    const checksum = computeUnitChecksum(destDir);
-    const entry: RegistryEntry = {
-      name: unitName,
-      url,
-      path: sourceSubPath || undefined,
-      ...(branch ? { branch } : {}),
-      commit,
-      ...(fullCommit ? { fullCommit } : {}),
-      ...(pinVal ? { pin: pinVal } : {}),
-      checksum,
-      ...(trusted ? { trusted: true } : {}),
-      installedAt: existing?.installedAt || now,
-      updatedAt: now,
+      const now = new Date().toISOString();
+      const checksum = computeUnitChecksum(destDir);
+      const entry: RegistryEntry = {
+        name: unitName,
+        url,
+        path: sourceSubPath || undefined,
+        ...(branch ? { branch } : {}),
+        commit,
+        ...(fullCommit ? { fullCommit } : {}),
+        ...(pinVal ? { pin: pinVal } : {}),
+        checksum,
+        ...(trusted ? { trusted: true } : {}),
+        installedAt: existing?.installedAt || now,
+        updatedAt: now,
+      };
+
+      installedEntries.push(entry);
+      recordInstalledSource(registry, entry);
+      printSecurityNotice(unitName, destDir);
+      return 'installed';
     };
-
-    recordInstalledSource(registry, entry);
-    printSecurityNotice(unitName, destDir);
-    return 'installed';
-  };
 
   // Pack mode (--pack <name> via shelf.json)
   if (packName) {
@@ -399,7 +400,6 @@ export function cmdAdd(knowledgeDir: string, args: string[]): void {
       process.exit(1);
     }
     const unitNames = catalog.packs[packName].units || [];
-    const registry = loadRegistry(knowledgeDir);
     let installed = 0;
     let skipped = 0;
     let invalid = 0;
@@ -414,7 +414,7 @@ export function cmdAdd(knowledgeDir: string, args: string[]): void {
         invalid++;
         continue;
       }
-      const status = installUnitFromSource(uName, sourceDir, isRootUnit ? undefined : rawRelPath, registry, true);
+      const status = installUnitFromSource(uName, sourceDir, isRootUnit ? undefined : rawRelPath, true);
       if (status === 'installed') {
         console.log(`  ✓ Installed '${uName}'`);
         installed++;
@@ -426,7 +426,13 @@ export function cmdAdd(knowledgeDir: string, args: string[]): void {
       }
     }
 
-    saveRegistry(knowledgeDir, registry);
+    if (installedEntries.length > 0) {
+      mutateRegistry(knowledgeDir, (reg) => {
+        for (const entry of installedEntries) {
+          recordInstalledSource(reg, entry);
+        }
+      });
+    }
     removeDirSync(cloneTarget);
     console.log(`\nDone. ${installed} installed, ${skipped} skipped${invalid ? `, ${invalid} failed` : ''}.`);
     if (invalid > 0) process.exit(1);
@@ -463,7 +469,6 @@ export function cmdAdd(knowledgeDir: string, args: string[]): void {
           )
           .map((e) => path.join(baseDir, e.name));
 
-    const registry = loadRegistry(knowledgeDir);
     let installed = 0;
     let skipped = 0;
     let invalid = 0;
@@ -479,7 +484,7 @@ export function cmdAdd(knowledgeDir: string, args: string[]): void {
         }
       }
       const sourcePath = path.relative(cloneTarget, sourceDir).replace(/\\/g, '/') || undefined;
-      const status = installUnitFromSource(unitName, sourceDir, sourcePath, registry, false);
+      const status = installUnitFromSource(unitName, sourceDir, sourcePath, false);
       if (status === 'installed') {
         console.log(`  ✓ Installed '${unitName}'`);
         installed++;
@@ -525,12 +530,19 @@ export function cmdAdd(knowledgeDir: string, args: string[]): void {
         installedAt: existing?.installedAt || now,
         updatedAt: now,
       };
+      installedEntries.push(entry);
       recordInstalledSource(registry, entry);
       console.log(`  ✓ Installed '${docName}'`);
       installed++;
     }
 
-    saveRegistry(knowledgeDir, registry);
+    if (installedEntries.length > 0) {
+      mutateRegistry(knowledgeDir, (reg) => {
+        for (const entry of installedEntries) {
+          recordInstalledSource(reg, entry);
+        }
+      });
+    }
     removeDirSync(cloneTarget);
     console.log(`\nDone. ${installed} installed, ${skipped} skipped${invalid ? `, ${invalid} failed` : ''}.`);
     if (invalid > 0) process.exit(1);
@@ -554,7 +566,6 @@ export function cmdAdd(knowledgeDir: string, args: string[]): void {
     }
     const destFile = resolveSafeUnitDir(knowledgeDir, name);
 
-    const registry = loadRegistry(knowledgeDir);
     const existing = registry.sources.find((s) => s.name === name);
     if (existing && !force) {
       console.error(`Error: '${name}' is already installed.  Use 'update ${name}' or pass --force.`);
@@ -596,7 +607,9 @@ export function cmdAdd(knowledgeDir: string, args: string[]): void {
     };
 
     recordInstalledSource(registry, entry);
-    saveRegistry(knowledgeDir, registry);
+    mutateRegistry(knowledgeDir, (reg) => {
+      recordInstalledSource(reg, entry);
+    });
     removeDirSync(cloneTarget);
     console.log(`✓ Installed '${name}' (${commit})`);
     return;
@@ -612,7 +625,6 @@ export function cmdAdd(knowledgeDir: string, args: string[]): void {
   const name = customName || derivedDefault;
   const destDir = resolveSafeUnitDir(knowledgeDir, name);
 
-  const registry = loadRegistry(knowledgeDir);
   const existing = registry.sources.find((s) => s.name === name);
   if (existing && !force) {
     console.error(`Error: '${name}' is already installed.  Use 'update ${name}' or pass --force.`);
@@ -637,6 +649,7 @@ export function cmdAdd(knowledgeDir: string, args: string[]): void {
     }
     if (!validateStagedDirectory(stageDir, name, noVerify)) {
       console.error(`Error: Validation failed for '${name}'. Aborting add (use --no-verify to skip).`);
+      removeDirSync(stageDir);
       removeDirSync(cloneTarget);
       process.exit(1);
     }
@@ -662,7 +675,9 @@ export function cmdAdd(knowledgeDir: string, args: string[]): void {
   };
 
   recordInstalledSource(registry, entry);
-  saveRegistry(knowledgeDir, registry);
+  mutateRegistry(knowledgeDir, (reg) => {
+    recordInstalledSource(reg, entry);
+  });
   removeDirSync(cloneTarget);
   console.log(`✓ Installed '${name}' (${commit})`);
   printSecurityNotice(name, destDir);
@@ -975,7 +990,19 @@ export function cmdUpdate(knowledgeDir: string, args: string[]): void {
     }
   }
 
-  saveRegistry(knowledgeDir, registry);
+  if (updated > 0) {
+    mutateRegistry(knowledgeDir, (reg) => {
+      for (const s of toUpdate) {
+        const existing = reg.sources.find((item) => item.name === s.name);
+        if (existing) {
+          existing.commit = s.commit;
+          existing.fullCommit = s.fullCommit;
+          existing.checksum = s.checksum;
+          existing.updatedAt = s.updatedAt;
+        }
+      }
+    });
+  }
   console.log(`\nDone. ${updated} updated, ${failed} failed.`);
   if (failed > 0) {
     process.exit(1);
@@ -1281,6 +1308,7 @@ export function cmdSync(knowledgeDir: string, args: string[]): void {
   let synced = 0;
   let failed = 0;
   let skipped = 0;
+  const syncedEntries: RegistryEntry[] = [];
 
   for (const [, group] of groups) {
     const sample = group[0];
@@ -1352,6 +1380,7 @@ export function cmdSync(knowledgeDir: string, args: string[]): void {
           updatedAt: now,
         };
         recordInstalledSource(registry, updatedEntry);
+        syncedEntries.push(updatedEntry);
 
         console.log(`  ✓ Synced '${s.name}' (${commit})`);
         synced++;
@@ -1366,7 +1395,13 @@ export function cmdSync(knowledgeDir: string, args: string[]): void {
     }
   }
 
-  saveRegistry(knowledgeDir, registry);
+  if (syncedEntries.length > 0) {
+    mutateRegistry(knowledgeDir, (reg) => {
+      for (const entry of syncedEntries) {
+        recordInstalledSource(reg, entry);
+      }
+    });
+  }
   const skippedStr = skipped > 0 ? `, ${skipped} skipped` : '';
   console.log(`\nDone. ${synced} synced, ${failed} failed${skippedStr}.`);
   if (failed > 0) process.exit(1);

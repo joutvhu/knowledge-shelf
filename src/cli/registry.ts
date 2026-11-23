@@ -163,7 +163,27 @@ export function withRegistryLock<T>(knowledgeDir: string, fn: () => T, timeoutMs
       if (err && err.code === 'EEXIST') {
         try {
           const stat = fs.statSync(lockFile);
-          if (Date.now() - stat.mtimeMs > 30000) {
+
+          // Fast path: if the holding process is dead, reclaim the lock immediately
+          try {
+            const content = fs.readFileSync(lockFile, 'utf-8');
+            const [pidStr] = content.split('\n');
+            const lockPid = parseInt(pidStr, 10);
+            if (Number.isInteger(lockPid) && lockPid > 0 && lockPid !== process.pid) {
+              try {
+                process.kill(lockPid, 0);
+              } catch (killErr: any) {
+                if (killErr && killErr.code === 'ESRCH') {
+                  fs.unlinkSync(lockFile);
+                  continue;
+                }
+              }
+            }
+          } catch {
+            /* ignore read/parse failure */
+          }
+
+          if (Date.now() - stat.mtimeMs > 10000) {
             fs.unlinkSync(lockFile);
             continue;
           }
@@ -208,7 +228,15 @@ export function mutateRegistry(
   mutator: (registry: Registry) => void
 ): Registry {
   return withRegistryLock(knowledgeDir, () => {
-    const registry = loadRegistry(knowledgeDir);
+    let registry: Registry;
+    try {
+      registry = loadRegistry(knowledgeDir, { exitOnError: false });
+    } catch (e) {
+      const registryPath = getRegistryPath(knowledgeDir);
+      console.error(`Error: Cannot read registry ${registryPath}: ${e instanceof Error ? e.message : e}`);
+      console.error('Fix or delete the file manually, then retry.');
+      throw e;
+    }
     mutator(registry);
     saveRegistry(knowledgeDir, registry);
     return registry;

@@ -128,12 +128,14 @@ export function cmdList(primaryDir: string, knowledgeDirs: string[], args: strin
   const dirs = knowledgeDirs && knowledgeDirs.length > 0 ? knowledgeDirs : [primaryDir];
   const allSources: Array<{ source: any; layerDir?: string }> = [];
   const trackedNames = new Set<string>();
+  const layerSources = new Map<string, any[]>();
 
   for (const d of dirs) {
     if (fs.existsSync(d) && fs.existsSync(getRegistryPath(d))) {
       const isSinglePrimary = d === primaryDir && dirs.length === 1;
       try {
         const reg = loadRegistry(d, { exitOnError: isSinglePrimary });
+        layerSources.set(d, reg.sources);
         for (const s of reg.sources) {
           if (!trackedNames.has(s.name)) {
             trackedNames.add(s.name);
@@ -152,14 +154,19 @@ export function cmdList(primaryDir: string, knowledgeDirs: string[], args: strin
   }
 
   const allDocs = scanDocuments(dirs);
-  const unmanaged = allDocs.filter((d) => {
-    const dNameNorm = process.platform === 'win32' ? d.name.toLowerCase() : d.name;
-    for (const tracked of trackedNames) {
-      const tNorm = process.platform === 'win32' ? tracked.toLowerCase() : tracked;
-      if (dNameNorm === tNorm) return false;
-      if (dNameNorm.startsWith(tNorm + '/')) return false;
+  const isDocTrackedInLayer = (docName: string, layer: string): boolean => {
+    const sources = layerSources.get(layer) || [];
+    const dNameNorm = process.platform === 'win32' ? docName.toLowerCase() : docName;
+    for (const s of sources) {
+      const tNorm = process.platform === 'win32' ? s.name.toLowerCase() : s.name;
+      if (dNameNorm === tNorm || dNameNorm.startsWith(tNorm + '/')) return true;
     }
-    return true;
+    return false;
+  };
+
+  const unmanaged = allDocs.filter((d) => {
+    const layer = d.source_layer || primaryDir;
+    return !isDocTrackedInLayer(d.name, layer);
   });
 
   if (allSources.length === 0 && unmanaged.length === 0) {
@@ -1162,8 +1169,6 @@ export function cmdImport(knowledgeDir: string, args: string[]): void {
     process.exit(1);
   }
 
-  assertSafeArchivePaths(archivePath);
-
   fs.mkdirSync(knowledgeDir, { recursive: true });
   const cacheDir = getCacheDir(knowledgeDir);
   fs.mkdirSync(cacheDir, { recursive: true });
@@ -1172,6 +1177,7 @@ export function cmdImport(knowledgeDir: string, args: string[]): void {
 
   let exitCode = 0;
   try {
+    assertSafeArchivePaths(archivePath);
     const lower = archivePath.toLowerCase();
     let res: ReturnType<typeof spawnSync>;
     if (lower.endsWith('.tar.gz') || lower.endsWith('.tgz')) {
@@ -1296,13 +1302,13 @@ export function cmdTrust(knowledgeDir: string, args: string[], trusted: boolean)
     process.exit(1);
   }
 
+  let found = false;
   mutateRegistry(knowledgeDir, (registry) => {
     const entry = registry.sources.find((s) => s.name === name);
     if (!entry) {
-      console.error(`Error: '${name}' not found in registry.`);
-      process.exit(1);
+      return;
     }
-
+    found = true;
     if (trusted) {
       entry.trusted = true;
     } else if (entry.url?.startsWith('local:')) {
@@ -1311,6 +1317,11 @@ export function cmdTrust(knowledgeDir: string, args: string[], trusted: boolean)
       delete entry.trusted;
     }
   });
+
+  if (!found) {
+    console.error(`Error: '${name}' not found in registry.`);
+    process.exit(1);
+  }
   console.log(
     trusted
       ? `✓ Marked '${name}' as trusted for workflow script execution.`

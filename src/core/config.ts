@@ -228,32 +228,37 @@ function isPathInside(base: string, target: string, strictChild: boolean): boole
 }
 
 /**
+ * Resolves a path to its real canonical path by following symlinks/junctions on
+ * the deepest existing ancestor, preserving any trailing non-existent segments.
+ */
+export function canonicalizePath(p: string): string {
+  let current = path.resolve(p);
+  const tail: string[] = [];
+  while (!fs.existsSync(current)) {
+    const parent = path.dirname(current);
+    if (parent === current) break;
+    tail.unshift(path.basename(current));
+    current = parent;
+  }
+  const realExisting = fs.existsSync(current) ? fs.realpathSync(current) : current;
+  return tail.length > 0 ? path.join(realExisting, ...tail) : realExisting;
+}
+
+/**
  * Resolves `subPath` relative to `baseDir` and verifies the target stays inside
  * `baseDir` (following symlinks on existing ancestors to block symlink escapes).
  * If `strictChild` is true, rejects paths equal to `baseDir` itself.
  */
 export function resolveInsideDir(baseDir: string, subPath: string, strictChild = false): string | null {
   try {
-    const resolvedBase = fs.existsSync(baseDir) ? fs.realpathSync(baseDir) : path.resolve(baseDir);
+    const resolvedBase = canonicalizePath(baseDir);
     const candidate = path.resolve(resolvedBase, subPath);
 
     if (!isPathInside(resolvedBase, candidate, strictChild)) {
       return null;
     }
 
-    // Walk up to the deepest existing ancestor so realpathSync resolves symlinks
-    // even when the leaf path does not exist yet.
-    let current = candidate;
-    const tail: string[] = [];
-    while (!fs.existsSync(current)) {
-      const parent = path.dirname(current);
-      if (parent === current) break;
-      tail.unshift(path.basename(current));
-      current = parent;
-    }
-
-    const realExisting = fs.existsSync(current) ? fs.realpathSync(current) : current;
-    const canonical = tail.length > 0 ? path.join(realExisting, ...tail) : realExisting;
+    const canonical = canonicalizePath(candidate);
 
     if (!isPathInside(resolvedBase, canonical, strictChild)) {
       return null;
@@ -270,8 +275,8 @@ export function resolveInsideDir(baseDir: string, subPath: string, strictChild =
  * (root dot-items like `.registry.json`, `.cache`, `.git`, or `.git` directory at any depth).
  */
 export function isReservedPath(baseDir: string, targetPath: string): boolean {
-  const resolvedBase = fs.existsSync(baseDir) ? fs.realpathSync(baseDir) : path.resolve(baseDir);
-  const resolvedTarget = fs.existsSync(targetPath) ? fs.realpathSync(targetPath) : path.resolve(targetPath);
+  const resolvedBase = canonicalizePath(baseDir);
+  const resolvedTarget = canonicalizePath(targetPath);
   const rel = path.relative(resolvedBase, resolvedTarget);
   if (!rel || rel === '..' || rel.startsWith('..' + path.sep) || path.isAbsolute(rel)) return false;
   const segments = rel.split(/[\\/]+/);

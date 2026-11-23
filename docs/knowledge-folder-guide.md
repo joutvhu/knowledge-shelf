@@ -96,8 +96,9 @@ Content goes here...
 ## Ignored Files
 
 The MCP server ignores:
-- `README.md` files (not indexed)
-- `manifest.json` files (used for metadata, not content)
+- `README.md` files (case-insensitive; not indexed as standalone docs)
+- `manifest.json` files (used for unit metadata, not indexed as content)
+- `shelf.json` and `knowledge-shelf.json` (repository catalog and team config manifests)
 
 ---
 

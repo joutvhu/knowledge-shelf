@@ -112,10 +112,12 @@ export function walkDir(dir: string, callback: (filePath: string) => void): void
   }
 }
 
+const IGNORED_FILES_LOWER = new Set([...IGNORED_FILES].map((f) => f.toLowerCase()));
+
 export function findMdFiles(dir: string): string[] {
   const files: string[] = [];
   walkDir(dir, (filePath) => {
-    if (filePath.toLowerCase().endsWith('.md') && !IGNORED_FILES.has(path.basename(filePath))) {
+    if (filePath.toLowerCase().endsWith('.md') && !IGNORED_FILES_LOWER.has(path.basename(filePath).toLowerCase())) {
       files.push(filePath);
     }
   });
