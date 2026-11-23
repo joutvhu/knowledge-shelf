@@ -190,7 +190,7 @@ export function cmdRemove(knowledgeDir: string, args: string[]): void {
   const registry = loadRegistry(knowledgeDir);
   let idx = registry.sources.findIndex((s) => s.name === name);
 
-  if (idx === -1 && !name.endsWith('.md')) {
+  if (idx === -1 && !name.toLowerCase().endsWith('.md')) {
     const mdName = `${name}.md`;
     const mdCandidate = resolveSafeUnitDir(knowledgeDir, mdName);
     const mdIdx = registry.sources.findIndex((s) => s.name === mdName);
@@ -202,7 +202,8 @@ export function cmdRemove(knowledgeDir: string, args: string[]): void {
   }
 
   if (idx === -1) {
-    const topSegment = path.relative(knowledgeDir, destDir).split(path.sep)[0];
+    const canonicalKd = fs.existsSync(knowledgeDir) ? fs.realpathSync(knowledgeDir) : path.resolve(knowledgeDir);
+    const topSegment = path.relative(canonicalKd, destDir).split(path.sep)[0];
     if (topSegment.startsWith('.')) {
       console.error(`Error: '${name}' is a reserved path and cannot be removed.`);
       process.exit(1);
@@ -255,7 +256,7 @@ export function cmdInfo(knowledgeDirs: string | string[], args: string[]): void 
       knowledgeDir = kDir;
       break;
     }
-    if (!name.endsWith('.md')) {
+    if (!name.toLowerCase().endsWith('.md')) {
       const mdCandidate = resolveInsideDir(kDir, `${name}.md`, true);
       if (mdCandidate && fs.existsSync(mdCandidate)) {
         if (isReservedPath(kDir, mdCandidate)) {
@@ -281,7 +282,8 @@ export function cmdInfo(knowledgeDirs: string | string[], args: string[]): void 
       console.error(`Error: '${name}' is not a Markdown document or knowledge unit.`);
       process.exit(1);
     }
-    const displayName = path.relative(knowledgeDir, unitDir).replace(/\\/g, '/');
+    const canonicalKd = fs.existsSync(knowledgeDir) ? fs.realpathSync(knowledgeDir) : path.resolve(knowledgeDir);
+    const displayName = path.relative(canonicalKd, unitDir).replace(/\\/g, '/');
     const content = fs.readFileSync(unitDir, 'utf-8');
     const { metadata } = parseFrontmatter(content);
     const registry = loadRegistry(knowledgeDir);
@@ -425,7 +427,7 @@ export function cmdValidate(knowledgeDirs: string | string[], args: string[]): v
     for (const d of dirs) {
       if (!fs.existsSync(d)) continue;
       const targetDir = path.join(d, targetArg);
-      const targetMd = targetArg.endsWith('.md') ? targetDir : `${targetDir}.md`;
+      const targetMd = targetArg.toLowerCase().endsWith('.md') ? targetDir : `${targetDir}.md`;
       if (fs.existsSync(targetDir) || fs.existsSync(targetMd)) {
         knowledgeDir = d;
         break;
@@ -438,7 +440,7 @@ export function cmdValidate(knowledgeDirs: string | string[], args: string[]): v
     const hasPathSyntax =
       /[\\/]/.test(targetArg) ||
       targetArg.startsWith('.') ||
-      targetArg.endsWith('.md') ||
+      targetArg.toLowerCase().endsWith('.md') ||
       path.isAbsolute(targetArg);
 
     if (fs.existsSync(localCandidate) && (hasPathSyntax || !fs.existsSync(path.join(knowledgeDir, targetArg)))) {
@@ -519,9 +521,10 @@ export function cmdValidate(knowledgeDirs: string | string[], args: string[]): v
 
     if (toValidate.length === 0) {
       const targetDir = path.join(knowledgeDir, targetArg);
-      const targetMd = targetArg.endsWith('.md') ? targetDir : `${targetDir}.md`;
+      const targetMd = targetArg.toLowerCase().endsWith('.md') ? targetDir : `${targetDir}.md`;
       if (fs.existsSync(targetMd) && fs.statSync(targetMd).isFile()) {
-        const display = path.relative(knowledgeDir, targetMd).replace(/\\/g, '/');
+        const canonicalKd = fs.existsSync(knowledgeDir) ? fs.realpathSync(knowledgeDir) : path.resolve(knowledgeDir);
+        const display = path.relative(canonicalKd, targetMd).replace(/\\/g, '/');
         console.log(`Validating '${display}'...`);
         const { errors, warnings } = validateStandaloneMdFile(targetMd);
         printValidationResults(display, errors, warnings);
@@ -939,7 +942,7 @@ export function cmdExport(knowledgeDir: string, args: string[]): void {
   }
 
   let targetPath = resolveSafeUnitDir(knowledgeDir, name);
-  if (!fs.existsSync(targetPath) && !name.endsWith('.md')) {
+  if (!fs.existsSync(targetPath) && !name.toLowerCase().endsWith('.md')) {
     const mdCandidate = resolveSafeUnitDir(knowledgeDir, `${name}.md`);
     if (fs.existsSync(mdCandidate)) targetPath = mdCandidate;
   }
@@ -949,7 +952,8 @@ export function cmdExport(knowledgeDir: string, args: string[]): void {
     process.exit(1);
   }
 
-  const relName = path.relative(knowledgeDir, targetPath).replace(/\\/g, '/');
+  const canonicalKd = fs.existsSync(knowledgeDir) ? fs.realpathSync(knowledgeDir) : path.resolve(knowledgeDir);
+  const relName = path.relative(canonicalKd, targetPath).replace(/\\/g, '/');
 
   if (!outputPath) {
     const ext = format === 'tar' ? '.tar.gz' : '.zip';

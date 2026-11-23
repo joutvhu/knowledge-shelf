@@ -1352,7 +1352,8 @@ export function cmdCatalog(_knowledgeDir: string, args: string[]): void {
     process.exit(1);
   }
 
-  const tmpClone = fs.mkdtempSync(path.join(os.tmpdir(), 'ks-catalog-'));
+  const rawTmpClone = fs.mkdtempSync(path.join(os.tmpdir(), 'ks-catalog-'));
+  const tmpClone = fs.existsSync(rawTmpClone) ? fs.realpathSync(rawTmpClone) : rawTmpClone;
   fs.rmSync(tmpClone, { recursive: true, force: true });
 
   let exitCode = 0;
@@ -1389,14 +1390,29 @@ export function cmdCatalog(_knowledgeDir: string, args: string[]): void {
       return;
     }
 
-    // Fallback: auto-scan manifest.json folders
+    // Fallback: auto-scan manifest.json folders & standalone md files
     const folders = findManifestFolders(tmpClone);
-    console.log(`\nRepository: ${deriveNameFromUrl(url)} (no shelf.json; discovered ${folders.length} unit(s))\n`);
+    const topLevelMds = fs
+      .readdirSync(tmpClone, { withFileTypes: true })
+      .filter(
+        (e) =>
+          e.isFile() &&
+          e.name.toLowerCase().endsWith('.md') &&
+          e.name.toLowerCase() !== 'readme.md'
+      )
+      .map((e) => path.join(tmpClone, e.name));
+
+    const totalCount = folders.length + topLevelMds.length;
+    console.log(`\nRepository: ${deriveNameFromUrl(url)} (no shelf.json; discovered ${totalCount} unit(s))\n`);
     for (const f of folders) {
       const m = loadManifest(f);
       const rel = path.relative(tmpClone, f).replace(/\\/g, '/') || '.';
       console.log(`  ${m?.name || path.basename(f)}  [${m?.type || 'unknown'}]  (path: ${rel})`);
       if (m?.description) console.log(`    ${m.description}`);
+    }
+    for (const md of topLevelMds) {
+      const base = path.basename(md);
+      console.log(`  ${base}  [standalone]  (path: ${base})`);
     }
     console.log('');
   } catch (e) {
@@ -1728,7 +1744,8 @@ export function publishViaClone(opts: PublishViaCloneOptions): void {
   assertSafeGitArg(toRepo, 'target repository');
   assertSafeGitArg(targetBranch, 'branch name');
 
-  const workClone = fs.mkdtempSync(path.join(os.tmpdir(), 'ks-publish-'));
+  const rawWorkClone = fs.mkdtempSync(path.join(os.tmpdir(), 'ks-publish-'));
+  const workClone = fs.existsSync(rawWorkClone) ? fs.realpathSync(rawWorkClone) : rawWorkClone;
   fs.rmSync(workClone, { recursive: true, force: true });
 
   try {

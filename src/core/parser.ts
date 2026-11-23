@@ -115,7 +115,7 @@ export function walkDir(dir: string, callback: (filePath: string) => void): void
 export function findMdFiles(dir: string): string[] {
   const files: string[] = [];
   walkDir(dir, (filePath) => {
-    if (filePath.endsWith('.md') && !IGNORED_FILES.has(path.basename(filePath))) {
+    if (filePath.toLowerCase().endsWith('.md') && !IGNORED_FILES.has(path.basename(filePath))) {
       files.push(filePath);
     }
   });
@@ -470,21 +470,30 @@ export function extractSections(body: string): SectionInfo[] {
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
-    const fenceMatch = line.match(/^\s*(`{3,}|~{3,})/);
-    if (fenceMatch) {
-      const marker = fenceMatch[1];
-      if (!fenceChar) {
-        fenceChar = marker[0];
-        fenceLen = marker.length;
-        continue;
-      } else if (marker[0] === fenceChar && marker.length >= fenceLen && line.trim() === marker) {
-        fenceChar = '';
-        fenceLen = 0;
-        continue;
+    if (!fenceChar) {
+      const fenceOpen = line.match(/^ {0,3}(`{3,}|~{3,})(.*)$/);
+      if (fenceOpen) {
+        const marker = fenceOpen[1];
+        const rest = fenceOpen[2];
+        // Backtick code block info string cannot contain backticks (CommonMark §4.5)
+        if (marker[0] === '~' || !rest.includes('`')) {
+          fenceChar = marker[0];
+          fenceLen = marker.length;
+          continue;
+        }
       }
+    } else {
+      const fenceClose = line.match(/^ {0,3}(`{3,}|~{3,})\s*$/);
+      if (fenceClose) {
+        const marker = fenceClose[1];
+        if (marker[0] === fenceChar && marker.length >= fenceLen) {
+          fenceChar = '';
+          fenceLen = 0;
+          continue;
+        }
+      }
+      continue;
     }
-
-    if (fenceChar) continue;
 
     const match = line.match(/^(#{1,6})\s+(.+)$/);
     if (match) {

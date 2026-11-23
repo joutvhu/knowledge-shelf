@@ -67,7 +67,14 @@ function dedupDirs(dirs: string[]): string[] {
   const seen = new Set<string>();
   const out: string[] = [];
   for (const dir of dirs) {
-    const resolved = path.resolve(dir);
+    let resolved = path.resolve(dir);
+    try {
+      if (fs.existsSync(resolved)) {
+        resolved = fs.realpathSync(resolved);
+      }
+    } catch {
+      /* ignore */
+    }
     const key = process.platform === 'win32' ? resolved.toLowerCase() : resolved;
     if (!seen.has(key)) {
       seen.add(key);
@@ -116,23 +123,24 @@ function findWalkUpAgentsKnowledgeDir(startDir: string): string | null {
  * 4. ~/.knowledge (global default)
  */
 export function resolveKnowledgeDir(explicitDir?: string): string {
+  let resolved: string;
   if (explicitDir) {
-    return path.resolve(expandHome(explicitDir));
-  }
-
-  if (process.env.KNOWLEDGE_DIRS) {
+    resolved = path.resolve(expandHome(explicitDir));
+  } else if (process.env.KNOWLEDGE_DIRS) {
     const first = process.env.KNOWLEDGE_DIRS.split(path.delimiter).map((s) => s.trim()).find(Boolean);
-    if (first) return path.resolve(expandHome(first));
+    resolved = first ? path.resolve(expandHome(first)) : getDefaultGlobalKnowledgeDir();
+  } else if (process.env.KNOWLEDGE_DIR) {
+    resolved = path.resolve(expandHome(process.env.KNOWLEDGE_DIR));
+  } else {
+    const found = findWalkUpRegistryDir(process.cwd());
+    resolved = found ? found : getDefaultGlobalKnowledgeDir();
   }
 
-  if (process.env.KNOWLEDGE_DIR) {
-    return path.resolve(expandHome(process.env.KNOWLEDGE_DIR));
+  try {
+    return fs.existsSync(resolved) ? fs.realpathSync(resolved) : resolved;
+  } catch {
+    return resolved;
   }
-
-  const found = findWalkUpRegistryDir(process.cwd());
-  if (found) return found;
-
-  return getDefaultGlobalKnowledgeDir();
 }
 
 export interface ResolveKnowledgeDirsOptions {
@@ -259,7 +267,8 @@ export function resolveInsideDir(baseDir: string, subPath: string, strictChild =
  */
 export function isReservedPath(baseDir: string, targetPath: string): boolean {
   const resolvedBase = fs.existsSync(baseDir) ? fs.realpathSync(baseDir) : path.resolve(baseDir);
-  const rel = path.relative(resolvedBase, targetPath);
+  const resolvedTarget = fs.existsSync(targetPath) ? fs.realpathSync(targetPath) : path.resolve(targetPath);
+  const rel = path.relative(resolvedBase, resolvedTarget);
   if (!rel || rel === '..' || rel.startsWith('..' + path.sep) || path.isAbsolute(rel)) return false;
   const segments = rel.split(/[\\/]+/);
   if (segments[0].startsWith('.')) return true;

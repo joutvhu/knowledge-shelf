@@ -91,14 +91,15 @@ export function resolveSafeUnitDir(knowledgeDir: string, name: string): string {
     console.error(`Error: Invalid knowledge unit name '${name}'.`);
     process.exit(1);
   }
-  const resolved = resolveInsideDir(knowledgeDir, trimmed, true);
+  const canonicalDir = fs.existsSync(knowledgeDir) ? fs.realpathSync(knowledgeDir) : path.resolve(knowledgeDir);
+  const resolved = resolveInsideDir(canonicalDir, trimmed, true);
   if (!resolved) {
     console.error(`Error: Access denied. '${name}' is outside the knowledge directory.`);
     process.exit(1);
   }
   const segments = trimmed.split(/[\\/]+/);
   if (
-    isReservedPath(knowledgeDir, resolved) ||
+    isReservedPath(canonicalDir, resolved) ||
     segments.some((seg) => !seg || seg === '.' || seg === '..' || seg.startsWith('.'))
   ) {
     console.error(`Error: Access denied. '${name}' is a reserved internal path or starts with '.'.`);

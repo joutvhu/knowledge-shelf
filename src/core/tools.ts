@@ -96,7 +96,8 @@ function resolveManifestFolderAcrossLayers(
   name: string
 ): { folder?: string; layerDir?: string; error?: ToolResponse } {
   for (const dir of dirs) {
-    const resolvedTarget = resolveInsideDir(dir, name, true);
+    const canonicalDir = fs.existsSync(dir) ? fs.realpathSync(dir) : path.resolve(dir);
+    const resolvedTarget = resolveInsideDir(canonicalDir, name, true);
     if (!resolvedTarget) {
       return {
         error: {
@@ -105,7 +106,7 @@ function resolveManifestFolderAcrossLayers(
         },
       };
     }
-    if (isReservedPath(dir, resolvedTarget)) {
+    if (isReservedPath(canonicalDir, resolvedTarget)) {
       return {
         error: {
           text: JSON.stringify({ error: 'Access denied. Reserved internal path.' }, null, 2),
@@ -119,18 +120,20 @@ function resolveManifestFolderAcrossLayers(
       fs.statSync(resolvedTarget).isDirectory() &&
       fs.existsSync(path.join(resolvedTarget, 'manifest.json'))
     ) {
-      return { folder: resolvedTarget, layerDir: dir };
+      return { folder: resolvedTarget, layerDir: canonicalDir };
     }
-    const ci = findManifestFolderCaseInsensitive(dir, name);
+    const ci = findManifestFolderCaseInsensitive(canonicalDir, name);
     if (ci) {
-      return { folder: ci, layerDir: dir };
+      const canonicalCi = fs.existsSync(ci) ? fs.realpathSync(ci) : ci;
+      return { folder: canonicalCi, layerDir: canonicalDir };
     }
   }
   return {};
 }
 
 function isUnitTrusted(layerDir: string, unitName: string): { trusted: boolean; reason?: string } {
-  const registryPath = path.join(layerDir, '.registry.json');
+  const realLayerDir = fs.existsSync(layerDir) ? fs.realpathSync(layerDir) : layerDir;
+  const registryPath = path.join(realLayerDir, '.registry.json');
   if (!fs.existsSync(registryPath)) {
     return { trusted: true };
   }
@@ -774,7 +777,7 @@ export async function toolRunWorkflow(
   const defs: Record<string, PlaceholderDef> = {};
   const manifestDerived: Record<string, PlaceholderDef> = {};
   for (const k of [...Object.keys(workflowInputs), ...[...used].sort()]) {
-    if (k in defs) continue;
+    if (Object.prototype.hasOwnProperty.call(defs, k)) continue;
     if (isRecord(workflowInputs[k])) {
       defs[k] = workflowInputs[k] as PlaceholderDef;
     } else if (isRecord(manifestPh[k])) {
@@ -784,14 +787,14 @@ export async function toolRunWorkflow(
   }
 
   for (const [k, d] of Object.entries(defs)) {
-    if (!(k in inputValues) && d.default !== undefined) {
+    if (!Object.prototype.hasOwnProperty.call(inputValues, k) && d.default !== undefined) {
       inputValues[k] = String(d.default);
     }
   }
 
   // Fallback defaults from manifest.placeholders for placeholders not defined in workflow inputs
   for (const [k, d] of Object.entries(manifestPh)) {
-    if (isRecord(d) && d.default !== undefined && !(k in inputValues)) {
+    if (isRecord(d) && d.default !== undefined && !Object.prototype.hasOwnProperty.call(inputValues, k)) {
       inputValues[k] = String(d.default);
     }
   }
@@ -799,7 +802,7 @@ export async function toolRunWorkflow(
   const missing = Object.entries(defs)
     .filter(([, d]) => d.required)
     .map(([k]) => k)
-    .filter((k) => !(k in inputValues));
+    .filter((k) => !Object.prototype.hasOwnProperty.call(inputValues, k));
 
   if (missing.length > 0) {
     return {
@@ -827,7 +830,7 @@ export async function toolRunWorkflow(
     } catch (err: any) {
       return patternError(`Input '${k}' has an invalid pattern '${d.pattern}': ${err?.message || err}`);
     }
-    if (k in inputValues && !re.test(inputValues[k])) {
+    if (Object.prototype.hasOwnProperty.call(inputValues, k) && !re.test(inputValues[k])) {
       return patternError(`Input '${k}' does not match pattern '${d.pattern}'.`);
     }
   }

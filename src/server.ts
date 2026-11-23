@@ -353,9 +353,9 @@ export function createKnowledgeServer(
           contents: [
             {
               uri: uri.href,
-              mimeType: relPath.endsWith('.json')
+              mimeType: relPath.toLowerCase().endsWith('.json')
                 ? 'application/json'
-                : relPath.endsWith('.md')
+                : relPath.toLowerCase().endsWith('.md')
                   ? 'text/markdown'
                   : 'text/plain',
               text: resFile.text,

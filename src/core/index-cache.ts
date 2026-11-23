@@ -265,13 +265,32 @@ function scanSingleLayerUncached(knowledgeDir: string): DocEntry[] {
     let description = typeof metadata.description === 'string' ? metadata.description : '';
     if (!description) {
       let inFence = false;
+      let fenceChar = '';
+      let fenceLen = 0;
       for (const line of body.split(/\r?\n/)) {
         const stripped = line.trim();
-        if (/^(`{3,}|~{3,})/.test(stripped)) {
-          inFence = !inFence;
+        if (!inFence) {
+          const fenceOpen = line.match(/^ {0,3}(`{3,}|~{3,})(.*)$/);
+          if (fenceOpen) {
+            const marker = fenceOpen[1];
+            const rest = fenceOpen[2];
+            if (marker[0] === '~' || !rest.includes('`')) {
+              inFence = true;
+              fenceChar = marker[0];
+              fenceLen = marker.length;
+              continue;
+            }
+          }
+        } else {
+          const fenceClose = line.match(/^ {0,3}(`{3,}|~{3,})\s*$/);
+          if (fenceClose && fenceClose[1][0] === fenceChar && fenceClose[1].length >= fenceLen) {
+            inFence = false;
+            fenceChar = '';
+            fenceLen = 0;
+          }
           continue;
         }
-        if (!inFence && stripped && !stripped.startsWith('#')) {
+        if (stripped && !stripped.startsWith('#')) {
           description = stripped.slice(0, 200);
           break;
         }
@@ -332,7 +351,7 @@ function computeDirSignature(knowledgeDir: string): string {
   const parts: string[] = [];
   walkDir(knowledgeDir, (fp) => {
     const base = path.basename(fp);
-    if (base === 'manifest.json' || fp.endsWith('.md')) {
+    if (base === 'manifest.json' || fp.toLowerCase().endsWith('.md')) {
       try {
         const st = fs.statSync(fp);
         parts.push(`${path.relative(knowledgeDir, fp)}:${st.mtimeMs}:${st.size}`);
