@@ -486,9 +486,10 @@ Workflow execution dynamically computes the set of placeholders used by the work
 
 A recommended sequence for AI to use these tools:
 
-1. **`search_docs`** — Find relevant knowledge by keyword
-2. **`get_manifest`** — Understand structure (modules, workflows, scripts)
-3. **`get_doc`** — Read main documentation
-4. **`get_doc_section`** — Drill into specific section
-5. **`get_resource`** — Read code files, templates, configs
-6. **`run_workflow`** — Execute automation (after confirming with user)
+1. **`search_docs`** — Find relevant knowledge by keyword (or **`list_docs`** for a full overview)
+2. **`get_manifest`** — Understand structure (modules, workflows, scripts, references)
+3. **`get_module`** — Resolve a module's files, guides, and transitive dependencies
+4. **`get_doc`** — Read main documentation
+5. **`get_doc_section`** — Drill into specific section
+6. **`get_resource`** — Read code files, templates, configs
+7. **`run_workflow`** — Execute automation (preview with `dry_run: true`, confirm with user)

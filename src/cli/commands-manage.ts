@@ -119,6 +119,10 @@ export function cmdInit(knowledgeDir: string, args: string[] = []): void {
 
 export function cmdList(primaryDir: string, knowledgeDirs: string[], args: string[] = []): void {
   rejectUnknownFlags(args, 'list');
+  if (args.length > 0) {
+    console.error(`Error: Unexpected argument '${args[0]}' for 'list'.`);
+    process.exit(1);
+  }
   const dirs = knowledgeDirs && knowledgeDirs.length > 0 ? knowledgeDirs : [primaryDir];
   const allSources: Array<{ source: any; layerDir?: string }> = [];
   const trackedNames = new Set<string>();
@@ -248,7 +252,6 @@ export function cmdRemove(knowledgeDir: string, args: string[]): void {
     return;
   }
 
-  const isDir = fs.existsSync(destDir) && fs.statSync(destDir).isDirectory();
   removeDirSync(destDir);
   registry.sources.splice(idx, 1);
   saveRegistry(knowledgeDir, registry);
@@ -436,8 +439,10 @@ export function cmdInfo(knowledgeDirs: string | string[], args: string[]): void 
     if (source.pin) {
       console.log(`  Pinned:       ${source.pin}`);
     }
-    if (source.trusted) {
+    if (source.trusted === true) {
       console.log('  Trusted:      yes');
+    } else if (source.trusted === false) {
+      console.log('  Trusted:      no');
     }
     console.log(`  Installed:    ${source.installedAt}`);
     console.log(`  Updated:      ${source.updatedAt}`);
@@ -450,6 +455,10 @@ export function cmdInfo(knowledgeDirs: string | string[], args: string[]): void 
 
 export function cmdValidate(knowledgeDirs: string | string[], args: string[]): void {
   rejectUnknownFlags(args, 'validate');
+  if (args.length > 1) {
+    console.error(`Error: Unexpected argument '${args[1]}'. 'validate' takes at most one target.`);
+    process.exit(1);
+  }
   const targetArg = args[0];
   const dirs = Array.isArray(knowledgeDirs) ? knowledgeDirs : [knowledgeDirs];
 
@@ -1086,6 +1095,11 @@ export function cmdImport(knowledgeDir: string, args: string[]): void {
     process.exit(1);
   }
 
+  if (importAll && customName) {
+    console.error('Error: --name cannot be combined with --all.');
+    process.exit(1);
+  }
+
   const archivePath = path.resolve(expandHome(archiveArg));
   if (!fs.existsSync(archivePath) || !fs.statSync(archivePath).isFile()) {
     console.error(`Error: Archive not found: ${archiveArg}`);
@@ -1159,7 +1173,7 @@ export function cmdImport(knowledgeDir: string, args: string[]): void {
     const hasManifestDirectly = fs.existsSync(path.join(installSource, 'manifest.json'));
     const isSingleDoc = !hasManifestDirectly && fs.statSync(installSource).isFile();
     const shouldPassAll =
-      importAll ||
+      (importAll && !hasManifestDirectly && !isSingleDoc) ||
       (!hasManifestDirectly &&
         !isSingleDoc &&
         !customName &&
@@ -1227,6 +1241,8 @@ export function cmdTrust(knowledgeDir: string, args: string[], trusted: boolean)
 
   if (trusted) {
     entry.trusted = true;
+  } else if (entry.url?.startsWith('local:')) {
+    entry.trusted = false;
   } else {
     delete entry.trusted;
   }

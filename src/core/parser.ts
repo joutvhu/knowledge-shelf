@@ -152,21 +152,35 @@ export function isGlobPattern(p: string): boolean {
   return /[*?]/.test(p) || (p.includes('{') && p.includes('}') && p.includes(','));
 }
 
+const MAX_BRACE_EXPANSIONS = 256;
+
 // Expands {a,b} brace alternatives in a glob pattern into individual patterns.
 // e.g. "src/**/*.{ts,js}" -> ["src/**/*.ts", "src/**/*.js"]
 export function expandBraces(pattern: string): string[] {
-  const match = pattern.match(/\{([^{}]*,[^{}]*)\}/);
-  if (!match) return [pattern];
-  const options = match[1].split(',');
-  const prefix = pattern.slice(0, match.index!);
-  const suffix = pattern.slice(match.index! + match[0].length);
-  const expanded: string[] = [];
-  for (const opt of options) {
-    for (const sub of expandBraces(`${prefix}${opt}${suffix}`)) {
-      expanded.push(sub);
+  let results = [pattern];
+  while (results.length < MAX_BRACE_EXPANSIONS) {
+    let expandedAny = false;
+    const next: string[] = [];
+    for (const pat of results) {
+      const match = pat.match(/\{([^{}]*,[^{}]*)\}/);
+      if (!match) {
+        next.push(pat);
+        continue;
+      }
+      expandedAny = true;
+      const options = match[1].split(',');
+      const prefix = pat.slice(0, match.index!);
+      const suffix = pat.slice(match.index! + match[0].length);
+      for (const opt of options) {
+        next.push(`${prefix}${opt}${suffix}`);
+        if (next.length >= MAX_BRACE_EXPANSIONS) break;
+      }
+      if (next.length >= MAX_BRACE_EXPANSIONS) break;
     }
+    results = next;
+    if (!expandedAny) break;
   }
-  return expanded;
+  return results;
 }
 
 /**

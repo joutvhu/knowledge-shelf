@@ -163,6 +163,14 @@ function isUnitTrusted(layerDir: string, unitName: string): { trusted: boolean; 
     }
 
     if (!entry) return { trusted: true };
+    if (entry.trusted === false) {
+      return {
+        trusted: false,
+        reason:
+          `Script execution blocked by strict trust policy for untrusted unit '${entry.name}'. ` +
+          `Run 'knowledge-shelf trust ${entry.name}' to allow running its scripts.`,
+      };
+    }
     if (entry.url?.startsWith('local:')) return { trusted: true };
     if (entry.trusted === true) return { trusted: true };
     return {

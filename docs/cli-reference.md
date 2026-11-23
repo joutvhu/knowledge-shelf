@@ -168,7 +168,7 @@ knowledge-shelf info <name>
 Search installed knowledge by keyword.
 
 ```bash
-knowledge-shelf search <keywords>
+knowledge-shelf search <keywords> [--type <type>]
 ```
 
 Uses the exact same scoring algorithm as the MCP `search_docs` tool:
@@ -348,8 +348,8 @@ Validate, hygiene-check, and publish a knowledge unit folder or a standalone `.m
 - **Fast-forward onto existing remote branches:** If the target branch exists on the remote, `publish` fetches and bases the working branch on the remote branch tip, applying the unit content as a new commit on top of it.
 - **Never force-pushes:** `publish` pushes strictly as a fast-forward and never uses `--force` on git push. `--force` on the command line only overrides pre-publish hygiene check warnings (e.g., detected secrets, sensitive files). If push is rejected by the remote, `publish` fails with exit code 1 without altering remote history. If the unit already matches the branch content, it prints "No changes to publish" and exits 0.
 
-### `import <archive.zip|.tar.gz> [--name <alias>] [--force] [--trust]`
-Extract, validate, and install a packaged knowledge unit or standalone `.md` file from a `.zip` or `.tar.gz` archive. Use `--trust` to mark the imported archive unit as trusted for script execution under `--strict-trust`.
+### `import <archive.zip|.tar.gz> [--name <alias>] [--force] [--all] [--trust]`
+Extract, validate, and install a packaged knowledge unit or standalone `.md` file from a `.zip` or `.tar.gz` archive. Use `--all` for multi-unit archives and `--trust` to mark imported archive unit(s) as trusted for script execution under `--strict-trust`.
 
 ### `trust <name>` / `untrust <name>`
 Manage per-unit script execution trust when running the MCP server with `--strict-trust`.

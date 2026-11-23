@@ -404,14 +404,15 @@ export function cmdAdd(knowledgeDir: string, args: string[]): void {
 
     for (const uName of unitNames) {
       const unitMeta = catalog.units.find((u) => u.name === uName);
-      const unitRelPath = unitMeta?.path || uName;
-      const sourceDir = resolveInsideDir(cloneTarget, unitRelPath, true);
+      const rawRelPath = unitMeta ? (unitMeta.path || '.') : uName;
+      const isRootUnit = rawRelPath === '.' || rawRelPath === './';
+      const sourceDir = isRootUnit ? cloneTarget : resolveInsideDir(cloneTarget, rawRelPath, true);
       if (!sourceDir || !fs.existsSync(sourceDir)) {
-        console.error(`  ✗ Pack unit '${uName}' path '${unitRelPath}' not found.`);
+        console.error(`  ✗ Pack unit '${uName}' path '${rawRelPath}' not found.`);
         invalid++;
         continue;
       }
-      const status = installUnitFromSource(uName, sourceDir, unitRelPath, registry, true);
+      const status = installUnitFromSource(uName, sourceDir, isRootUnit ? undefined : rawRelPath, registry, true);
       if (status === 'installed') {
         console.log(`  ✓ Installed '${uName}'`);
         installed++;
@@ -1092,6 +1093,10 @@ export function cmdUnpin(knowledgeDir: string, args: string[]): void {
 
 export function cmdOutdated(knowledgeDir: string, args: string[]): void {
   rejectUnknownFlags(args, 'outdated');
+  if (args.length > 0) {
+    console.error(`Error: Unexpected argument '${args[0]}' for 'outdated'.`);
+    process.exit(1);
+  }
   const registry = loadRegistry(knowledgeDir);
   if (registry.sources.length === 0) {
     console.log('No knowledge sources installed.');
@@ -1157,6 +1162,9 @@ export function cmdSync(knowledgeDir: string, args: string[]): void {
       process.exit(1);
     } else if (!fileArg) {
       fileArg = args[i];
+    } else {
+      console.error(`Error: Unexpected argument '${args[i]}' for 'sync'.`);
+      process.exit(1);
     }
   }
 
@@ -1366,6 +1374,9 @@ export function cmdCatalog(_knowledgeDir: string, args: string[]): void {
       process.exit(1);
     } else if (!url) {
       url = args[i];
+    } else {
+      console.error(`Error: Unexpected argument '${args[i]}' for 'catalog'.`);
+      process.exit(1);
     }
   }
 
@@ -1495,7 +1506,7 @@ export function cmdIndex(args: string[]): void {
   }
   const units: ShelfCatalogUnit[] = folders.map((f) => {
     const m = loadManifest(f);
-    const rel = path.relative(targetDir, f).replace(/\\/g, '/');
+    const rel = path.relative(targetDir, f).replace(/\\/g, '/') || '.';
     return {
       name: m?.name || path.basename(f),
       path: rel,
@@ -1543,6 +1554,9 @@ export function cmdScaffold(args: string[]): void {
       process.exit(1);
     } else if (!name) {
       name = args[i];
+    } else {
+      console.error(`Error: Unexpected argument '${args[i]}' for 'scaffold'.`);
+      process.exit(1);
     }
   }
 
@@ -1919,6 +1933,9 @@ export function cmdPublish(knowledgeDir: string, args: string[]): void {
       process.exit(1);
     } else if (!unitArg) {
       unitArg = args[i];
+    } else {
+      console.error(`Error: Unexpected argument '${args[i]}' for 'publish'.`);
+      process.exit(1);
     }
   }
 

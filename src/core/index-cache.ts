@@ -351,7 +351,8 @@ function computeDirSignature(knowledgeDir: string): string {
   const parts: string[] = [];
   walkDir(knowledgeDir, (fp) => {
     const base = path.basename(fp);
-    if (base === 'manifest.json' || fp.toLowerCase().endsWith('.md')) {
+    const lower = fp.toLowerCase();
+    if (base === 'manifest.json' || lower.endsWith('.md') || lower.endsWith('.mdx') || lower.endsWith('.txt')) {
       try {
         const st = fs.statSync(fp);
         parts.push(`${path.relative(knowledgeDir, fp)}:${st.mtimeMs}:${st.size}`);
