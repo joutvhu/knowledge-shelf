@@ -35,6 +35,7 @@ import {
 } from './git.js';
 import {
   RegistryEntry,
+  checkUnitNestingConflict,
   computeUnitChecksum,
   getCacheDir,
   getRegistryPath,
@@ -251,7 +252,15 @@ export function cmdRemove(
 
   let targetKnowledgeDir = primaryDir;
   let destDir = resolveSafeUnitDir(targetKnowledgeDir, name);
-  let registry = loadRegistry(targetKnowledgeDir);
+  let registry: { version: '1.0'; sources: RegistryEntry[] };
+  try {
+    registry = loadRegistry(targetKnowledgeDir, { exitOnError: knowledgeDirs.length <= 1 });
+  } catch (e) {
+    console.warn(
+      `  ⚠ Warning: Skipping invalid registry in '${targetKnowledgeDir}': ${e instanceof Error ? e.message : e}`
+    );
+    registry = { version: '1.0', sources: [] };
+  }
   let idx = registry.sources.findIndex((s) => isSameUnitName(s.name, name));
 
   if (idx === -1 && !name.toLowerCase().endsWith('.md')) {
@@ -269,7 +278,15 @@ export function cmdRemove(
   if (idx === -1 && knowledgeDirs.length > 1) {
     for (const kDir of knowledgeDirs) {
       if (kDir === primaryDir || !fs.existsSync(kDir) || !fs.existsSync(getRegistryPath(kDir))) continue;
-      const otherReg = loadRegistry(kDir);
+      let otherReg;
+      try {
+        otherReg = loadRegistry(kDir, { exitOnError: false });
+      } catch (e) {
+        console.warn(
+          `  ⚠ Warning: Skipping invalid registry in '${kDir}': ${e instanceof Error ? e.message : e}`
+        );
+        continue;
+      }
       let otherIdx = otherReg.sources.findIndex((s) => isSameUnitName(s.name, name));
       if (otherIdx === -1 && !name.toLowerCase().endsWith('.md')) {
         const mdName = `${name}.md`;
@@ -600,6 +617,23 @@ export function cmdValidate(knowledgeDirs: string | string[], args: string[]): v
 
   if (targetArg) {
     const localCandidate = path.resolve(expandHome(targetArg));
+    const isExplicitLocalPath =
+      targetArg === '.' ||
+      targetArg === '..' ||
+      targetArg.startsWith('./') ||
+      targetArg.startsWith('.\\') ||
+      targetArg.startsWith('../') ||
+      targetArg.startsWith('..\\') ||
+      targetArg === '~' ||
+      targetArg.startsWith('~/') ||
+      targetArg.startsWith('~\\') ||
+      path.isAbsolute(targetArg);
+
+    if (isExplicitLocalPath && !fs.existsSync(localCandidate)) {
+      console.error(`Error: Path not found: ${targetArg}`);
+      process.exit(1);
+    }
+
     const hasPathSyntax =
       /[\\/]/.test(targetArg) ||
       targetArg.startsWith('.') ||
@@ -926,6 +960,11 @@ export function cmdInstall(
     if (isSamePath(destFile, resolvedSource)) {
       fail(`Error: Source and destination are the same path (${destFile}).`);
     }
+    const existingReg = loadRegistry(knowledgeDir, { exitOnError: false });
+    const nestingErr = checkUnitNestingConflict(knowledgeDir, baseName, false, existingReg.sources);
+    if (nestingErr) {
+      fail(`Error: ${nestingErr}`);
+    }
     if (fs.existsSync(destFile) && !force) {
       fail(`Error: '${baseName}' already exists in knowledge folder. Use --force to overwrite.`);
     }
@@ -995,6 +1034,7 @@ export function cmdInstall(
 
     let installed = 0;
     let skipped = 0;
+    const existingRegAll = loadRegistry(knowledgeDir, { exitOnError: false });
 
     for (const unitDir of manifestFolders) {
       let unitName = path.basename(unitDir);
@@ -1009,6 +1049,10 @@ export function cmdInstall(
         console.log(`  Skipping '${unitName}' (source and destination are the same directory)`);
         skipped++;
         continue;
+      }
+      const nestingErr = checkUnitNestingConflict(knowledgeDir, unitName, true, existingRegAll.sources);
+      if (nestingErr) {
+        fail(`Error: ${nestingErr}`);
       }
       if (fs.existsSync(destDir) && !force) {
         console.log(`  Skipping '${unitName}' (already exists; use --force to overwrite)`);
@@ -1029,6 +1073,10 @@ export function cmdInstall(
         console.log(`  Skipping '${docName}' (source and destination are the same path)`);
         skipped++;
         continue;
+      }
+      const nestingErr = checkUnitNestingConflict(knowledgeDir, docName, false, existingRegAll.sources);
+      if (nestingErr) {
+        fail(`Error: ${nestingErr}`);
       }
       if (fs.existsSync(destFile) && !force) {
         console.log(`  Skipping '${docName}' (already exists; use --force to overwrite)`);
@@ -1074,6 +1122,12 @@ export function cmdInstall(
   const destDir = resolveSafeUnitDir(knowledgeDir, unitName);
   if (isSamePath(destDir, resolvedSource)) {
     fail(`Error: Source and destination are the same directory (${destDir}).`);
+  }
+
+  const existingRegSingle = loadRegistry(knowledgeDir, { exitOnError: false });
+  const nestingErrSingle = checkUnitNestingConflict(knowledgeDir, unitName, true, existingRegSingle.sources);
+  if (nestingErrSingle) {
+    fail(`Error: ${nestingErrSingle}`);
   }
 
   if (fs.existsSync(destDir) && !force) {
@@ -1156,12 +1210,13 @@ export function cmdSearch(knowledgeDirs: string[], args: string[]): void {
     return;
   }
 
-  const results = rankDocuments(docs, query, {
+  const allResults = rankDocuments(docs, query, {
     type: typeFilter,
     unit: unitFilter,
     tags: tagFilters.length > 0 ? tagFilters : undefined,
     includeContent,
-  }).slice(0, maxResults);
+  });
+  const results = allResults.slice(0, maxResults);
   const displayQuery = query || `(filters: ${[typeFilter ? `type=${typeFilter}` : '', unitFilter ? `unit=${unitFilter}` : '', tagFilters.length > 0 ? `tags=${tagFilters.join(',')}` : ''].filter(Boolean).join(' ')})`;
 
   if (results.length === 0) {
@@ -1169,7 +1224,9 @@ export function cmdSearch(knowledgeDirs: string[], args: string[]): void {
     return;
   }
 
-  console.log(`\nResults for "${displayQuery}" (${results.length} found):\n`);
+  const truncatedNote =
+    allResults.length > results.length ? ` [showing top ${results.length} of ${allResults.length}]` : '';
+  console.log(`\nResults for "${displayQuery}" (${results.length} found)${truncatedNote}:\n`);
   for (const r of results) {
     const desc = r.description ? `  ${r.description.slice(0, 80)}` : '';
     const kind = r.has_manifest ? r.type || 'manifest' : 'standalone';

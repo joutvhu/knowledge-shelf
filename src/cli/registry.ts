@@ -5,7 +5,15 @@
 import * as crypto from 'node:crypto';
 import fs from 'node:fs';
 import * as path from 'node:path';
-import { isReservedPath, resolveInsideDir, stripBom, walkDir, walkUnitFiles } from '../core.js';
+import {
+  findManifestFolders,
+  findMdFiles,
+  isReservedPath,
+  resolveInsideDir,
+  stripBom,
+  walkDir,
+  walkUnitFiles,
+} from '../core.js';
 
 export interface RegistryEntry {
   name: string;
@@ -114,6 +122,74 @@ export function resolveSafeUnitDir(knowledgeDir: string, name: string): string {
     process.exit(1);
   }
   return resolved;
+}
+
+/**
+ * Checks whether installing `unitName` inside `knowledgeDir` would nest inside an
+ * existing manifest unit (or regular file), or overwrite a namespace directory that
+ * already holds other tracked/unmanaged units. Returns an error message or null.
+ */
+export function checkUnitNestingConflict(
+  knowledgeDir: string,
+  unitName: string,
+  isDirectory: boolean,
+  registrySources: RegistryEntry[] = []
+): string | null {
+  const normName = unitName.replace(/\\/g, '/').replace(/^\/+|\/+$/g, '');
+  const normKey = process.platform === 'win32' ? normName.toLowerCase() : normName;
+  const segments = normName.split('/').filter(Boolean);
+
+  // 1. Ancestor conflict: installing inside an existing manifest unit or file
+  for (let i = 1; i < segments.length; i++) {
+    const ancestor = segments.slice(0, i).join('/');
+    const ancestorDir = path.join(knowledgeDir, ...segments.slice(0, i));
+    if (!fs.existsSync(ancestorDir)) continue;
+    try {
+      if (fs.statSync(ancestorDir).isFile()) {
+        return `Cannot install '${normName}' because '${ancestor}' is an existing file.`;
+      }
+    } catch {
+      /* ignore */
+    }
+    if (fs.existsSync(path.join(ancestorDir, 'manifest.json'))) {
+      return `Cannot install '${normName}' inside existing manifest unit '${ancestor}'.`;
+    }
+  }
+
+  // 2. Descendant / type conflict
+  const destDir = path.join(knowledgeDir, ...segments);
+  for (const s of registrySources) {
+    const sNorm = s.name.replace(/\\/g, '/').replace(/^\/+|\/+$/g, '');
+    const sKey = process.platform === 'win32' ? sNorm.toLowerCase() : sNorm;
+    if (sKey.startsWith(normKey + '/')) {
+      return `Cannot install '${normName}' because nested unit '${s.name}' is already installed under it.`;
+    }
+  }
+
+  if (fs.existsSync(destDir)) {
+    let isExistingFile = false;
+    try {
+      isExistingFile = fs.statSync(destDir).isFile();
+    } catch {
+      /* ignore */
+    }
+    if (isDirectory) {
+      if (isExistingFile) {
+        return `Cannot install directory unit '${normName}' over existing file '${normName}'.`;
+      }
+      const isAlreadyTrackedUnit = registrySources.some((s) => isSameUnitName(s.name, normName));
+      const hasRootManifest = fs.existsSync(path.join(destDir, 'manifest.json'));
+      if (!isAlreadyTrackedUnit && !hasRootManifest) {
+        if (findManifestFolders(destDir).length > 0 || findMdFiles(destDir).length > 0) {
+          return `Cannot install '${normName}' because '${normName}/' is an existing namespace directory containing other knowledge units or documents.`;
+        }
+      }
+    } else if (!isExistingFile) {
+      return `Cannot install file '${normName}' over existing directory '${normName}/'.`;
+    }
+  }
+
+  return null;
 }
 
 export interface LoadRegistryOptions {

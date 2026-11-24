@@ -124,7 +124,7 @@ export function rankDocuments(
 
   const filterType = options.type?.toLowerCase().trim();
   const filterTags = options.tags?.map((t) => t.toLowerCase().trim()).filter(Boolean) || [];
-  const filterUnit = options.unit?.toLowerCase().trim();
+  const filterUnit = options.unit?.replace(/\\/g, '/').toLowerCase().trim();
 
   const scored: SearchResultEntry[] = [];
 
@@ -135,7 +135,13 @@ export function rankDocuments(
     }
 
     if (filterUnit) {
-      const nameMatch = doc.name.toLowerCase() === filterUnit || doc.title.toLowerCase() === filterUnit;
+      const docNameLower = doc.name.toLowerCase();
+      const docTitleLower = doc.title.toLowerCase();
+      const filterUnitMd = filterUnit.endsWith('.md') ? filterUnit : `${filterUnit}.md`;
+      const nameMatch =
+        docNameLower === filterUnit ||
+        docTitleLower === filterUnit ||
+        (!doc.has_manifest && docNameLower === filterUnitMd);
       if (!nameMatch) continue;
     }
 

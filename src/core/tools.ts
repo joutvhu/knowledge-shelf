@@ -234,7 +234,17 @@ export function toolSearchDocs(
   const results = scored.slice(0, maxResults);
 
   return {
-    text: JSON.stringify({ query, total: results.length, results }, null, 2),
+    text: JSON.stringify(
+      {
+        query,
+        total: results.length,
+        total_matches: scored.length,
+        ...(scored.length > results.length ? { truncated: true } : {}),
+        results,
+      },
+      null,
+      2
+    ),
   };
 }
 

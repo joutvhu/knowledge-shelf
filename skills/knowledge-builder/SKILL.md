@@ -40,6 +40,7 @@ knowledge-shelf install ./.agents/knowledges/<name> --force
 # Install all drafted units inside ./.agents/knowledges/
 knowledge-shelf install ./.agents/knowledges --all --force
 ```
+*(Note: `.agents/knowledges/` is also auto-discovered by Knowledge Shelf as a project-local layer. If you intend the unit to live only in your global `~/.knowledge/` shelf, delete the staging copy after installing or pass `--dir ~/.knowledge` for subsequent `add`/`sync` commands in that workspace.)*
 
 ---
 

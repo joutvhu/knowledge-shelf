@@ -560,6 +560,12 @@ export function validateManifestUnitDir(
                 `${prefix} (copy_dir): target must start with a root placeholder (e.g. {{TARGET}}/...)`
               );
             }
+            if (
+              step.exclude !== undefined &&
+              (!Array.isArray(step.exclude) || step.exclude.some((x) => typeof x !== 'string'))
+            ) {
+              errors.push(`${prefix} (copy_dir): "exclude" must be an array of strings`);
+            }
           } else if (action === 'patch') {
             const tgt = typeof step.target === 'string' ? step.target.trim() : '';
             const mode = typeof step.mode === 'string' ? step.mode : 'append';
@@ -626,6 +632,10 @@ export function validateManifestUnitDir(
                   `${prefix} (run): timeout_ms must be an integer between ${MIN_WORKFLOW_TIMEOUT_MS} and ${MAX_WORKFLOW_TIMEOUT_MS}`
                 );
               }
+            }
+          } else if (action === 'message') {
+            if (typeof step.text !== 'string') {
+              errors.push(`${prefix} (message): missing string "text"`);
             }
           }
         }

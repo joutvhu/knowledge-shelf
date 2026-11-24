@@ -57,6 +57,7 @@ import {
   ShelfCatalog,
   ShelfCatalogUnit,
   TeamSourceEntry,
+  checkUnitNestingConflict,
   computeUnitChecksum,
   getCacheDir,
   getRegistryPath,
@@ -373,6 +374,11 @@ export function cmdAdd(knowledgeDir: string, args: string[]): void {
       if ((existing || fs.existsSync(destDir)) && !force) {
         return 'skipped';
       }
+      const nestingErr = checkUnitNestingConflict(knowledgeDir, unitName, !isFile, registry.sources);
+      if (nestingErr) {
+        console.error(`Error: ${nestingErr}`);
+        return 'invalid';
+      }
 
       if (isFile) {
         if (!noVerify && sourceDir.toLowerCase().endsWith('.md')) {
@@ -546,6 +552,12 @@ export function cmdAdd(knowledgeDir: string, args: string[]): void {
         skipped++;
         continue;
       }
+      const nestingErr = checkUnitNestingConflict(knowledgeDir, docName, false, registry.sources);
+      if (nestingErr) {
+        console.error(`Error: ${nestingErr}`);
+        invalid++;
+        continue;
+      }
       if (!noVerify) {
         const { errors, warnings } = validateStandaloneMdFile(mdFile);
         printValidationResults(docName, errors, warnings);
@@ -620,6 +632,13 @@ export function cmdAdd(knowledgeDir: string, args: string[]): void {
       process.exit(1);
     }
 
+    const nestingErrFile = checkUnitNestingConflict(knowledgeDir, name, false, registry.sources);
+    if (nestingErrFile) {
+      console.error(`Error: ${nestingErrFile}`);
+      removeDirSync(cloneTarget);
+      process.exit(1);
+    }
+
     if (!noVerify && sourceDir.toLowerCase().endsWith('.md')) {
       const { errors, warnings } = validateStandaloneMdFile(sourceDir);
       printValidationResults(name, errors, warnings);
@@ -682,6 +701,13 @@ export function cmdAdd(knowledgeDir: string, args: string[]): void {
 
   if (fs.existsSync(destDir) && !force) {
     console.error(`Error: Directory '${name}' already exists in knowledge folder. Pass --force to overwrite.`);
+    removeDirSync(cloneTarget);
+    process.exit(1);
+  }
+
+  const nestingErrDir = checkUnitNestingConflict(knowledgeDir, name, true, registry.sources);
+  if (nestingErrDir) {
+    console.error(`Error: ${nestingErrDir}`);
     removeDirSync(cloneTarget);
     process.exit(1);
   }
@@ -1582,6 +1608,14 @@ export function cmdSync(knowledgeDir: string, args: string[]): void {
         const sourceDir = s.path && !isRootPath ? resolveInsideDir(cloneTarget, s.path, true) : cloneTarget;
         if (!sourceDir || !fs.existsSync(sourceDir)) {
           console.error(`  Error: Path '${s.path}' not found in repo for '${s.name}'.`);
+          failed++;
+          continue;
+        }
+
+        const isSyncDir = fs.statSync(sourceDir).isDirectory();
+        const nestingErr = checkUnitNestingConflict(knowledgeDir, s.name, isSyncDir, registry.sources);
+        if (nestingErr) {
+          console.error(`  Error: ${nestingErr}`);
           failed++;
           continue;
         }
