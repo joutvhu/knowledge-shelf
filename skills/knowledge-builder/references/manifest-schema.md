@@ -74,11 +74,14 @@ Complete schema for `manifest.json` — the metadata definition of a manifest-ba
 
 ## Workflows (`workflows`)
 
-Manifest only declares the workflow name and description. For every key `<workflow-name>`, a corresponding `workflows/<workflow-name>.json` file must exist with a valid `steps` array:
+Manifest declares the workflow name, description, and optional file path. For every key `<workflow-name>`, a corresponding workflow JSON file must exist (defaults to `workflows/<workflow-name>.json` unless overridden by `"file"`) with a valid `steps` array:
 
 ```json
 "workflows": {
-  "<workflow-name>": {"description": "What this workflow does"}
+  "<workflow-name>": {
+    "description": "What this workflow does",
+    "file": "workflows/<custom-path>.json"
+  }
 }
 ```
 
@@ -107,7 +110,7 @@ Manifest only declares the workflow name and description. For every key `<workfl
 
 ```json
 {
-  "$schema": "knowledge-manifest/1.0",
+  "$schema": "https://raw.githubusercontent.com/joutvhu/knowledge-shelf/main/schemas/manifest-v1.schema.json",
   "name": "my-boilerplate",
   "version": "1.0.0",
   "type": "boilerplate",

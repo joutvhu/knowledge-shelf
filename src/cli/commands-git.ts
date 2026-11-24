@@ -59,6 +59,7 @@ import {
   TeamSourceEntry,
   computeUnitChecksum,
   getCacheDir,
+  getRegistryPath,
   hasLocalModifications,
   isSameUnitName,
   loadRegistry,
@@ -730,7 +731,24 @@ export function cmdAdd(knowledgeDir: string, args: string[]): void {
   printSecurityNotice(name, destDir);
 }
 
-export function cmdUpdate(knowledgeDir: string, args: string[]): void {
+export function cmdUpdate(
+  primaryDir: string,
+  dirsOrArgs?: string[] | string,
+  maybeArgs?: string[]
+): void {
+  let knowledgeDirs: string[];
+  let args: string[];
+  if (Array.isArray(dirsOrArgs) && maybeArgs !== undefined) {
+    knowledgeDirs = dirsOrArgs;
+    args = maybeArgs;
+  } else if (typeof dirsOrArgs === 'string' && maybeArgs !== undefined) {
+    knowledgeDirs = [dirsOrArgs];
+    args = maybeArgs;
+  } else {
+    knowledgeDirs = [primaryDir];
+    args = Array.isArray(dirsOrArgs) ? dirsOrArgs : [];
+  }
+
   let targetName = '';
   let force = false;
   let noVerify = false;
@@ -751,36 +769,53 @@ export function cmdUpdate(knowledgeDir: string, args: string[]): void {
     }
   }
 
-  const registry = loadRegistry(knowledgeDir);
-  if (registry.sources.length === 0) {
+  const allSources: Array<{ source: RegistryEntry; layerDir: string }> = [];
+  const seenNames = new Set<string>();
+
+  for (const d of knowledgeDirs) {
+    if (fs.existsSync(d) && fs.existsSync(getRegistryPath(d))) {
+      try {
+        const reg = loadRegistry(d, { exitOnError: false });
+        for (const s of reg.sources) {
+          const key = process.platform === 'win32' ? s.name.toLowerCase() : s.name;
+          if (!seenNames.has(key)) {
+            seenNames.add(key);
+            allSources.push({ source: s, layerDir: d });
+          }
+        }
+      } catch {
+        /* skip invalid layer registry */
+      }
+    }
+  }
+
+  if (allSources.length === 0) {
     console.log('No knowledge sources installed.');
     return;
   }
 
   const cleanTargetName = targetName ? targetName.trim().replace(/[\\/]+$/, '') : '';
   const toUpdate = cleanTargetName
-    ? registry.sources.filter(
-        (s) =>
+    ? allSources.filter(
+        ({ source: s }) =>
           isSameUnitName(s.name, cleanTargetName) ||
           (!cleanTargetName.toLowerCase().endsWith('.md') && isSameUnitName(s.name, `${cleanTargetName}.md`))
       )
-    : registry.sources;
+    : allSources;
   if (cleanTargetName && toUpdate.length === 0) {
     console.error(`Error: '${targetName}' not found in registry.`);
     process.exit(1);
   }
 
-  const cacheDir = getCacheDir(knowledgeDir);
-  fs.mkdirSync(cacheDir, { recursive: true });
-
   let updated = 0;
   let failed = 0;
-  const updatedEntries: RegistryEntry[] = [];
+  const updatedByLayer = new Map<string, RegistryEntry[]>();
 
-  // Separate local vs remote sources; group remote sources by (url, branch) to deduplicate clones
-  const remoteGroups = new Map<string, RegistryEntry[]>();
+  // Separate local vs remote sources; group remote sources by (url, branch, layerDir)
+  const remoteGroups = new Map<string, Array<{ source: RegistryEntry; layerDir: string }>>();
 
-  for (const source of toUpdate) {
+  for (const item of toUpdate) {
+    const { source, layerDir } = item;
     if (source.pin) {
       console.log(`  Skipping '${source.name}' (pinned to ${source.pin})`);
       continue;
@@ -794,14 +829,14 @@ export function cmdUpdate(knowledgeDir: string, args: string[]): void {
         continue;
       }
       try {
-        const destDir = resolveSafeUnitDir(knowledgeDir, source.name);
+        const destDir = resolveSafeUnitDir(layerDir, source.name);
         if (!force && hasLocalModifications(destDir, source.checksum)) {
           console.log(
             `  ⚠ Skipping '${source.name}' (local modifications detected; pass --force to overwrite)`
           );
           continue;
         }
-        const ok = installValidated(knowledgeDir, localPath, destDir, source.name, noVerify);
+        const ok = installValidated(layerDir, localPath, destDir, source.name, noVerify);
         if (!ok) {
           failed++;
           continue;
@@ -809,7 +844,9 @@ export function cmdUpdate(knowledgeDir: string, args: string[]): void {
         source.checksum = computeUnitChecksum(destDir);
         source.updatedAt = new Date().toISOString();
         updated++;
-        updatedEntries.push(source);
+        const layerList = updatedByLayer.get(layerDir) || [];
+        layerList.push(source);
+        updatedByLayer.set(layerDir, layerList);
         console.log('  ✓ Updated from local path');
       } catch (e) {
         console.error(`  Error updating '${source.name}': ${e}`);
@@ -825,6 +862,8 @@ export function cmdUpdate(knowledgeDir: string, args: string[]): void {
         console.log(`  Skipping '${source.name}' (archive file no longer exists)`);
         continue;
       }
+      const cacheDir = getCacheDir(layerDir);
+      fs.mkdirSync(cacheDir, { recursive: true });
       const extractDir = path.join(cacheDir, `update-archive-${process.pid}-${Date.now()}`);
       try {
         assertSafeArchivePaths(archivePath);
@@ -924,21 +963,23 @@ export function cmdUpdate(knowledgeDir: string, args: string[]): void {
           continue;
         }
 
-        const destDir = resolveSafeUnitDir(knowledgeDir, source.name);
+        const destDir = resolveSafeUnitDir(layerDir, source.name);
         if (!force && hasLocalModifications(destDir, source.checksum)) {
           console.log(
             `  ⚠ Skipping '${source.name}' (local modifications detected; pass --force to overwrite)`
           );
           continue;
         }
-        const ok = installValidated(knowledgeDir, installSource, destDir, source.name, noVerify);
+        const ok = installValidated(layerDir, installSource, destDir, source.name, noVerify);
         if (!ok) {
           failed++;
         } else {
           source.checksum = computeUnitChecksum(destDir);
           source.updatedAt = new Date().toISOString();
           updated++;
-          updatedEntries.push(source);
+          const layerList = updatedByLayer.get(layerDir) || [];
+          layerList.push(source);
+          updatedByLayer.set(layerDir, layerList);
           console.log('  ✓ Updated from archive');
         }
       } catch (e) {
@@ -950,27 +991,28 @@ export function cmdUpdate(knowledgeDir: string, args: string[]): void {
       continue;
     }
 
-    const groupKey = `${source.url}\0${source.branch || ''}`;
+    const groupKey = `${source.url}\0${source.branch || ''}\0${layerDir}`;
     const list = remoteGroups.get(groupKey) || [];
-    list.push(source);
+    list.push(item);
     remoteGroups.set(groupKey, list);
   }
 
   for (const [, group] of remoteGroups) {
     const first = group[0];
-    const url = first.url;
-    const branch = first.branch;
+    const url = first.source.url;
+    const branch = first.source.branch;
+    const layerDir = first.layerDir;
     const repoName = deriveNameFromUrl(url);
     const cloneTarget = getCloneTarget(
-      knowledgeDir,
+      layerDir,
       `${repoName}-${process.pid}-${Date.now()}-${++stageSeq}`
     );
 
     // Check remote HEAD/branch SHA before cloning when all entries in group exist on disk
     const remoteSha = gitLsRemote(url, branch ? `refs/heads/${branch}` : 'HEAD');
     const pending: RegistryEntry[] = [];
-    for (const source of group) {
-      const destDir = resolveSafeUnitDir(knowledgeDir, source.name);
+    for (const { source } of group) {
+      const destDir = resolveSafeUnitDir(layerDir, source.name);
       if (
         !force &&
         remoteSha &&
@@ -1006,7 +1048,7 @@ export function cmdUpdate(knowledgeDir: string, args: string[]): void {
 
       for (const source of pending) {
         console.log(`Updating '${source.name}'...`);
-        const destDir = resolveSafeUnitDir(knowledgeDir, source.name);
+        const destDir = resolveSafeUnitDir(layerDir, source.name);
 
         if (!force && newCommit === source.commit && fs.existsSync(destDir)) {
           console.log(`  Already up to date (${newCommit})`);
@@ -1028,7 +1070,7 @@ export function cmdUpdate(knowledgeDir: string, args: string[]): void {
           continue;
         }
 
-        const ok = installValidated(knowledgeDir, sourceDir, destDir, source.name, noVerify);
+        const ok = installValidated(layerDir, sourceDir, destDir, source.name, noVerify);
         if (!ok) {
           failed++;
           continue;
@@ -1039,7 +1081,9 @@ export function cmdUpdate(knowledgeDir: string, args: string[]): void {
         source.checksum = computeUnitChecksum(destDir);
         source.updatedAt = new Date().toISOString();
         updated++;
-        updatedEntries.push(source);
+        const layerList = updatedByLayer.get(layerDir) || [];
+        layerList.push(source);
+        updatedByLayer.set(layerDir, layerList);
         console.log(`  ✓ Updated to ${newCommit}`);
       }
     } catch (e) {
@@ -1052,18 +1096,20 @@ export function cmdUpdate(knowledgeDir: string, args: string[]): void {
     }
   }
 
-  if (updatedEntries.length > 0) {
-    mutateRegistry(knowledgeDir, (reg) => {
-      for (const s of updatedEntries) {
-        const existing = reg.sources.find((item) => isSameUnitName(item.name, s.name));
-        if (existing) {
-          existing.commit = s.commit;
-          existing.fullCommit = s.fullCommit;
-          existing.checksum = s.checksum;
-          existing.updatedAt = s.updatedAt;
+  for (const [layerDir, updatedEntries] of updatedByLayer) {
+    if (updatedEntries.length > 0) {
+      mutateRegistry(layerDir, (reg) => {
+        for (const s of updatedEntries) {
+          const existing = reg.sources.find((item) => isSameUnitName(item.name, s.name));
+          if (existing) {
+            existing.commit = s.commit;
+            existing.fullCommit = s.fullCommit;
+            existing.checksum = s.checksum;
+            existing.updatedAt = s.updatedAt;
+          }
         }
-      }
-    });
+      });
+    }
   }
   console.log(`\nDone. ${updated} updated, ${failed} failed.`);
   if (failed > 0) {
@@ -1071,7 +1117,24 @@ export function cmdUpdate(knowledgeDir: string, args: string[]): void {
   }
 }
 
-export function cmdPin(knowledgeDir: string, args: string[]): void {
+export function cmdPin(
+  primaryDir: string,
+  dirsOrArgs: string[] | string,
+  maybeArgs?: string[]
+): void {
+  let knowledgeDirs: string[];
+  let args: string[];
+  if (Array.isArray(dirsOrArgs) && maybeArgs !== undefined) {
+    knowledgeDirs = dirsOrArgs;
+    args = maybeArgs;
+  } else if (typeof dirsOrArgs === 'string' && maybeArgs !== undefined) {
+    knowledgeDirs = [dirsOrArgs];
+    args = maybeArgs;
+  } else {
+    knowledgeDirs = [primaryDir];
+    args = Array.isArray(dirsOrArgs) ? dirsOrArgs : [];
+  }
+
   const noVerify = args.includes('--no-verify');
   const cleanArgs = args.filter((a) => a !== '--no-verify');
   rejectUnknownFlags(cleanArgs, 'pin');
@@ -1087,10 +1150,25 @@ export function cmdPin(knowledgeDir: string, args: string[]): void {
     process.exit(1);
   }
 
-  const registry = loadRegistry(knowledgeDir);
-  let source = registry.sources.find((s) => isSameUnitName(s.name, name));
-  if (!source && !name.toLowerCase().endsWith('.md')) {
-    source = registry.sources.find((s) => isSameUnitName(s.name, `${name}.md`));
+  let targetKnowledgeDir = primaryDir;
+  let source: RegistryEntry | undefined;
+
+  for (const kDir of knowledgeDirs) {
+    if (!fs.existsSync(kDir) || !fs.existsSync(getRegistryPath(kDir))) continue;
+    try {
+      const reg = loadRegistry(kDir, { exitOnError: false });
+      let s = reg.sources.find((item) => isSameUnitName(item.name, name));
+      if (!s && !name.toLowerCase().endsWith('.md')) {
+        s = reg.sources.find((item) => isSameUnitName(item.name, `${name}.md`));
+      }
+      if (s) {
+        targetKnowledgeDir = kDir;
+        source = s;
+        break;
+      }
+    } catch {
+      /* skip invalid registry */
+    }
   }
 
   if (!source) {
@@ -1108,10 +1186,10 @@ export function cmdPin(knowledgeDir: string, args: string[]): void {
       );
       process.exit(1);
     }
-    fs.mkdirSync(getCacheDir(knowledgeDir), { recursive: true });
+    fs.mkdirSync(getCacheDir(targetKnowledgeDir), { recursive: true });
     const repoName = deriveNameFromUrl(source.url);
     const cloneTarget = getCloneTarget(
-      knowledgeDir,
+      targetKnowledgeDir,
       `${repoName}-pin-${process.pid}-${Date.now()}-${++stageSeq}`
     );
     let installFailed = false;
@@ -1127,8 +1205,8 @@ export function cmdPin(knowledgeDir: string, args: string[]): void {
         throw new Error(`Path '${source.path}' not found at ref '${version}'.`);
       }
 
-      const destDir = resolveSafeUnitDir(knowledgeDir, source.name);
-      const ok = installValidated(knowledgeDir, sourceDir, destDir, source.name, noVerify);
+      const destDir = resolveSafeUnitDir(targetKnowledgeDir, source.name);
+      const ok = installValidated(targetKnowledgeDir, sourceDir, destDir, source.name, noVerify);
       if (!ok) {
         installFailed = true;
       } else {
@@ -1153,21 +1231,38 @@ export function cmdPin(knowledgeDir: string, args: string[]): void {
     }
   }
 
-  mutateRegistry(knowledgeDir, (reg) => {
+  mutateRegistry(targetKnowledgeDir, (reg) => {
     const s = reg.sources.find((item) => isSameUnitName(item.name, name));
     if (s) {
       s.pin = version || s.commit;
-      if (source.commit) s.commit = source.commit;
-      if (source.fullCommit) s.fullCommit = source.fullCommit;
-      if (source.checksum) s.checksum = source.checksum;
-      if (source.updatedAt) s.updatedAt = source.updatedAt;
+      if (source!.commit) s.commit = source!.commit;
+      if (source!.fullCommit) s.fullCommit = source!.fullCommit;
+      if (source!.checksum) s.checksum = source!.checksum;
+      if (source!.updatedAt) s.updatedAt = source!.updatedAt;
     }
   });
   console.log(`✓ Pinned '${name}' to ${version || source.commit}`);
   console.log(`  This source will be skipped during 'update'.  Use 'unpin ${name}' to unlock.`);
 }
 
-export function cmdUnpin(knowledgeDir: string, args: string[]): void {
+export function cmdUnpin(
+  primaryDir: string,
+  dirsOrArgs: string[] | string,
+  maybeArgs?: string[]
+): void {
+  let knowledgeDirs: string[];
+  let args: string[];
+  if (Array.isArray(dirsOrArgs) && maybeArgs !== undefined) {
+    knowledgeDirs = dirsOrArgs;
+    args = maybeArgs;
+  } else if (typeof dirsOrArgs === 'string' && maybeArgs !== undefined) {
+    knowledgeDirs = [dirsOrArgs];
+    args = maybeArgs;
+  } else {
+    knowledgeDirs = [primaryDir];
+    args = Array.isArray(dirsOrArgs) ? dirsOrArgs : [];
+  }
+
   rejectUnknownFlags(args, 'unpin');
   let name = args[0] ? args[0].trim().replace(/[\\/]+$/, '') : '';
 
@@ -1180,10 +1275,25 @@ export function cmdUnpin(knowledgeDir: string, args: string[]): void {
     process.exit(1);
   }
 
-  const registry = loadRegistry(knowledgeDir);
-  let source = registry.sources.find((s) => isSameUnitName(s.name, name));
-  if (!source && !name.toLowerCase().endsWith('.md')) {
-    source = registry.sources.find((s) => isSameUnitName(s.name, `${name}.md`));
+  let targetKnowledgeDir = primaryDir;
+  let source: RegistryEntry | undefined;
+
+  for (const kDir of knowledgeDirs) {
+    if (!fs.existsSync(kDir) || !fs.existsSync(getRegistryPath(kDir))) continue;
+    try {
+      const reg = loadRegistry(kDir, { exitOnError: false });
+      let s = reg.sources.find((item) => isSameUnitName(item.name, name));
+      if (!s && !name.toLowerCase().endsWith('.md')) {
+        s = reg.sources.find((item) => isSameUnitName(item.name, `${name}.md`));
+      }
+      if (s) {
+        targetKnowledgeDir = kDir;
+        source = s;
+        break;
+      }
+    } catch {
+      /* skip */
+    }
   }
 
   if (!source) {
@@ -1197,7 +1307,7 @@ export function cmdUnpin(knowledgeDir: string, args: string[]): void {
     return;
   }
 
-  mutateRegistry(knowledgeDir, (reg) => {
+  mutateRegistry(targetKnowledgeDir, (reg) => {
     const s = reg.sources.find((item) => isSameUnitName(item.name, name));
     if (s) {
       delete s.pin;
@@ -1206,21 +1316,58 @@ export function cmdUnpin(knowledgeDir: string, args: string[]): void {
   console.log(`✓ Unpinned '${name}'.  It will be updated normally.`);
 }
 
-export function cmdOutdated(knowledgeDir: string, args: string[]): void {
+export function cmdOutdated(
+  primaryDir: string,
+  dirsOrArgs?: string[] | string,
+  maybeArgs?: string[]
+): void {
+  let knowledgeDirs: string[];
+  let args: string[];
+  if (Array.isArray(dirsOrArgs) && maybeArgs !== undefined) {
+    knowledgeDirs = dirsOrArgs;
+    args = maybeArgs;
+  } else if (typeof dirsOrArgs === 'string' && maybeArgs !== undefined) {
+    knowledgeDirs = [dirsOrArgs];
+    args = maybeArgs;
+  } else {
+    knowledgeDirs = [primaryDir];
+    args = Array.isArray(dirsOrArgs) ? dirsOrArgs : [];
+  }
+
   rejectUnknownFlags(args, 'outdated');
   if (args.length > 0) {
     console.error(`Error: Unexpected argument '${args[0]}' for 'outdated'.`);
     process.exit(1);
   }
-  const registry = loadRegistry(knowledgeDir);
-  if (registry.sources.length === 0) {
+
+  const allSources: Array<{ source: RegistryEntry; layerDir: string }> = [];
+  const seenNames = new Set<string>();
+
+  for (const d of knowledgeDirs) {
+    if (fs.existsSync(d) && fs.existsSync(getRegistryPath(d))) {
+      try {
+        const reg = loadRegistry(d, { exitOnError: false });
+        for (const s of reg.sources) {
+          const key = process.platform === 'win32' ? s.name.toLowerCase() : s.name;
+          if (!seenNames.has(key)) {
+            seenNames.add(key);
+            allSources.push({ source: s, layerDir: d });
+          }
+        }
+      } catch {
+        /* skip invalid layer registry */
+      }
+    }
+  }
+
+  if (allSources.length === 0) {
     console.log('No knowledge sources installed.');
     return;
   }
 
-  console.log(`Checking ${registry.sources.length} source(s)...\n`);
-  for (const s of registry.sources) {
-    const destDir = resolveSafeUnitDir(knowledgeDir, s.name);
+  console.log(`Checking ${allSources.length} source(s)...\n`);
+  for (const { source: s, layerDir } of allSources) {
+    const destDir = resolveSafeUnitDir(layerDir, s.name);
     const exists = fs.existsSync(destDir);
     const drift =
       hasLocalModifications(destDir, s.checksum) ? ' [modified-locally]' : '';
@@ -1886,9 +2033,10 @@ export function buildPublishPushArgs(branch: string, isFirstPublish: boolean = t
 
 export function resolvePublishTarget(
   raw: string,
-  knowledgeDir: string
+  knowledgeDirs: string | string[]
 ): { kind: 'unit' | 'file'; path: string } | null {
   if (!raw) return null;
+  const dirs = Array.isArray(knowledgeDirs) ? knowledgeDirs : [knowledgeDirs];
 
   // 1. Direct path check (with ~ expanded)
   const expanded = path.resolve(expandHome(raw));
@@ -1905,28 +2053,30 @@ export function resolvePublishTarget(
     }
   }
 
-  // 2. Relative to knowledgeDir: check as-is
-  const relInside = resolveInsideDir(knowledgeDir, raw, true);
-  if (relInside && fs.existsSync(relInside)) {
-    const stat = fs.statSync(relInside);
-    if (stat.isDirectory()) {
-      return { kind: 'unit', path: relInside };
-    }
-    if (stat.isFile()) {
-      if (raw.toLowerCase().endsWith('.md')) {
-        return { kind: 'file', path: relInside };
+  // 2. Relative to knowledgeDirs: check as-is
+  for (const kDir of dirs) {
+    if (!fs.existsSync(kDir)) continue;
+    const relInside = resolveInsideDir(kDir, raw, true);
+    if (relInside && fs.existsSync(relInside)) {
+      const stat = fs.statSync(relInside);
+      if (stat.isDirectory()) {
+        return { kind: 'unit', path: relInside };
       }
-      return null;
-    }
-  }
-
-  // 3. If !raw.endsWith('.md'), check knowledgeDir/<raw>.md
-  if (!raw.toLowerCase().endsWith('.md')) {
-    const mdRelInside = resolveInsideDir(knowledgeDir, `${raw}.md`, true);
-    if (mdRelInside && fs.existsSync(mdRelInside)) {
-      const stat = fs.statSync(mdRelInside);
       if (stat.isFile()) {
-        return { kind: 'file', path: mdRelInside };
+        if (raw.toLowerCase().endsWith('.md')) {
+          return { kind: 'file', path: relInside };
+        }
+      }
+    }
+
+    // 3. If !raw.endsWith('.md'), check knowledgeDir/<raw>.md
+    if (!raw.toLowerCase().endsWith('.md')) {
+      const mdRelInside = resolveInsideDir(kDir, `${raw}.md`, true);
+      if (mdRelInside && fs.existsSync(mdRelInside)) {
+        const stat = fs.statSync(mdRelInside);
+        if (stat.isFile()) {
+          return { kind: 'file', path: mdRelInside };
+        }
       }
     }
   }
@@ -2055,7 +2205,24 @@ export function publishViaClone(opts: PublishViaCloneOptions): void {
   }
 }
 
-export function cmdPublish(knowledgeDir: string, args: string[]): void {
+export function cmdPublish(
+  primaryDir: string,
+  dirsOrArgs: string[] | string,
+  maybeArgs?: string[]
+): void {
+  let knowledgeDirs: string[];
+  let args: string[];
+  if (Array.isArray(dirsOrArgs) && maybeArgs !== undefined) {
+    knowledgeDirs = dirsOrArgs;
+    args = maybeArgs;
+  } else if (typeof dirsOrArgs === 'string' && maybeArgs !== undefined) {
+    knowledgeDirs = [dirsOrArgs];
+    args = maybeArgs;
+  } else {
+    knowledgeDirs = [primaryDir];
+    args = Array.isArray(dirsOrArgs) ? dirsOrArgs : [];
+  }
+
   let unitArg = '';
   let toRepo = '';
   let subPath = '';
@@ -2139,12 +2306,22 @@ export function cmdPublish(knowledgeDir: string, args: string[]): void {
     process.exit(1);
   }
 
-  const target = resolvePublishTarget(unitArg, knowledgeDir);
+  const target = resolvePublishTarget(unitArg, knowledgeDirs);
   if (!target) {
     const expanded = path.resolve(expandHome(unitArg));
-    const relInside = resolveInsideDir(knowledgeDir, unitArg, true);
-    if ((fs.existsSync(expanded) && fs.statSync(expanded).isFile()) ||
-        (relInside && fs.existsSync(relInside) && fs.statSync(relInside).isFile())) {
+    let notMdFile = false;
+    if (fs.existsSync(expanded) && fs.statSync(expanded).isFile()) {
+      notMdFile = true;
+    } else {
+      for (const kDir of knowledgeDirs) {
+        const relInside = resolveInsideDir(kDir, unitArg, true);
+        if (relInside && fs.existsSync(relInside) && fs.statSync(relInside).isFile()) {
+          notMdFile = true;
+          break;
+        }
+      }
+    }
+    if (notMdFile) {
       console.error(`Error: '${unitArg}' is neither a knowledge unit directory nor a Markdown (.md) file.`);
       process.exit(1);
     }

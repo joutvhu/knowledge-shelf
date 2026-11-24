@@ -60,7 +60,7 @@ knowledge-shelf install ./.agents/knowledges --all --force
 Minimal `manifest.json`:
 ```json
 {
-  "$schema": "knowledge-manifest/1.0",
+  "$schema": "https://raw.githubusercontent.com/joutvhu/knowledge-shelf/main/schemas/manifest-v1.schema.json",
   "name": "<name>",
   "version": "1.0.0",
   "type": "<boilerplate|template|toolkit|cookbook>",

@@ -925,7 +925,12 @@ export async function toolRunWorkflow(
 
   // Fallback defaults from manifest.placeholders for placeholders not defined in workflow inputs
   for (const [k, d] of Object.entries(manifestPh)) {
-    if (isRecord(d) && d.default !== undefined && !Object.prototype.hasOwnProperty.call(inputValues, k)) {
+    if (
+      isRecord(d) &&
+      d.default !== undefined &&
+      !Object.prototype.hasOwnProperty.call(workflowInputs, k) &&
+      !Object.prototype.hasOwnProperty.call(inputValues, k)
+    ) {
       inputValues[k] = String(d.default);
     }
   }

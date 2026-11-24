@@ -1553,7 +1553,26 @@ export function cmdImport(knowledgeDir: string, args: string[]): void {
   }
 }
 
-export function cmdTrust(knowledgeDir: string, args: string[], trusted: boolean): void {
+export function cmdTrust(
+  primaryDir: string,
+  dirsOrArgs: string[] | string,
+  arg3: string[] | boolean,
+  arg4?: boolean
+): void {
+  let knowledgeDirs: string[];
+  let args: string[];
+  let trusted: boolean;
+
+  if (Array.isArray(dirsOrArgs) && Array.isArray(arg3) && typeof arg4 === 'boolean') {
+    knowledgeDirs = dirsOrArgs;
+    args = arg3;
+    trusted = arg4;
+  } else {
+    knowledgeDirs = [primaryDir];
+    args = Array.isArray(dirsOrArgs) ? dirsOrArgs : [];
+    trusted = typeof arg3 === 'boolean' ? arg3 : true;
+  }
+
   rejectUnknownFlags(args, trusted ? 'trust' : 'untrust');
   let name = (args[0] || '').trim().replace(/[\\/]+$/, '');
   if (!name) {
@@ -1565,33 +1584,49 @@ export function cmdTrust(knowledgeDir: string, args: string[], trusted: boolean)
     process.exit(1);
   }
 
-  let found = false;
-  mutateRegistry(knowledgeDir, (registry) => {
-    let entry = registry.sources.find((s) => isSameUnitName(s.name, name));
-    if (!entry && !name.toLowerCase().endsWith('.md')) {
-      entry = registry.sources.find((s) => isSameUnitName(s.name, `${name}.md`));
-    }
-    if (!entry) {
-      return;
-    }
-    name = entry.name;
-    found = true;
-    if (trusted) {
-      entry.trusted = true;
-    } else if (entry.url?.startsWith('local:')) {
-      entry.trusted = false;
-    } else {
-      delete entry.trusted;
-    }
-  });
+  let targetKnowledgeDir = primaryDir;
+  let targetEntryName: string | null = null;
 
-  if (!found) {
+  for (const kDir of knowledgeDirs) {
+    if (!fs.existsSync(kDir) || !fs.existsSync(getRegistryPath(kDir))) continue;
+    try {
+      const reg = loadRegistry(kDir, { exitOnError: false });
+      let entry = reg.sources.find((s) => isSameUnitName(s.name, name));
+      if (!entry && !name.toLowerCase().endsWith('.md')) {
+        entry = reg.sources.find((s) => isSameUnitName(s.name, `${name}.md`));
+      }
+      if (entry) {
+        targetKnowledgeDir = kDir;
+        targetEntryName = entry.name;
+        break;
+      }
+    } catch {
+      /* skip invalid layer registry */
+    }
+  }
+
+  if (!targetEntryName) {
     console.error(`Error: '${name}' not found in registry.`);
     process.exit(1);
   }
+
+  const matchedName = targetEntryName;
+  mutateRegistry(targetKnowledgeDir, (registry) => {
+    const entry = registry.sources.find((s) => isSameUnitName(s.name, matchedName));
+    if (entry) {
+      if (trusted) {
+        entry.trusted = true;
+      } else if (entry.url?.startsWith('local:')) {
+        entry.trusted = false;
+      } else {
+        delete entry.trusted;
+      }
+    }
+  });
+
   console.log(
     trusted
-      ? `✓ Marked '${name}' as trusted for workflow script execution.`
-      : `✓ Removed explicit trust for '${name}'.`
+      ? `✓ Marked '${matchedName}' as trusted for workflow script execution.`
+      : `✓ Removed explicit trust for '${matchedName}'.`
   );
 }

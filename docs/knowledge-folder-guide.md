@@ -43,7 +43,7 @@ knowledge/my-topic/
 
 ```json
 {
-  "$schema": "knowledge-manifest/1.0",
+  "$schema": "https://raw.githubusercontent.com/joutvhu/knowledge-shelf/main/schemas/manifest-v1.schema.json",
   "name": "my-knowledge",
   "version": "1.0.0",
   "type": "boilerplate",
@@ -117,7 +117,7 @@ The MCP server ignores:
 
 ```json
 {
-  "$schema": "knowledge-manifest/1.0",
+  "$schema": "https://raw.githubusercontent.com/joutvhu/knowledge-shelf/main/schemas/manifest-v1.schema.json",
   "name": "my-knowledge",
   "version": "1.0.0",
   "type": "boilerplate",

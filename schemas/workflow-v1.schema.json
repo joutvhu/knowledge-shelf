@@ -35,6 +35,79 @@
             "type": "string",
             "enum": ["mkdir", "copy", "copy_dir", "patch", "run", "message"]
           },
+          "source": {
+            "type": "string",
+            "description": "Relative file or directory path inside the knowledge unit folder (for copy, copy_dir)."
+          },
+          "target": {
+            "type": "string",
+            "description": "Target destination path starting with a root placeholder prefix, e.g. {{TARGET}}/... (for copy, copy_dir, patch)."
+          },
+          "skip_if_exists": {
+            "type": "boolean",
+            "description": "If true, skips copying when destination file already exists (for copy, copy_dir)."
+          },
+          "exclude": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "Glob patterns to exclude when copying directories (for copy_dir)."
+          },
+          "render_filenames": {
+            "type": "boolean",
+            "description": "Replace {{KEY}} placeholders in relative file/folder names (for copy_dir, default: true)."
+          },
+          "path": {
+            "type": "string",
+            "description": "Directory path starting with a root placeholder prefix, e.g. {{TARGET}}/... (for mkdir)."
+          },
+          "mode": {
+            "type": "string",
+            "enum": ["insert_before", "insert_after", "append", "prepend", "replace"],
+            "default": "append",
+            "description": "Patch mode (for patch)."
+          },
+          "anchor": {
+            "type": "string",
+            "description": "Target file anchor text for insertion or replacement (for patch with insert_before, insert_after, replace)."
+          },
+          "content": {
+            "type": "string",
+            "description": "Content string to insert, append, prepend, or replace (for patch)."
+          },
+          "skip_if_contains": {
+            "type": "string",
+            "description": "Skip patch if the target file already contains this substring (for patch idempotency)."
+          },
+          "create_if_missing": {
+            "type": "boolean",
+            "description": "Create target file if missing for append and prepend modes (for patch)."
+          },
+          "script": {
+            "type": "string",
+            "description": "Relative path to script file inside knowledge unit folder (for run)."
+          },
+          "script_ref": {
+            "type": "string",
+            "description": "Key in manifest.scripts to inherit file, interpreter, and timeout_ms (for run)."
+          },
+          "args": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "Command line arguments passed to script with {{KEY}} placeholder substitution (for run)."
+          },
+          "interpreter": {
+            "type": "string",
+            "enum": ["python", "python3", "node", "pwsh", "powershell", "bash", "sh", "cmd"],
+            "description": "Interpreter executable (for run; auto-detected from file extension if omitted)."
+          },
+          "cwd": {
+            "type": "string",
+            "description": "Working directory for script execution starting with a root placeholder, e.g. {{TARGET}} (for run)."
+          },
+          "text": {
+            "type": "string",
+            "description": "Progress message text with {{KEY}} placeholder substitution (for message)."
+          },
           "continue_on_error": { "type": "boolean" },
           "timeout_ms": {
             "type": "integer",

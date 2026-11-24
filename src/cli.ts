@@ -227,7 +227,7 @@ export function runCli(rawArgs: string[]): void {
       cmdScaffold(args.slice(1));
       break;
     case 'publish':
-      cmdPublish(primaryDir, args.slice(1));
+      cmdPublish(primaryDir, allDirs, args.slice(1));
       break;
     case 'info':
       cmdInfo(allDirs, args.slice(1));
@@ -241,26 +241,26 @@ export function runCli(rawArgs: string[]): void {
       break;
     case 'outdated':
     case 'status':
-      cmdOutdated(primaryDir, args.slice(1));
+      cmdOutdated(primaryDir, allDirs, args.slice(1));
       break;
     case 'validate':
       cmdValidate(allDirs, args.slice(1));
       break;
     case 'update':
     case 'up':
-      cmdUpdate(primaryDir, args.slice(1));
+      cmdUpdate(primaryDir, allDirs, args.slice(1));
       break;
     case 'pin':
-      cmdPin(primaryDir, args.slice(1));
+      cmdPin(primaryDir, allDirs, args.slice(1));
       break;
     case 'unpin':
-      cmdUnpin(primaryDir, args.slice(1));
+      cmdUnpin(primaryDir, allDirs, args.slice(1));
       break;
     case 'trust':
-      cmdTrust(primaryDir, args.slice(1), true);
+      cmdTrust(primaryDir, allDirs, args.slice(1), true);
       break;
     case 'untrust':
-      cmdTrust(primaryDir, args.slice(1), false);
+      cmdTrust(primaryDir, allDirs, args.slice(1), false);
       break;
     case 'export':
       cmdExport(primaryDir, allDirs, args.slice(1));
