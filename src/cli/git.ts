@@ -311,8 +311,9 @@ export function syncManifestName(unitDir: string, targetName: string): void {
   if (!fs.existsSync(manifestPath)) return;
   try {
     const manifest = JSON.parse(stripBom(fs.readFileSync(manifestPath, 'utf-8'))) as Record<string, unknown>;
-    if (manifest.name !== targetName) {
-      manifest.name = targetName;
+    const cleanName = path.basename(targetName.replace(/\\/g, '/').replace(/\/+$/, ''));
+    if (manifest.name !== cleanName) {
+      manifest.name = cleanName;
       fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + '\n', 'utf-8');
     }
   } catch {

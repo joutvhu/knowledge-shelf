@@ -316,6 +316,17 @@ export function cmdAdd(knowledgeDir: string, args: string[]): void {
     process.exit(1);
   }
 
+  if (customName) {
+    const trimmed = customName.trim().replace(/[\\/]+$/, '');
+    const segments = trimmed.split(/[\\/]+/);
+    if (!trimmed || segments.some((seg) => !seg || seg === '.' || seg === '..' || seg.startsWith('.'))) {
+      console.error(
+        `Error: Invalid unit name '${customName}'. Names cannot contain '..' or segments starting with '.'.`
+      );
+      process.exit(1);
+    }
+  }
+
   const repoName = deriveNameFromUrl(url);
   const cloneTarget = getCloneTarget(
     knowledgeDir,
@@ -1305,7 +1316,8 @@ export function cmdSync(knowledgeDir: string, args: string[]): void {
         url: s.url,
         path: s.path,
         branch: s.branch,
-        ref: s.pin || s.commit,
+        pin: s.pin,
+        ref: s.pin || (frozen ? s.commit : s.branch),
       }));
   }
 
@@ -1439,7 +1451,7 @@ export function cmdSync(knowledgeDir: string, args: string[]): void {
           name: s.name,
           url: s.url,
           path: s.path,
-          ...(branch ? { branch } : {}),
+          ...(branch ? { branch } : existing?.branch ? { branch: existing.branch } : {}),
           commit,
           ...(fullCommit ? { fullCommit } : {}),
           ...(effectivePin ? { pin: effectivePin } : {}),
@@ -2181,7 +2193,7 @@ export function cmdPublish(knowledgeDir: string, args: string[]): void {
         commitMsg: msg,
         push,
         label: fileName,
-        updateShelf: false,
+        updateShelf: true,
       });
     } catch (e) {
       console.error(`Error: Publish failed.\n${e instanceof Error ? e.message : e}`);

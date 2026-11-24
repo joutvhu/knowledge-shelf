@@ -611,17 +611,31 @@ export function cmdValidate(knowledgeDirs: string | string[], args: string[]): v
     const allManifestFolders = filterTopLevelManifestFolders(findManifestFolders(knowledgeDir));
     const toValidate = allManifestFolders.filter((folder) => {
       const rel = path.relative(knowledgeDir, folder).replace(/\\/g, '/');
-      return rel === targetArg.replace(/\\/g, '/') || path.basename(folder) === targetArg;
+      return isSameUnitName(rel, targetArg) || isSameUnitName(path.basename(folder), targetArg);
     });
 
     if (toValidate.length === 0) {
       const targetDir = path.join(knowledgeDir, targetArg);
       const targetMd = targetArg.toLowerCase().endsWith('.md') ? targetDir : `${targetDir}.md`;
+      let foundMd: string | null = null;
       if (fs.existsSync(targetMd) && fs.statSync(targetMd).isFile()) {
+        foundMd = targetMd;
+      } else {
+        const allMds = findMdFiles(knowledgeDir);
+        for (const md of allMds) {
+          const rel = path.relative(knowledgeDir, md).replace(/\\/g, '/');
+          const tNorm = targetArg.toLowerCase().endsWith('.md') ? targetArg : `${targetArg}.md`;
+          if (isSameUnitName(rel, tNorm) || isSameUnitName(path.basename(md), tNorm)) {
+            foundMd = md;
+            break;
+          }
+        }
+      }
+      if (foundMd) {
         const canonicalKd = fs.existsSync(knowledgeDir) ? fs.realpathSync(knowledgeDir) : path.resolve(knowledgeDir);
-        const display = path.relative(canonicalKd, targetMd).replace(/\\/g, '/');
+        const display = path.relative(canonicalKd, foundMd).replace(/\\/g, '/');
         console.log(`Validating '${display}'...`);
-        const { errors, warnings } = validateStandaloneMdFile(targetMd);
+        const { errors, warnings } = validateStandaloneMdFile(foundMd);
         printValidationResults(display, errors, warnings);
         console.log(`\n1 unit(s) validated.  ${errors.length} error(s), ${warnings.length} warning(s).`);
         if (errors.length > 0) process.exit(1);
@@ -755,7 +769,7 @@ export function cmdInstall(
     fail(`Error: Source path not found: ${sourceArg}`);
   }
 
-  if (!options.isExplicitDir && !options.originArchive && !process.env.KNOWLEDGE_DIR) {
+  if (!options.isExplicitDir && !options.originArchive && !process.env.KNOWLEDGE_DIR && !process.env.KNOWLEDGE_DIRS) {
     const normKd = path.resolve(knowledgeDir);
     const normSrc = path.resolve(resolvedSource);
     const kdKey = process.platform === 'win32' ? normKd.toLowerCase() : normKd;
@@ -1162,7 +1176,10 @@ export function cmdExport(knowledgeDir: string, args: string[]): void {
     outputPath = path.resolve(process.cwd(), `${path.basename(relName)}${ext}`);
   } else {
     outputPath = path.resolve(expandHome(outputPath));
-    if (format === 'zip' && !outputPath.toLowerCase().endsWith('.zip')) {
+    const ext = format === 'tar' ? '.tar.gz' : '.zip';
+    if (fs.existsSync(outputPath) && fs.statSync(outputPath).isDirectory()) {
+      outputPath = path.join(outputPath, `${path.basename(relName)}${ext}`);
+    } else if (format === 'zip' && !outputPath.toLowerCase().endsWith('.zip')) {
       outputPath = `${outputPath}.zip`;
     } else if (
       format === 'tar' &&
