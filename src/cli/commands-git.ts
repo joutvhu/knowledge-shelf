@@ -442,9 +442,15 @@ export function cmdAdd(knowledgeDir: string, args: string[]): void {
 
   // Monorepo --all mode (installs all manifest units + top-level standalone .md files)
   if (addAll) {
-    const baseDir = subPath ? resolveInsideDir(cloneTarget, subPath, true) : cloneTarget;
+    const isRootSubPath = !subPath || subPath === '.' || subPath === './';
+    const baseDir = !isRootSubPath ? resolveInsideDir(cloneTarget, subPath, true) : cloneTarget;
     if (!baseDir || !fs.existsSync(baseDir)) {
       console.error(`Error: Path '${subPath}' not found in repository.`);
+      removeDirSync(cloneTarget);
+      process.exit(1);
+    }
+    if (!fs.statSync(baseDir).isDirectory()) {
+      console.error(`Error: Path '${subPath}' is not a directory in repository.`);
       removeDirSync(cloneTarget);
       process.exit(1);
     }
@@ -1353,13 +1359,15 @@ export function cmdSync(knowledgeDir: string, args: string[]): void {
       for (const s of group) {
         const destDir = resolveSafeUnitDir(knowledgeDir, s.name);
         const existing = registry.sources.find((r) => r.name === s.name);
+        const effectivePin = s.pin || (s.ref && (!branch || s.ref !== branch) ? s.ref : undefined);
+        const pinMatches = (effectivePin || undefined) === (existing?.pin || undefined);
 
         if (
           !force &&
           fs.existsSync(destDir) &&
           existing &&
           existing.commit === commit &&
-          (!s.pin || existing.pin === s.pin)
+          pinMatches
         ) {
           console.log(`  ✓ '${s.name}' already at ${commit}`);
           continue;
@@ -1396,7 +1404,7 @@ export function cmdSync(knowledgeDir: string, args: string[]): void {
           ...(branch ? { branch } : {}),
           commit,
           ...(fullCommit ? { fullCommit } : {}),
-          ...(s.pin ? { pin: s.pin } : {}),
+          ...(effectivePin ? { pin: effectivePin } : {}),
           checksum,
           ...(existing?.trusted ? { trusted: true } : {}),
           installedAt: existing?.installedAt || now,

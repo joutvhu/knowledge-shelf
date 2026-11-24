@@ -194,11 +194,11 @@ function scanSingleLayerUncached(knowledgeDir: string): DocEntry[] {
     const relFolder = path.relative(knowledgeDir, folder).replace(/\\/g, '/');
     const entry: DocEntry = {
       name: relFolder,
-      title: manifest.name || relFolder,
-      description: manifest.description || '',
-      type: manifest.type || 'unknown',
-      version: manifest.version || '',
-      tags: Array.isArray(manifest.tags) ? manifest.tags : [],
+      title: typeof manifest.name === 'string' && manifest.name.trim() ? manifest.name : relFolder,
+      description: typeof manifest.description === 'string' ? manifest.description : '',
+      type: typeof manifest.type === 'string' ? manifest.type : 'unknown',
+      version: typeof manifest.version === 'string' ? manifest.version : '',
+      tags: Array.isArray(manifest.tags) ? manifest.tags.map(String) : [],
       has_manifest: true,
     };
 
@@ -206,12 +206,12 @@ function scanSingleLayerUncached(knowledgeDir: string): DocEntry[] {
       entry.status = manifest.status;
     }
     if (manifest.superseded_by !== undefined && manifest.superseded_by !== null) {
-      entry.superseded_by = manifest.superseded_by;
+      entry.superseded_by = String(manifest.superseded_by);
     }
     if (isPlainRecord(manifest.applies_to)) {
       entry.applies_to = manifest.applies_to;
     }
-    if (Array.isArray(manifest.aliases)) entry.aliases = manifest.aliases;
+    if (Array.isArray(manifest.aliases)) entry.aliases = manifest.aliases.map(String);
     if (isPlainRecord(manifest.modules)) entry.modules = Object.keys(manifest.modules);
     if (isPlainRecord(manifest.workflows)) entry.workflows = Object.keys(manifest.workflows);
     if (isPlainRecord(manifest.scripts)) entry.scripts = Object.keys(manifest.scripts);

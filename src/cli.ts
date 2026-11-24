@@ -147,7 +147,35 @@ export function runCli(rawArgs: string[]): void {
 
   const command = args[0];
 
-  if (!command || args.includes('--help') || args.includes('-h')) {
+  const valOptions = new Set([
+    '-m',
+    '--message',
+    '--name',
+    '--path',
+    '--ref',
+    '--pack',
+    '--output',
+    '-o',
+    '--type',
+    '-t',
+    '--branch',
+    '--to',
+    '--file',
+    '-f',
+    '--unit',
+    '-u',
+    '--tag',
+    '--tags',
+    '--max',
+  ]);
+  const wantsHelp =
+    !command ||
+    command === 'help' ||
+    command === '--help' ||
+    command === '-h' ||
+    args.some((arg, idx) => (arg === '--help' || arg === '-h') && !valOptions.has(args[idx - 1]));
+
+  if (wantsHelp) {
     printHelp();
     return;
   }
@@ -162,7 +190,7 @@ export function runCli(rawArgs: string[]): void {
       cmdAdd(primaryDir, args.slice(1));
       break;
     case 'install':
-      cmdInstall(primaryDir, args.slice(1));
+      cmdInstall(primaryDir, args.slice(1), { isExplicitDir: cliDirs.length > 0 });
       break;
     case 'sync':
       cmdSync(primaryDir, args.slice(1));

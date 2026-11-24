@@ -10,6 +10,7 @@ import {
   expandHome,
   findManifestFolders,
   findMdFiles,
+  getDefaultGlobalKnowledgeDir,
   inspectUnitSecurity,
   isReservedPath,
   isSafeUnitSegment,
@@ -650,7 +651,9 @@ export function cmdValidate(knowledgeDirs: string | string[], args: string[]): v
     }
 
     for (const kDir of existingDirs) {
-      const manifestFolders = filterTopLevelManifestFolders(findManifestFolders(kDir));
+      const manifestFolders = filterTopLevelManifestFolders(
+        findManifestFolders(kDir).filter((folder) => path.resolve(folder) !== path.resolve(kDir))
+      );
       for (const unitDir of manifestFolders) {
         const displayUnit = path.relative(kDir, unitDir).replace(/\\/g, '/');
         validatedCount++;
@@ -696,6 +699,7 @@ export interface CmdInstallOptions {
   originArchive?: string;
   extractDir?: string;
   defaultTrusted?: boolean;
+  isExplicitDir?: boolean;
 }
 
 export function cmdInstall(
@@ -745,6 +749,22 @@ export function cmdInstall(
   const resolvedSource = path.resolve(expandHome(sourceArg));
   if (!fs.existsSync(resolvedSource)) {
     fail(`Error: Source path not found: ${sourceArg}`);
+  }
+
+  if (!options.isExplicitDir && !options.originArchive && !process.env.KNOWLEDGE_DIR) {
+    const normKd = path.resolve(knowledgeDir);
+    const normSrc = path.resolve(resolvedSource);
+    const kdKey = process.platform === 'win32' ? normKd.toLowerCase() : normKd;
+    const srcKey = process.platform === 'win32' ? normSrc.toLowerCase() : normSrc;
+    const isAgentsKnowledge =
+      kdKey.endsWith(path.sep + '.agents' + path.sep + 'knowledges') ||
+      kdKey.endsWith('/.agents/knowledges');
+    if (isAgentsKnowledge && (srcKey === kdKey || srcKey.startsWith(kdKey + path.sep))) {
+      const fallbackDir = getDefaultGlobalKnowledgeDir();
+      if (fallbackDir && fallbackDir.toLowerCase() !== kdKey) {
+        knowledgeDir = fallbackDir;
+      }
+    }
   }
 
   fs.mkdirSync(knowledgeDir, { recursive: true });
@@ -856,9 +876,18 @@ export function cmdInstall(
 
     let validationFailures = 0;
     for (const unitDir of manifestFolders) {
-      const unitName = path.basename(unitDir);
+      let unitName = path.basename(unitDir);
+      if (unitDir === resolvedSource) {
+        const rootManifest = loadManifest(unitDir);
+        if (rootManifest?.name && isSafeUnitSegment(rootManifest.name)) {
+          unitName = rootManifest.name;
+        }
+      }
       console.log(`Validating '${unitName}'...`);
-      const { errors, warnings } = validateManifestUnitDir(unitDir, unitName);
+      const { errors, warnings } = validateManifestUnitDir(unitDir, {
+        expectedUnitName: unitName,
+        allowAnyName: unitDir === resolvedSource,
+      });
       printValidationResults(unitName, errors, warnings);
       if (errors.length > 0) validationFailures += errors.length;
     }
@@ -878,7 +907,13 @@ export function cmdInstall(
     let skipped = 0;
 
     for (const unitDir of manifestFolders) {
-      const unitName = path.basename(unitDir);
+      let unitName = path.basename(unitDir);
+      if (unitDir === resolvedSource) {
+        const rootManifest = loadManifest(unitDir);
+        if (rootManifest?.name && isSafeUnitSegment(rootManifest.name)) {
+          unitName = rootManifest.name;
+        }
+      }
       const destDir = resolveSafeUnitDir(knowledgeDir, unitName);
       if (isSamePath(destDir, unitDir)) {
         console.log(`  Skipping '${unitName}' (source and destination are the same directory)`);
@@ -984,7 +1019,8 @@ export function cmdSearch(knowledgeDirs: string[], args: string[]): void {
         console.error('Error: --tag requires a tag argument.');
         process.exit(1);
       }
-      tagFilters.push(args[++i]);
+      const rawTag = args[++i];
+      tagFilters.push(...rawTag.split(',').map((t) => t.trim()).filter(Boolean));
     } else if (args[i] === '--unit' || args[i] === '-u') {
       if (i + 1 >= args.length || args[i + 1].startsWith('-')) {
         console.error('Error: --unit requires a unit name.');
@@ -998,8 +1034,13 @@ export function cmdSearch(knowledgeDirs: string[], args: string[]): void {
         console.error('Error: --max requires a number.');
         process.exit(1);
       }
-      const num = parseInt(args[++i], 10);
-      if (isNaN(num) || num <= 0) {
+      const rawNum = args[++i];
+      if (!/^\d+$/.test(rawNum)) {
+        console.error('Error: --max requires a positive integer.');
+        process.exit(1);
+      }
+      const num = parseInt(rawNum, 10);
+      if (num <= 0) {
         console.error('Error: --max requires a positive integer.');
         process.exit(1);
       }
@@ -1135,13 +1176,31 @@ export function cmdExport(knowledgeDir: string, args: string[]): void {
       });
     } else if (process.platform === 'win32') {
       const escapedTarget = targetPath.replace(/'/g, "''");
+      const escapedKd = canonicalKd.replace(/'/g, "''");
       const escapedOutputPath = outputPath.replace(/'/g, "''");
+      const escapedRelName = relName.replace(/'/g, "''");
+      if (fs.existsSync(outputPath)) {
+        fs.unlinkSync(outputPath);
+      }
       result = spawnSync(
         'powershell',
         [
           '-NoProfile',
           '-Command',
-          `$ProgressPreference = 'SilentlyContinue'; Compress-Archive -LiteralPath '${escapedTarget}' -DestinationPath '${escapedOutputPath}' -Force`,
+          `Add-Type -AssemblyName System.IO.Compression, System.IO.Compression.FileSystem; ` +
+            `$zip = [System.IO.Compression.ZipFile]::Open('${escapedOutputPath}', [System.IO.Compression.ZipArchiveMode]::Create); ` +
+            `try { ` +
+            `  $target = Get-Item -LiteralPath '${escapedTarget}' -Force; ` +
+            `  if ($target -is [System.IO.FileInfo]) { ` +
+            `    [System.IO.Compression.ZipFileExtensions]::CreateEntryFromFile($zip, $target.FullName, '${escapedRelName}') | Out-Null ` +
+            `  } else { ` +
+            `    $files = Get-ChildItem -LiteralPath '${escapedTarget}' -Recurse -File -Force; ` +
+            `    foreach ($f in $files) { ` +
+            `      $sub = $f.FullName.Substring('${escapedKd}'.Length).TrimStart('\\', '/').Replace('\\', '/'); ` +
+            `      [System.IO.Compression.ZipFileExtensions]::CreateEntryFromFile($zip, $f.FullName, $sub) | Out-Null ` +
+            `    } ` +
+            `  } ` +
+            `} finally { $zip.Dispose() }`,
         ],
         { stdio: 'pipe', encoding: 'utf-8' }
       );
@@ -1298,6 +1357,7 @@ export function cmdImport(knowledgeDir: string, args: string[]): void {
       originArchive: archivePath,
       extractDir,
       defaultTrusted: trusted,
+      isExplicitDir: true,
     });
 
     // Replace transient temp extraction path in registry with archive origin & safe trust state (robust fallback)

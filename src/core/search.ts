@@ -54,14 +54,14 @@ function scoreField(haystackLower: string, termLower: string, fullWeight: number
 
 export function searchScore(doc: DocEntry, queryTerms: string[]): number {
   let score = 0;
-  const titleLower = (doc.title || '').toLowerCase();
-  const descLower = (doc.description || '').toLowerCase();
-  const tagsLower = (doc.tags || []).join(' ').toLowerCase();
-  const aliasesLower = (doc.aliases || []).join(' ').toLowerCase();
-  const nameLower = (doc.name || '').toLowerCase();
-  const sectionsLower = (doc.sections || []).join(' ').toLowerCase();
-  const modulesLower = (doc.modules || []).join(' ').toLowerCase();
-  const typeLower = (doc.type || '').toLowerCase();
+  const titleLower = String(doc.title || '').toLowerCase();
+  const descLower = String(doc.description || '').toLowerCase();
+  const tagsLower = (doc.tags || []).map(String).join(' ').toLowerCase();
+  const aliasesLower = (doc.aliases || []).map(String).join(' ').toLowerCase();
+  const nameLower = String(doc.name || '').toLowerCase();
+  const sectionsLower = (doc.sections || []).map(String).join(' ').toLowerCase();
+  const modulesLower = (doc.modules || []).map(String).join(' ').toLowerCase();
+  const typeLower = String(doc.type || '').toLowerCase();
   const extras = getSearchExtras(doc);
 
   for (const term of queryTerms) {

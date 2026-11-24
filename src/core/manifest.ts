@@ -157,16 +157,37 @@ export function validateManifestUnitDir(
     return { errors, warnings };
   }
 
-  if (!manifest.name) errors.push('Missing required field: name');
-  if (!manifest.version) errors.push('Missing required field: version');
+  if (manifest.name === undefined || manifest.name === null) {
+    errors.push('Missing required field: name');
+  } else if (typeof manifest.name !== 'string' || manifest.name.trim().length === 0) {
+    errors.push('Field "name" must be a non-empty string');
+  }
+
+  if (manifest.version === undefined || manifest.version === null) {
+    errors.push('Missing required field: version');
+  } else if (typeof manifest.version !== 'string' || manifest.version.trim().length === 0) {
+    errors.push('Field "version" must be a non-empty string');
+  }
+
   if (manifest.type === undefined || manifest.type === null) {
     errors.push('Missing required field: type');
   } else if (typeof manifest.type !== 'string' || manifest.type.trim().length === 0) {
     errors.push('Field "type" must be a non-empty string');
   }
-  if (!manifest.description) errors.push('Missing required field: description');
 
-  if (!ctx.allowAnyName && manifest.name && manifest.name !== expectedName && manifest.name !== folderBase) {
+  if (manifest.description === undefined || manifest.description === null) {
+    errors.push('Missing required field: description');
+  } else if (typeof manifest.description !== 'string' || manifest.description.trim().length === 0) {
+    errors.push('Field "description" must be a non-empty string');
+  }
+
+  if (
+    !ctx.allowAnyName &&
+    typeof manifest.name === 'string' &&
+    manifest.name &&
+    manifest.name !== expectedName &&
+    manifest.name !== folderBase
+  ) {
     errors.push(`manifest.name "${manifest.name}" does not match folder name "${expectedName}"`);
   }
 

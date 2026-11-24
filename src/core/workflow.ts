@@ -391,7 +391,14 @@ function executePatchStep(
       return;
     }
     existing = fs.readFileSync(targetPath, 'utf-8');
-  } else if (dryRun && results.files_created.includes(targetPath)) {
+  } else if (
+    dryRun &&
+    results.files_created.some((f) =>
+      process.platform === 'win32'
+        ? f.toLowerCase() === targetPath.toLowerCase()
+        : f === targetPath
+    )
+  ) {
     if (!results.files_patched) results.files_patched = [];
     results.files_patched.push(targetPath);
     return;
