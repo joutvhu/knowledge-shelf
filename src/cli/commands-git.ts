@@ -11,11 +11,14 @@ import {
   checkFilePublishHygiene,
   checkUnitPublishHygiene,
   expandHome,
+  extractTitle,
   findManifestFolders,
   findMdFiles,
   isReservedPath,
   isSafeUnitSegment,
   loadManifest,
+  normalizeListField,
+  parseFrontmatter,
   resolveInsideDir,
   stripBom,
   validateManifestUnitDir,
@@ -314,7 +317,10 @@ export function cmdAdd(knowledgeDir: string, args: string[]): void {
   }
 
   const repoName = deriveNameFromUrl(url);
-  const cloneTarget = getCloneTarget(knowledgeDir, repoName);
+  const cloneTarget = getCloneTarget(
+    knowledgeDir,
+    `${repoName}-${process.pid}-${Date.now()}-${++stageSeq}`
+  );
   const isRootSubPath = subPath === '.' || subPath === './';
 
   console.log(`Cloning ${url}${ref ? ` (ref: ${ref})` : ''}...`);
@@ -944,7 +950,10 @@ export function cmdUpdate(knowledgeDir: string, args: string[]): void {
     const url = first.url;
     const branch = first.branch;
     const repoName = deriveNameFromUrl(url);
-    const cloneTarget = getCloneTarget(knowledgeDir, repoName);
+    const cloneTarget = getCloneTarget(
+      knowledgeDir,
+      `${repoName}-${process.pid}-${Date.now()}-${++stageSeq}`
+    );
 
     // Check remote HEAD/branch SHA before cloning when all entries in group exist on disk
     const remoteSha = gitLsRemote(url, branch ? `refs/heads/${branch}` : 'HEAD');
@@ -1090,7 +1099,10 @@ export function cmdPin(knowledgeDir: string, args: string[]): void {
     }
     fs.mkdirSync(getCacheDir(knowledgeDir), { recursive: true });
     const repoName = deriveNameFromUrl(source.url);
-    const cloneTarget = getCloneTarget(knowledgeDir, `${repoName}-pin`);
+    const cloneTarget = getCloneTarget(
+      knowledgeDir,
+      `${repoName}-pin-${process.pid}-${Date.now()}-${++stageSeq}`
+    );
     let installFailed = false;
     let checkoutError: Error | null = null;
 
@@ -1364,7 +1376,10 @@ export function cmdSync(knowledgeDir: string, args: string[]): void {
   for (const [, group] of groups) {
     const sample = group[0];
     const requestedRef = sample.pin || sample.ref || sample.branch || '';
-    const cloneTarget = getCloneTarget(knowledgeDir, `${deriveNameFromUrl(sample.url)}-sync`);
+    const cloneTarget = getCloneTarget(
+      knowledgeDir,
+      `${deriveNameFromUrl(sample.url)}-sync-${process.pid}-${Date.now()}-${++stageSeq}`
+    );
 
     try {
       removeDirSync(cloneTarget);
@@ -1619,6 +1634,41 @@ export function cmdIndex(args: string[]): void {
       ...(Array.isArray(m?.tags) && m.tags.length > 0 ? { tags: m.tags } : {}),
     };
   });
+
+  const hasRootManifest = fs.existsSync(path.join(targetDir, 'manifest.json'));
+  const standaloneMds = hasRootManifest
+    ? []
+    : findMdFiles(targetDir).filter((md) => {
+        const rmd = path.resolve(md);
+        return !folders.some((mf) => {
+          const rmf = path.resolve(mf);
+          return rmd === rmf || rmd.startsWith(rmf + path.sep);
+        });
+      });
+
+  for (const mdFile of standaloneMds) {
+    const rel = path.relative(targetDir, mdFile).replace(/\\/g, '/');
+    let description: string | undefined;
+    let tags: string[] | undefined;
+    try {
+      const content = fs.readFileSync(mdFile, 'utf-8');
+      const { metadata } = parseFrontmatter(content);
+      if (typeof metadata.description === 'string' && metadata.description.trim()) {
+        description = metadata.description.trim();
+      }
+      const rawTags = normalizeListField(metadata, 'tags', 'keywords');
+      if (rawTags.length > 0) tags = rawTags;
+    } catch {
+      /* ignore read failure */
+    }
+    units.push({
+      name: rel,
+      path: rel,
+      type: 'standalone',
+      ...(description ? { description } : {}),
+      ...(tags && tags.length > 0 ? { tags } : {}),
+    });
+  }
 
   const catalog: ShelfCatalog = {
     $schema: 'https://raw.githubusercontent.com/joutvhu/knowledge-shelf/main/schemas/shelf-v1.schema.json',
@@ -2164,7 +2214,13 @@ export function cmdPublish(knowledgeDir: string, args: string[]): void {
   const version = manifest?.version || '1.0.0';
   const targetBranch = branchName || `knowledge/${unitName}-${version}`;
   const isRootSubpath = subPath === '.' || subPath === './';
-  const destSubpath = isRootSubpath ? undefined : (subPath || unitName);
+  const isContainerDir = Boolean(subPath && subPath.endsWith('/'));
+  const cleanSubPath = subPath.replace(/\/+$/, '');
+  const destSubpath = isRootSubpath
+    ? undefined
+    : isContainerDir
+      ? (cleanSubPath ? `${cleanSubPath}/${unitName}` : unitName)
+      : (cleanSubPath || unitName);
   const msg = commitMessage || `chore(knowledge): publish ${unitName} v${version}`;
 
   try {

@@ -140,8 +140,9 @@ export function cmdList(primaryDir: string, knowledgeDirs: string[], args: strin
         const reg = loadRegistry(d, { exitOnError: isSinglePrimary });
         layerSources.set(d, reg.sources);
         for (const s of reg.sources) {
-          if (!trackedNames.has(s.name)) {
-            trackedNames.add(s.name);
+          const trackKey = process.platform === 'win32' ? s.name.toLowerCase() : s.name;
+          if (!trackedNames.has(trackKey)) {
+            trackedNames.add(trackKey);
             allSources.push({ source: s, layerDir: dirs.length > 1 ? d : undefined });
           }
         }
@@ -1178,7 +1179,7 @@ export function cmdExport(knowledgeDir: string, args: string[]): void {
     fs.mkdirSync(path.dirname(outputPath), { recursive: true });
     let result: ReturnType<typeof spawnSync>;
     if (format === 'tar') {
-      result = spawnSync('tar', ['-czf', outputPath, '-C', knowledgeDir, '--', relName], {
+      result = spawnSync('tar', ['-czf', outputPath, '-C', canonicalKd, '--', relName], {
         stdio: 'pipe',
         encoding: 'utf-8',
       });
