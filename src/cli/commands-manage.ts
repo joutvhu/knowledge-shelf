@@ -219,7 +219,24 @@ export function cmdList(primaryDir: string, knowledgeDirs: string[], args: strin
   );
 }
 
-export function cmdRemove(knowledgeDir: string, args: string[]): void {
+export function cmdRemove(
+  primaryDir: string,
+  dirsOrArgs: string[] | string,
+  maybeArgs?: string[]
+): void {
+  let knowledgeDirs: string[];
+  let args: string[];
+  if (Array.isArray(dirsOrArgs) && maybeArgs !== undefined) {
+    knowledgeDirs = dirsOrArgs;
+    args = maybeArgs;
+  } else if (typeof dirsOrArgs === 'string' && maybeArgs !== undefined) {
+    knowledgeDirs = [dirsOrArgs];
+    args = maybeArgs;
+  } else {
+    knowledgeDirs = [primaryDir];
+    args = Array.isArray(dirsOrArgs) ? dirsOrArgs : [];
+  }
+
   rejectUnknownFlags(args, 'remove');
   let name = (args[0] || '').trim().replace(/[\\/]+$/, '');
 
@@ -232,13 +249,14 @@ export function cmdRemove(knowledgeDir: string, args: string[]): void {
     process.exit(1);
   }
 
-  let destDir = resolveSafeUnitDir(knowledgeDir, name);
-  let registry = loadRegistry(knowledgeDir);
+  let targetKnowledgeDir = primaryDir;
+  let destDir = resolveSafeUnitDir(targetKnowledgeDir, name);
+  let registry = loadRegistry(targetKnowledgeDir);
   let idx = registry.sources.findIndex((s) => isSameUnitName(s.name, name));
 
   if (idx === -1 && !name.toLowerCase().endsWith('.md')) {
     const mdName = `${name}.md`;
-    const mdCandidate = resolveSafeUnitDir(knowledgeDir, mdName);
+    const mdCandidate = resolveSafeUnitDir(targetKnowledgeDir, mdName);
     const mdIdx = registry.sources.findIndex((s) => isSameUnitName(s.name, mdName));
     if (mdIdx !== -1 || fs.existsSync(mdCandidate)) {
       name = mdName;
@@ -247,8 +265,31 @@ export function cmdRemove(knowledgeDir: string, args: string[]): void {
     }
   }
 
+  // If not tracked in primaryDir, check if it's tracked in another layer's registry
+  if (idx === -1 && knowledgeDirs.length > 1) {
+    for (const kDir of knowledgeDirs) {
+      if (kDir === primaryDir || !fs.existsSync(kDir) || !fs.existsSync(getRegistryPath(kDir))) continue;
+      const otherReg = loadRegistry(kDir);
+      let otherIdx = otherReg.sources.findIndex((s) => isSameUnitName(s.name, name));
+      if (otherIdx === -1 && !name.toLowerCase().endsWith('.md')) {
+        const mdName = `${name}.md`;
+        otherIdx = otherReg.sources.findIndex((s) => isSameUnitName(s.name, mdName));
+        if (otherIdx !== -1) {
+          name = mdName;
+        }
+      }
+      if (otherIdx !== -1) {
+        targetKnowledgeDir = kDir;
+        destDir = resolveSafeUnitDir(targetKnowledgeDir, name);
+        registry = otherReg;
+        idx = otherIdx;
+        break;
+      }
+    }
+  }
+
   if (idx === -1) {
-    const canonicalKd = fs.existsSync(knowledgeDir) ? fs.realpathSync(knowledgeDir) : path.resolve(knowledgeDir);
+    const canonicalKd = fs.existsSync(targetKnowledgeDir) ? fs.realpathSync(targetKnowledgeDir) : path.resolve(targetKnowledgeDir);
     const topSegment = path.relative(canonicalKd, destDir).split(path.sep)[0];
     if (topSegment.startsWith('.')) {
       console.error(`Error: '${name}' is a reserved path and cannot be removed.`);
@@ -267,7 +308,7 @@ export function cmdRemove(knowledgeDir: string, args: string[]): void {
 
   const matchedName = registry.sources[idx].name;
   removeDirSync(destDir);
-  mutateRegistry(knowledgeDir, (reg) => {
+  mutateRegistry(targetKnowledgeDir, (reg) => {
     const targetIdx = reg.sources.findIndex((s) => isSameUnitName(s.name, matchedName));
     if (targetIdx !== -1) {
       reg.sources.splice(targetIdx, 1);
@@ -1305,7 +1346,7 @@ export function cmdExport(
       }
       result = spawnSync(
         'zip',
-        ['-r', outputPath, '--', relName, '-x', '*.git/*', '*/.git/*', '*.git', '*/.git'],
+        ['-r', outputPath, relName, '-x', '*.git/*', '*/.git/*', '*.git', '*/.git'],
         {
           cwd: canonicalKd,
           stdio: 'pipe',

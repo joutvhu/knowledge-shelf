@@ -82,6 +82,11 @@ describe('Bug fixes v1.2.7 regression tests', () => {
         { encoding: 'utf-8' }
       );
       expect(inspectRes.stdout).not.toContain('.git');
+    } else {
+      const inspectRes = spawnSync('unzip', ['-Z1', zipOut], { encoding: 'utf-8' });
+      if (inspectRes.status === 0 && inspectRes.stdout) {
+        expect(inspectRes.stdout).not.toContain('.git');
+      }
     }
 
     const tarOut = path.join(tmpDir, 'git-unit.tar.gz');
@@ -429,5 +434,36 @@ describe('Bug fixes v1.2.7 regression tests', () => {
     expect(resOk.isError).toBeFalsy();
     expect(fs.existsSync(path.join(outDir, 'out', 'my-file.txt'))).toBe(true);
     expect(fs.existsSync(path.join(outDir, 'out', 'ignored.bak'))).toBe(false);
+  });
+
+  it('14. cmdRemove removes tracked unit across layers when primaryDir has no registry', () => {
+    const layer1 = path.join(tmpDir, 'rem-layer1');
+    const layer2 = path.join(tmpDir, 'rem-layer2');
+    fs.mkdirSync(layer1, { recursive: true });
+    fs.mkdirSync(layer2, { recursive: true });
+
+    // Initialize registry only in layer2
+    runCli(['init', '--dir', layer2, '--no-global']);
+
+    // Install unit into layer2
+    const draftUnit = path.join(tmpDir, 'rem-draft');
+    fs.mkdirSync(draftUnit, { recursive: true });
+    fs.writeFileSync(
+      path.join(draftUnit, 'manifest.json'),
+      JSON.stringify({ name: 'layer2-unit', version: '1.0.0', type: 'boilerplate', description: 'desc' })
+    );
+    const instRes = runCli(['install', draftUnit, '--dir', layer2]);
+    expect(instRes.status).toBe(0);
+    expect(fs.existsSync(path.join(layer2, 'layer2-unit', 'manifest.json'))).toBe(true);
+
+    // Call remove with layer1 as primaryDir and layer2 as fallback layer
+    const rmRes = runCli(['remove', 'layer2-unit', '--dir', layer1, '--dir', layer2, '--no-global']);
+    expect(rmRes.status).toBe(0);
+    expect(rmRes.stdout).toContain("✓ Removed 'layer2-unit'");
+    expect(fs.existsSync(path.join(layer2, 'layer2-unit'))).toBe(false);
+
+    // Verify removed from layer2 registry
+    const regAfter = JSON.parse(fs.readFileSync(path.join(layer2, '.registry.json'), 'utf-8'));
+    expect(regAfter.sources.some((s: any) => s.name === 'layer2-unit')).toBe(false);
   });
 });
