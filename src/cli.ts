@@ -26,7 +26,30 @@ import {
   cmdSearch,
   cmdTrust,
   cmdValidate,
+  rejectUnknownFlags,
 } from './cli/commands-manage.js';
+
+const VAL_OPTIONS = new Set([
+  '-m',
+  '--message',
+  '--name',
+  '--path',
+  '--ref',
+  '--pack',
+  '--output',
+  '-o',
+  '--type',
+  '-t',
+  '--branch',
+  '--to',
+  '--file',
+  '-f',
+  '--unit',
+  '-u',
+  '--tag',
+  '--tags',
+  '--max',
+]);
 
 function printHelp(): void {
   console.log(`
@@ -140,6 +163,15 @@ export function runCli(rawArgs: string[]): void {
       includeGlobal = false;
     } else if (arg === '--read-only' || arg === '--strict-trust') {
       // Allowed global MCP flags ignored for CLI subcommands
+    } else if (arg.startsWith('--') && arg.includes('=')) {
+      const eqIdx = arg.indexOf('=');
+      const opt = arg.slice(0, eqIdx);
+      const val = arg.slice(eqIdx + 1);
+      if (VAL_OPTIONS.has(opt)) {
+        args.push(opt, val);
+      } else {
+        args.push(arg);
+      }
     } else {
       args.push(arg);
     }
@@ -147,33 +179,12 @@ export function runCli(rawArgs: string[]): void {
 
   const command = args[0];
 
-  const valOptions = new Set([
-    '-m',
-    '--message',
-    '--name',
-    '--path',
-    '--ref',
-    '--pack',
-    '--output',
-    '-o',
-    '--type',
-    '-t',
-    '--branch',
-    '--to',
-    '--file',
-    '-f',
-    '--unit',
-    '-u',
-    '--tag',
-    '--tags',
-    '--max',
-  ]);
   const wantsHelp =
     !command ||
     command === 'help' ||
     command === '--help' ||
     command === '-h' ||
-    args.some((arg, idx) => (arg === '--help' || arg === '-h') && !valOptions.has(args[idx - 1]));
+    args.some((arg, idx) => (arg === '--help' || arg === '-h') && !VAL_OPTIONS.has(args[idx - 1]));
 
   if (wantsHelp) {
     printHelp();
@@ -256,6 +267,11 @@ export function runCli(rawArgs: string[]): void {
     case 'version':
     case '--version':
     case '-v':
+      rejectUnknownFlags(args.slice(1), 'version');
+      if (args.length > 1) {
+        console.error(`Error: Unexpected argument '${args[1]}'.`);
+        process.exit(1);
+      }
       console.log(getPackageVersion());
       break;
     case 'help':

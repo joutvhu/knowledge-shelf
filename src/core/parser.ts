@@ -129,7 +129,11 @@ export function loadManifest(folder: string): Manifest | null {
   if (!fs.existsSync(manifestPath)) return null;
   try {
     const content = fs.readFileSync(manifestPath, 'utf-8');
-    return JSON.parse(content) as Manifest;
+    const parsed = JSON.parse(content);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      return null;
+    }
+    return parsed as Manifest;
   } catch {
     return null;
   }

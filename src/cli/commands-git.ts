@@ -347,27 +347,41 @@ export function cmdAdd(knowledgeDir: string, args: string[]): void {
       sourceSubPath: string | undefined,
       syncName: boolean
     ): 'installed' | 'skipped' | 'invalid' => {
+      const isFile = fs.statSync(sourceDir).isFile();
       const destDir = resolveSafeUnitDir(knowledgeDir, unitName);
       const existing = registry.sources.find((s) => s.name === unitName);
       if ((existing || fs.existsSync(destDir)) && !force) {
         return 'skipped';
       }
 
-      const stageDir = getCloneTarget(knowledgeDir, `.add-stage-${process.pid}-${Date.now()}-${++stageSeq}`);
-      removeDirSync(stageDir);
-      try {
-        copyDirSync(sourceDir, stageDir);
-        if (syncName) {
-          syncManifestName(stageDir, unitName);
+      if (isFile) {
+        if (!noVerify && sourceDir.toLowerCase().endsWith('.md')) {
+          const { errors, warnings } = validateStandaloneMdFile(sourceDir);
+          printValidationResults(unitName, errors, warnings);
+          if (errors.length > 0) {
+            console.error(`Error: Validation failed for '${unitName}'. Use --no-verify to bypass.`);
+            return 'invalid';
+          }
         }
-        if (!validateStagedDirectory(stageDir, unitName, noVerify)) {
-          console.error(`Error: Validation failed for '${unitName}'. Use --no-verify to bypass.`);
-          removeDirSync(stageDir);
-          return 'invalid';
-        }
-        replaceDirSync(knowledgeDir, stageDir, destDir);
-      } finally {
+        fs.mkdirSync(path.dirname(destDir), { recursive: true });
+        fs.copyFileSync(sourceDir, destDir);
+      } else {
+        const stageDir = getCloneTarget(knowledgeDir, `.add-stage-${process.pid}-${Date.now()}-${++stageSeq}`);
         removeDirSync(stageDir);
+        try {
+          copyDirSync(sourceDir, stageDir);
+          if (syncName) {
+            syncManifestName(stageDir, unitName);
+          }
+          if (!validateStagedDirectory(stageDir, unitName, noVerify)) {
+            console.error(`Error: Validation failed for '${unitName}'. Use --no-verify to bypass.`);
+            removeDirSync(stageDir);
+            return 'invalid';
+          }
+          replaceDirSync(knowledgeDir, stageDir, destDir);
+        } finally {
+          removeDirSync(stageDir);
+        }
       }
 
       const now = new Date().toISOString();
@@ -388,7 +402,9 @@ export function cmdAdd(knowledgeDir: string, args: string[]): void {
 
       installedEntries.push(entry);
       recordInstalledSource(registry, entry);
-      printSecurityNotice(unitName, destDir);
+      if (!isFile) {
+        printSecurityNotice(unitName, destDir);
+      }
       return 'installed';
     };
 
@@ -464,17 +480,15 @@ export function cmdAdd(knowledgeDir: string, args: string[]): void {
     }
 
     const hasRootManifest = fs.existsSync(path.join(baseDir, 'manifest.json'));
-    const topLevelMds = hasRootManifest
+    const standaloneMds = hasRootManifest
       ? []
-      : fs
-          .readdirSync(baseDir, { withFileTypes: true })
-          .filter(
-            (e) =>
-              e.isFile() &&
-              e.name.toLowerCase().endsWith('.md') &&
-              e.name.toLowerCase() !== 'readme.md'
-          )
-          .map((e) => path.join(baseDir, e.name));
+      : findMdFiles(baseDir).filter((md) => {
+          const rmd = path.resolve(md);
+          return !manifestFolders.some((mf) => {
+            const rmf = path.resolve(mf);
+            return rmd === rmf || rmd.startsWith(rmf + path.sep);
+          });
+        });
 
     let installed = 0;
     let skipped = 0;
@@ -503,8 +517,8 @@ export function cmdAdd(knowledgeDir: string, args: string[]): void {
       }
     }
 
-    for (const mdFile of topLevelMds) {
-      const docName = path.basename(mdFile);
+    for (const mdFile of standaloneMds) {
+      const docName = path.relative(baseDir, mdFile).replace(/\\/g, '/');
       const destFile = resolveSafeUnitDir(knowledgeDir, docName);
       const existing = registry.sources.find((s) => s.name === docName);
       if ((existing || fs.existsSync(destFile)) && !force) {
@@ -520,6 +534,7 @@ export function cmdAdd(knowledgeDir: string, args: string[]): void {
           continue;
         }
       }
+      fs.mkdirSync(path.dirname(destFile), { recursive: true });
       fs.copyFileSync(mdFile, destFile);
       const sourcePath = path.relative(cloneTarget, mdFile).replace(/\\/g, '/');
       const now = new Date().toISOString();
@@ -2147,6 +2162,17 @@ export function cmdPublish(knowledgeDir: string, args: string[]): void {
       populateClone: (destInRepo) => {
         if (destSubpath) {
           removeDirSync(destInRepo);
+        } else {
+          const entries = fs.readdirSync(destInRepo, { withFileTypes: true });
+          for (const entry of entries) {
+            if (entry.name === '.git' || entry.name === 'shelf.json') continue;
+            const full = path.join(destInRepo, entry.name);
+            if (entry.isDirectory()) {
+              removeDirSync(full);
+            } else {
+              fs.unlinkSync(full);
+            }
+          }
         }
         copyDirSync(unitDir, destInRepo);
         syncManifestName(destInRepo, destSubpath ? path.basename(destInRepo) : unitName);

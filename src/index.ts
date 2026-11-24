@@ -83,6 +83,11 @@ async function main() {
   const first = rest[0];
 
   if (first === 'version' || first === '--version' || first === '-v') {
+    if (rest.length > 1) {
+      const { runCli } = await import('./cli.js');
+      runCli(rawArgs);
+      return;
+    }
     console.log(getPackageVersion());
     return;
   }

@@ -84,39 +84,33 @@ function dedupDirs(dirs: string[]): string[] {
   return out;
 }
 
-function findWalkUpRegistryDir(startDir: string): string | null {
+function findWalkUpCandidates(startDir: string, includeProjectLocal = true): string[] {
+  const dirs: string[] = [];
   let current = path.resolve(startDir);
   while (true) {
-    if (fs.existsSync(path.join(current, '.registry.json'))) {
-      return current;
-    }
     const agentsCandidate = path.join(current, '.agents', 'knowledges');
-    if (fs.existsSync(path.join(agentsCandidate, '.registry.json'))) {
-      return agentsCandidate;
-    }
-    const candidate = path.join(current, 'knowledge');
-    if (fs.existsSync(path.join(candidate, '.registry.json'))) {
-      return candidate;
-    }
-    const parent = path.dirname(current);
-    if (parent === current) break;
-    current = parent;
-  }
-  return null;
-}
+    const hasAgents = fs.existsSync(agentsCandidate) && fs.statSync(agentsCandidate).isDirectory();
+    const hasReg = fs.existsSync(path.join(current, '.registry.json'));
+    const hasAgentsReg = hasAgents && fs.existsSync(path.join(agentsCandidate, '.registry.json'));
+    const candidateKnowledge = path.join(current, 'knowledge');
+    const hasKnowledgeReg = fs.existsSync(path.join(candidateKnowledge, '.registry.json'));
 
-function findWalkUpAgentsKnowledgeDir(startDir: string): string | null {
-  let current = path.resolve(startDir);
-  while (true) {
-    const candidate = path.join(current, '.agents', 'knowledges');
-    if (fs.existsSync(candidate) && fs.statSync(candidate).isDirectory()) {
-      return candidate;
+    if (includeProjectLocal && hasAgents) {
+      dirs.push(agentsCandidate);
     }
+    if (hasReg) {
+      dirs.push(current);
+    } else if (hasAgentsReg) {
+      dirs.push(agentsCandidate);
+    } else if (hasKnowledgeReg) {
+      dirs.push(candidateKnowledge);
+    }
+
     const parent = path.dirname(current);
     if (parent === current) break;
     current = parent;
   }
-  return null;
+  return dirs;
 }
 
 /**
@@ -136,9 +130,8 @@ export function resolveKnowledgeDir(explicitDir?: string): string {
   } else if (process.env.KNOWLEDGE_DIR) {
     resolved = path.resolve(expandHome(process.env.KNOWLEDGE_DIR));
   } else {
-    const agentsLocal = findWalkUpAgentsKnowledgeDir(process.cwd());
-    const registryDir = findWalkUpRegistryDir(process.cwd());
-    resolved = agentsLocal ? agentsLocal : registryDir ? registryDir : getDefaultGlobalKnowledgeDir();
+    const candidates = findWalkUpCandidates(process.cwd(), true);
+    resolved = candidates.length > 0 ? candidates[0] : getDefaultGlobalKnowledgeDir();
   }
 
   try {
@@ -197,13 +190,8 @@ export function resolveKnowledgeDirs(
   }
 
   const dirs: string[] = [];
-  if (options.includeProjectLocal !== false) {
-    const agentsLocal = findWalkUpAgentsKnowledgeDir(process.cwd());
-    if (agentsLocal) dirs.push(agentsLocal);
-  }
-
-  const registryDir = findWalkUpRegistryDir(process.cwd());
-  if (registryDir) dirs.push(registryDir);
+  const candidates = findWalkUpCandidates(process.cwd(), options.includeProjectLocal !== false);
+  dirs.push(...candidates);
 
   if (options.includeGlobal !== false) {
     if (dirs.length === 0 || fs.existsSync(globalDir)) {

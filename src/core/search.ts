@@ -52,7 +52,7 @@ function scoreField(haystackLower: string, termLower: string, fullWeight: number
   return 0;
 }
 
-export function searchScore(doc: DocEntry, queryTerms: string[]): number {
+export function searchScore(doc: DocEntry, queryTerms: string[], applyDeprecation = true): number {
   let score = 0;
   const titleLower = String(doc.title || '').toLowerCase();
   const descLower = String(doc.description || '').toLowerCase();
@@ -85,7 +85,7 @@ export function searchScore(doc: DocEntry, queryTerms: string[]): number {
     }
   }
 
-  if (score > 0 && doc.status === 'deprecated') {
+  if (applyDeprecation && score > 0 && doc.status === 'deprecated') {
     score = Math.max(1, Math.floor(score * 0.4));
   }
 
@@ -163,7 +163,7 @@ export function rankDocuments(
       if (!filterTags.every((t) => docTagSet.has(t))) continue;
     }
 
-    let score = queryTerms.length === 0 ? 1 : searchScore(doc, queryTerms);
+    let score = queryTerms.length === 0 ? 1 : searchScore(doc, queryTerms, false);
     const extras = getSearchExtras(doc);
     const contentSnippets: string[] = [];
 
@@ -196,6 +196,10 @@ export function rankDocuments(
           }
         }
       }
+    }
+
+    if (score > 0 && doc.status === 'deprecated') {
+      score = Math.max(1, Math.floor(score * 0.4));
     }
 
     if (score <= 0) continue;

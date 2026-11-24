@@ -633,6 +633,18 @@ export function toolGetManifest(knowledgeDirs: string | string[], name: string):
     try {
       const content = fs.readFileSync(manifestPath, 'utf-8');
       const manifest = JSON.parse(content) as Record<string, unknown>;
+      if (!isRecord(manifest)) {
+        return {
+          text: JSON.stringify(
+            {
+              error: `Invalid manifest.json in '${name}': expected a JSON object.`,
+            },
+            null,
+            2
+          ),
+          isError: true,
+        };
+      }
       const copy = { ...manifest };
       copy._directory = folder;
       return { text: JSON.stringify(copy, null, 2) };
@@ -784,6 +796,19 @@ export async function toolRunWorkflow(
   } catch (e) {
     return {
       text: JSON.stringify({ error: `Failed to load workflow: ${e}` }, null, 2),
+      isError: true,
+    };
+  }
+
+  if (!isRecord(workflowDef) || !Array.isArray(workflowDef.steps)) {
+    return {
+      text: JSON.stringify(
+        {
+          error: `Workflow '${workflow}' in '${name}' has invalid definition (must be a JSON object with a "steps" array).`,
+        },
+        null,
+        2
+      ),
       isError: true,
     };
   }

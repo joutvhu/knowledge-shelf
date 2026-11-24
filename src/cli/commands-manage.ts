@@ -863,14 +863,18 @@ export function cmdInstall(
       fail('Install each one individually with --name.');
     }
     const hasRootManifest = fs.existsSync(path.join(resolvedSource, 'manifest.json'));
-    const topLevelMds = hasRootManifest
+    const allMdFiles = findMdFiles(resolvedSource);
+    const standaloneMds = hasRootManifest
       ? []
-      : fs
-          .readdirSync(resolvedSource, { withFileTypes: true })
-          .filter((e) => e.isFile() && e.name.toLowerCase().endsWith('.md') && e.name.toLowerCase() !== 'readme.md')
-          .map((e) => path.join(resolvedSource, e.name));
+      : allMdFiles.filter((md) => {
+          const rmd = path.resolve(md);
+          return !manifestFolders.some((mf) => {
+            const rmf = path.resolve(mf);
+            return rmd === rmf || rmd.startsWith(rmf + path.sep);
+          });
+        });
 
-    if (manifestFolders.length === 0 && topLevelMds.length === 0) {
+    if (manifestFolders.length === 0 && standaloneMds.length === 0) {
       fail(`Error: No knowledge units or standalone .md files found inside '${sourceArg}'.`);
     }
 
@@ -891,8 +895,8 @@ export function cmdInstall(
       printValidationResults(unitName, errors, warnings);
       if (errors.length > 0) validationFailures += errors.length;
     }
-    for (const mdFile of topLevelMds) {
-      const docName = path.basename(mdFile);
+    for (const mdFile of standaloneMds) {
+      const docName = path.relative(resolvedSource, mdFile).replace(/\\/g, '/');
       console.log(`Validating '${docName}'...`);
       const { errors, warnings } = validateStandaloneMdFile(mdFile);
       printValidationResults(docName, errors, warnings);
@@ -932,8 +936,8 @@ export function cmdInstall(
       installed++;
     }
 
-    for (const mdFile of topLevelMds) {
-      const docName = path.basename(mdFile);
+    for (const mdFile of standaloneMds) {
+      const docName = path.relative(resolvedSource, mdFile).replace(/\\/g, '/');
       const destFile = resolveSafeUnitDir(knowledgeDir, docName);
       if (isSamePath(destFile, mdFile)) {
         console.log(`  Skipping '${docName}' (source and destination are the same path)`);
@@ -945,6 +949,7 @@ export function cmdInstall(
         skipped++;
         continue;
       }
+      fs.mkdirSync(path.dirname(destFile), { recursive: true });
       fs.copyFileSync(mdFile, destFile);
       upsertRegistryEntry(docName, mdFile, destFile);
       console.log(`  ✓ Installed '${docName}'`);
@@ -1099,7 +1104,7 @@ export function cmdExport(knowledgeDir: string, args: string[]): void {
   let format = 'zip';
 
   for (let i = 0; i < args.length; i++) {
-    if (args[i] === '--output') {
+    if (args[i] === '--output' || args[i] === '-o') {
       if (i + 1 >= args.length || args[i + 1].startsWith('-')) {
         console.error('Error: --output requires a file path.');
         process.exit(1);
