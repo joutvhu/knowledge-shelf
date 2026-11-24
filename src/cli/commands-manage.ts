@@ -527,6 +527,25 @@ export function cmdValidate(knowledgeDirs: string | string[], args: string[]): v
         knowledgeDir = d;
         break;
       }
+      const manifests = findManifestFolders(d);
+      const hasManifest = manifests.some((mf) => {
+        const rel = path.relative(d, mf).replace(/\\/g, '/');
+        return isSameUnitName(rel, targetArg) || isSameUnitName(path.basename(mf), targetArg);
+      });
+      if (hasManifest) {
+        knowledgeDir = d;
+        break;
+      }
+      const mds = findMdFiles(d);
+      const tNorm = targetArg.toLowerCase().endsWith('.md') ? targetArg : `${targetArg}.md`;
+      const hasMd = mds.some((md) => {
+        const rel = path.relative(d, md).replace(/\\/g, '/');
+        return isSameUnitName(rel, tNorm) || isSameUnitName(path.basename(md), tNorm);
+      });
+      if (hasMd) {
+        knowledgeDir = d;
+        break;
+      }
     }
   }
 
@@ -1116,7 +1135,24 @@ export function cmdSearch(knowledgeDirs: string[], args: string[]): void {
   }
 }
 
-export function cmdExport(knowledgeDir: string, args: string[]): void {
+export function cmdExport(
+  primaryDir: string,
+  dirsOrArgs: string[] | string,
+  maybeArgs?: string[]
+): void {
+  let knowledgeDirs: string[];
+  let args: string[];
+  if (Array.isArray(dirsOrArgs) && maybeArgs !== undefined) {
+    knowledgeDirs = dirsOrArgs;
+    args = maybeArgs;
+  } else if (typeof dirsOrArgs === 'string' && maybeArgs !== undefined) {
+    knowledgeDirs = [dirsOrArgs];
+    args = maybeArgs;
+  } else {
+    knowledgeDirs = [primaryDir];
+    args = Array.isArray(dirsOrArgs) ? dirsOrArgs : [];
+  }
+
   let name = '';
   let outputPath = '';
   let format = 'zip';
@@ -1157,18 +1193,34 @@ export function cmdExport(knowledgeDir: string, args: string[]): void {
     process.exit(1);
   }
 
-  let targetPath = resolveSafeUnitDir(knowledgeDir, name);
-  if (!fs.existsSync(targetPath) && !name.toLowerCase().endsWith('.md')) {
-    const mdCandidate = resolveSafeUnitDir(knowledgeDir, `${name}.md`);
-    if (fs.existsSync(mdCandidate)) targetPath = mdCandidate;
+  let targetPath: string | null = null;
+  let targetKnowledgeDir: string = primaryDir;
+
+  for (const kDir of knowledgeDirs) {
+    if (!fs.existsSync(kDir)) continue;
+    const directCandidate = resolveInsideDir(kDir, name, true);
+    if (directCandidate && fs.existsSync(directCandidate)) {
+      targetPath = directCandidate;
+      targetKnowledgeDir = kDir;
+      break;
+    }
+    if (!name.toLowerCase().endsWith('.md')) {
+      const mdCandidate = resolveInsideDir(kDir, `${name}.md`, true);
+      if (mdCandidate && fs.existsSync(mdCandidate)) {
+        targetPath = mdCandidate;
+        targetKnowledgeDir = kDir;
+        break;
+      }
+    }
   }
 
-  if (!fs.existsSync(targetPath)) {
-    console.error(`Error: '${name}' not found in ${knowledgeDir}`);
+  if (!targetPath) {
+    const displayDir = knowledgeDirs.length > 1 ? knowledgeDirs.join(', ') : primaryDir;
+    console.error(`Error: '${name}' not found in ${displayDir}`);
     process.exit(1);
   }
 
-  const canonicalKd = fs.existsSync(knowledgeDir) ? fs.realpathSync(knowledgeDir) : path.resolve(knowledgeDir);
+  const canonicalKd = fs.existsSync(targetKnowledgeDir) ? fs.realpathSync(targetKnowledgeDir) : path.resolve(targetKnowledgeDir);
   const relName = path.relative(canonicalKd, targetPath).replace(/\\/g, '/');
 
   if (!outputPath) {
@@ -1196,10 +1248,14 @@ export function cmdExport(knowledgeDir: string, args: string[]): void {
     fs.mkdirSync(path.dirname(outputPath), { recursive: true });
     let result: ReturnType<typeof spawnSync>;
     if (format === 'tar') {
-      result = spawnSync('tar', ['-czf', outputPath, '-C', canonicalKd, '--', relName], {
-        stdio: 'pipe',
-        encoding: 'utf-8',
-      });
+      result = spawnSync(
+        'tar',
+        ['--exclude=.git', '--exclude=*/.git', '--exclude=*/.git/*', '-czf', outputPath, '-C', canonicalKd, '--', relName],
+        {
+          stdio: 'pipe',
+          encoding: 'utf-8',
+        }
+      );
     } else if (process.platform === 'win32') {
       const escapedTarget = targetPath.replace(/'/g, "''");
       const escapedKd = canonicalKd.replace(/'/g, "''");
@@ -1220,7 +1276,7 @@ export function cmdExport(knowledgeDir: string, args: string[]): void {
             `  if ($target -is [System.IO.FileInfo]) { ` +
             `    [System.IO.Compression.ZipFileExtensions]::CreateEntryFromFile($zip, $target.FullName, '${escapedRelName}') | Out-Null ` +
             `  } else { ` +
-            `    $files = Get-ChildItem -LiteralPath '${escapedTarget}' -Recurse -File -Force; ` +
+            `    $files = Get-ChildItem -LiteralPath '${escapedTarget}' -Recurse -File -Force | Where-Object { $_.FullName -notmatch '[\\\\/]\\.git([\\\\/]|$)' }; ` +
             `    foreach ($f in $files) { ` +
             `      $sub = $f.FullName.Substring('${escapedKd}'.Length).TrimStart('\\', '/').Replace('\\', '/'); ` +
             `      [System.IO.Compression.ZipFileExtensions]::CreateEntryFromFile($zip, $f.FullName, $sub) | Out-Null ` +
@@ -1234,8 +1290,8 @@ export function cmdExport(knowledgeDir: string, args: string[]): void {
       if (fs.existsSync(outputPath)) {
         fs.unlinkSync(outputPath);
       }
-      result = spawnSync('zip', ['-r', outputPath, '--', relName], {
-        cwd: knowledgeDir,
+      result = spawnSync('zip', ['-r', outputPath, '--', relName, '-x', '*.git*', '*/.git/*'], {
+        cwd: canonicalKd,
         stdio: 'pipe',
         encoding: 'utf-8',
       });

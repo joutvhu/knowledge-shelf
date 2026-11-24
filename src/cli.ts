@@ -169,6 +169,10 @@ export function runCli(rawArgs: string[]): void {
       const opt = arg.slice(0, eqIdx);
       const val = arg.slice(eqIdx + 1);
       if (VAL_OPTIONS.has(opt)) {
+        if (!val) {
+          console.error(`Error: ${opt} requires an argument.`);
+          process.exit(1);
+        }
         args.push(opt, val);
       } else {
         args.push(arg);
@@ -259,7 +263,7 @@ export function runCli(rawArgs: string[]): void {
       cmdTrust(primaryDir, args.slice(1), false);
       break;
     case 'export':
-      cmdExport(primaryDir, args.slice(1));
+      cmdExport(primaryDir, allDirs, args.slice(1));
       break;
     case 'import':
       cmdImport(primaryDir, args.slice(1));

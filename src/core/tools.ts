@@ -19,6 +19,7 @@ import {
   loadManifest,
   parseFrontmatter,
   walkDir,
+  walkUnitFiles,
 } from './parser.js';
 import { SearchOptions, foldDiacritics, rankDocuments } from './search.js';
 import { executeWorkflowSteps } from './workflow.js';
@@ -261,6 +262,22 @@ export function toolGetDoc(knowledgeDirs: string | string[], name: string): Tool
   if (folderErr) return folderErr;
 
   if (manifestFolder) {
+    const manifestPath = path.join(manifestFolder, 'manifest.json');
+    if (fs.existsSync(manifestPath)) {
+      try {
+        const rawManifest = fs.readFileSync(manifestPath, 'utf-8');
+        JSON.parse(stripBom(rawManifest));
+      } catch (e) {
+        return {
+          text: JSON.stringify(
+            { error: `Invalid manifest.json in '${name}': ${e instanceof Error ? e.message : e}` },
+            null,
+            2
+          ),
+          isError: true,
+        };
+      }
+    }
     const manifest = loadManifest(manifestFolder);
     if (manifest) {
       const deprecatedBanner =
@@ -822,6 +839,47 @@ export async function toolRunWorkflow(
     if (!isRecord(raw)) continue;
     collectStepPlaceholders(raw, used);
     if (isRecord(raw.when) && typeof raw.when.input === 'string') used.add(raw.when.input);
+    if (raw.action === 'copy' && typeof raw.source === 'string') {
+      const srcPath = resolveInsideDir(folder, raw.source, true);
+      if (srcPath && fs.existsSync(srcPath) && fs.statSync(srcPath).isFile()) {
+        try {
+          const buf = fs.readFileSync(srcPath);
+          if (!buf.subarray(0, 8192).includes(0)) {
+            const content = buf.toString('utf-8');
+            const phRe = /\{\{([A-Za-z0-9_]+)\}\}/g;
+            let m: RegExpExecArray | null;
+            while ((m = phRe.exec(content)) !== null) {
+              used.add(m[1]);
+            }
+          }
+        } catch {
+          /* skip */
+        }
+      }
+    } else if (raw.action === 'copy_dir' && typeof raw.source === 'string') {
+      const srcDir = resolveInsideDir(folder, raw.source, true);
+      if (srcDir && fs.existsSync(srcDir) && fs.statSync(srcDir).isDirectory()) {
+        try {
+          walkUnitFiles(srcDir, (fp) => {
+            try {
+              const buf = fs.readFileSync(fp);
+              if (!buf.subarray(0, 8192).includes(0)) {
+                const content = buf.toString('utf-8');
+                const phRe = /\{\{([A-Za-z0-9_]+)\}\}/g;
+                let m: RegExpExecArray | null;
+                while ((m = phRe.exec(content)) !== null) {
+                  used.add(m[1]);
+                }
+              }
+            } catch {
+              /* skip */
+            }
+          });
+        } catch {
+          /* skip */
+        }
+      }
+    }
   }
 
   interface PlaceholderDef {

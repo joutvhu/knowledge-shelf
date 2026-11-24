@@ -19,8 +19,18 @@
 - Protected internal dot-prefixed paths (`.registry.json`, `.cache`, `.git`) from removal via `knowledge-shelf remove`.
 - Hygiene scanner enhancements: scanned copy set across dot-prefixed folders and `node_modules`, detecting sensitive files (`.env`, `.env.*`, `.npmrc`, `.netrc`, `.pypirc`, `.secret*`), token patterns (GitHub tokens `ghp_`/`gho_`/`github_pat_`, AWS access key IDs `AKIA...`, Slack tokens `xoxb-`/`xoxp-`, PEM private keys), and hardcoded secret assignments, while safely ignoring placeholder expressions.
 - Prevented credential leakage: scanner warning messages never include raw secret values.
+- Excluded `.git/` directories from exported `.tar.gz` and `.zip` archives created by `cmdExport`.
+- Blocked `publish --path` destinations containing hidden directory segments (e.g. `units/.hidden`).
 
 ### Fixed
+- Fixed `cmdExport` to support multi-layer `--dir` lookup and exclude `.git/` folder and metadata from exported zip and tar archives.
+- Fixed `cmdCatalog` fallback when no `shelf.json` is present to discover nested standalone `.md` files consistently with `cmdAdd --all` and `cmdIndex`.
+- Fixed `cmdValidate` across multiple `--dir` layers to discover and validate units and standalone documents located in subdirectories of subsequent layers.
+- Fixed `toolRunWorkflow` placeholder scanning to inspect template source files in `copy` and `copy_dir` steps, ensuring `manifest.placeholders` with `required: true` or default/pattern rules are enforced even when placeholders are only used within template file contents.
+- Fixed `toolGetDoc` on units with malformed `manifest.json` to return JSON syntax errors instead of reporting the document as not found.
+- Fixed `cmdSync` preserving root path `"."` or `"./"` in `.registry.json` by normalizing it to `undefined` consistently with `cmdAdd`.
+- Fixed `run_workflow` dry-run under `--strict-trust` to include an explicit warning that script execution would be blocked during real execution.
+- Fixed CLI option parsing to reject empty option arguments (e.g. `--type=`) and properly accept commit messages with leading dashes in `publish`.
 - Fixed `resolveKnowledgeDir()` choosing `.agents/knowledges` as the primary writable directory, which broke `knowledge-shelf install ./.agents/knowledges/<name>` with a self-destination error.
 - Fixed `cmdIndex` failing with `ENOENT` when `--output` path targets a non-existent parent directory, and added warnings when duplicate unit names conflict.
 - Fixed `cmdValidate` across multiple `--dir` layers to inspect all configured directories and filter out nested template `manifest.json` files from false validation failures.

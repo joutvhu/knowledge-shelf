@@ -577,12 +577,16 @@ async function executeRunStep(
   }
 
   if (options.dryRun) {
+    const trustNote = options.blockRunReason ? `\n[warning] ${options.blockRunReason}` : '';
     results.scripts_run.push({
       script: scriptRel,
       exit_code: 0,
-      stdout: `[dry-run] Would run: ${normalizedInterp} ${scriptRel} ${args.join(' ')} (cwd: ${cwd})`.trim(),
+      stdout: (`[dry-run] Would run: ${normalizedInterp} ${scriptRel} ${args.join(' ')} (cwd: ${cwd})` + trustNote).trim(),
       stderr: '',
     });
+    if (options.blockRunReason) {
+      results.messages.push(`[strict-trust warning] ${options.blockRunReason}`);
+    }
     return;
   }
 

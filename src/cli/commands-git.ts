@@ -1450,7 +1450,7 @@ export function cmdSync(knowledgeDir: string, args: string[]): void {
         const updatedEntry: RegistryEntry = {
           name: s.name,
           url: s.url,
-          path: s.path,
+          path: s.path && !isRootPath ? s.path : undefined,
           ...(branch ? { branch } : existing?.branch ? { branch: existing.branch } : {}),
           commit,
           ...(fullCommit ? { fullCommit } : {}),
@@ -1555,19 +1555,18 @@ export function cmdCatalog(_knowledgeDir: string, args: string[]): void {
 
     // Fallback: auto-scan manifest.json folders & standalone md files
     const { units: folders } = collectUnitFolders(tmpClone);
-    const topLevelMds = fs.existsSync(path.join(tmpClone, 'manifest.json'))
+    const hasRootManifest = fs.existsSync(path.join(tmpClone, 'manifest.json'));
+    const standaloneMds = hasRootManifest
       ? []
-      : fs
-          .readdirSync(tmpClone, { withFileTypes: true })
-          .filter(
-            (e) =>
-              e.isFile() &&
-              e.name.toLowerCase().endsWith('.md') &&
-              e.name.toLowerCase() !== 'readme.md'
-          )
-          .map((e) => path.join(tmpClone, e.name));
+      : findMdFiles(tmpClone).filter((md) => {
+          const rmd = path.resolve(md);
+          return !folders.some((mf) => {
+            const rmf = path.resolve(mf);
+            return rmd === rmf || rmd.startsWith(rmf + path.sep);
+          });
+        });
 
-    const totalCount = folders.length + topLevelMds.length;
+    const totalCount = folders.length + standaloneMds.length;
     console.log(`\nRepository: ${deriveNameFromUrl(url)} (no shelf.json; discovered ${totalCount} unit(s))\n`);
     for (const f of folders) {
       const m = loadManifest(f);
@@ -1575,9 +1574,9 @@ export function cmdCatalog(_knowledgeDir: string, args: string[]): void {
       console.log(`  ${m?.name || path.basename(f)}  [${m?.type || 'unknown'}]  (path: ${rel})`);
       if (m?.description) console.log(`    ${m.description}`);
     }
-    for (const md of topLevelMds) {
-      const base = path.basename(md);
-      console.log(`  ${base}  [standalone]  (path: ${base})`);
+    for (const md of standaloneMds) {
+      const rel = path.relative(tmpClone, md).replace(/\\/g, '/');
+      console.log(`  ${rel}  [standalone]  (path: ${rel})`);
     }
     console.log('');
   } catch (e) {
@@ -2083,6 +2082,10 @@ export function cmdPublish(knowledgeDir: string, args: string[]): void {
       if (hasTrailing && subPath) {
         subPath += '/';
       }
+      if (subPath && subPath.split(/[\\/]+/).some((seg) => seg && seg !== '.' && seg.startsWith('.'))) {
+        console.error(`Error: Access denied. Destination path contains hidden segment: '${rawSub}'.`);
+        process.exit(1);
+      }
     } else if (args[i] === '--branch') {
       if (i + 1 >= args.length || args[i + 1].startsWith('-')) {
         console.error('Error: --branch requires a branch name.');
@@ -2090,7 +2093,8 @@ export function cmdPublish(knowledgeDir: string, args: string[]): void {
       }
       branchName = args[++i];
     } else if (args[i] === '--message' || args[i] === '-m') {
-      if (i + 1 >= args.length || args[i + 1].startsWith('-')) {
+      const next = args[i + 1];
+      if (i + 1 >= args.length || !next || next === '--push' || next === '--force' || next === '-f' || next === '--to' || next === '--path' || next === '--branch') {
         console.error('Error: --message requires a commit message.');
         process.exit(1);
       }
