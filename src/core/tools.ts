@@ -17,6 +17,7 @@ import {
   findManifestFolders,
   findMdFiles,
   loadManifest,
+  matchesAnyGlob,
   parseFrontmatter,
   walkDir,
   walkUnitFiles,
@@ -858,14 +859,26 @@ export async function toolRunWorkflow(
       }
     } else if (raw.action === 'copy_dir' && typeof raw.source === 'string') {
       const srcDir = resolveInsideDir(folder, raw.source, true);
+      const excludePatterns = Array.isArray(raw.exclude)
+        ? raw.exclude.filter((x): x is string => typeof x === 'string')
+        : [];
+      const renderFilenames = raw.render_filenames !== false;
       if (srcDir && fs.existsSync(srcDir) && fs.statSync(srcDir).isDirectory()) {
         try {
           walkUnitFiles(srcDir, (fp) => {
+            const rel = path.relative(srcDir, fp).replace(/\\/g, '/');
+            if (excludePatterns.length > 0 && matchesAnyGlob(rel, excludePatterns)) return;
+            const phRe = /\{\{([A-Za-z0-9_]+)\}\}/g;
+            if (renderFilenames) {
+              let m: RegExpExecArray | null;
+              while ((m = phRe.exec(rel)) !== null) {
+                used.add(m[1]);
+              }
+            }
             try {
               const buf = fs.readFileSync(fp);
               if (!buf.subarray(0, 8192).includes(0)) {
                 const content = buf.toString('utf-8');
-                const phRe = /\{\{([A-Za-z0-9_]+)\}\}/g;
                 let m: RegExpExecArray | null;
                 while ((m = phRe.exec(content)) !== null) {
                   used.add(m[1]);

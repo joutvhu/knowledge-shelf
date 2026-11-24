@@ -392,11 +392,17 @@ export function cmdInfo(knowledgeDirs: string | string[], args: string[]): void 
 
   const manifestPath = path.join(unitDir, 'manifest.json');
   let manifest: Record<string, unknown> | null = null;
+  let manifestError: string | null = null;
   if (fs.existsSync(manifestPath)) {
     try {
-      manifest = JSON.parse(stripBom(fs.readFileSync(manifestPath, 'utf-8')));
-    } catch {
-      manifest = null;
+      const parsed = JSON.parse(stripBom(fs.readFileSync(manifestPath, 'utf-8')));
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        manifest = parsed;
+      } else {
+        manifestError = 'manifest.json must be a JSON object';
+      }
+    } catch (e) {
+      manifestError = `invalid manifest.json: ${e instanceof Error ? e.message : e}`;
     }
   }
 
@@ -473,6 +479,8 @@ export function cmdInfo(knowledgeDirs: string | string[], args: string[]): void 
     if (Array.isArray(manifest.requires) && manifest.requires.length > 0) {
       console.log(`  Requires:     ${manifest.requires.join(', ')}`);
     }
+  } else if (manifestError) {
+    console.log(`  Type:         invalid manifest (${manifestError})`);
   } else {
     console.log('  Type:         standalone (no manifest.json)');
   }
@@ -1187,6 +1195,11 @@ export function cmdExport(
   }
 
   name = name.trim().replace(/[\\/]+$/, '');
+  const segments = name.split(/[\\/]+/);
+  if (!name || segments.some((seg) => !seg || seg === '.' || seg === '..' || seg.startsWith('.'))) {
+    console.error(`Error: Access denied. '${name}' is a reserved internal path or starts with '.'.`);
+    process.exit(1);
+  }
 
   if (format !== 'zip' && format !== 'tar') {
     console.error(`Error: Unsupported format '${format}'. Use 'zip' or 'tar'.`);
@@ -1199,14 +1212,14 @@ export function cmdExport(
   for (const kDir of knowledgeDirs) {
     if (!fs.existsSync(kDir)) continue;
     const directCandidate = resolveInsideDir(kDir, name, true);
-    if (directCandidate && fs.existsSync(directCandidate)) {
+    if (directCandidate && fs.existsSync(directCandidate) && !isReservedPath(kDir, directCandidate)) {
       targetPath = directCandidate;
       targetKnowledgeDir = kDir;
       break;
     }
     if (!name.toLowerCase().endsWith('.md')) {
       const mdCandidate = resolveInsideDir(kDir, `${name}.md`, true);
-      if (mdCandidate && fs.existsSync(mdCandidate)) {
+      if (mdCandidate && fs.existsSync(mdCandidate) && !isReservedPath(kDir, mdCandidate)) {
         targetPath = mdCandidate;
         targetKnowledgeDir = kDir;
         break;
@@ -1290,11 +1303,15 @@ export function cmdExport(
       if (fs.existsSync(outputPath)) {
         fs.unlinkSync(outputPath);
       }
-      result = spawnSync('zip', ['-r', outputPath, '--', relName, '-x', '*.git*', '*/.git/*'], {
-        cwd: canonicalKd,
-        stdio: 'pipe',
-        encoding: 'utf-8',
-      });
+      result = spawnSync(
+        'zip',
+        ['-r', outputPath, '--', relName, '-x', '*.git/*', '*/.git/*', '*.git', '*/.git'],
+        {
+          cwd: canonicalKd,
+          stdio: 'pipe',
+          encoding: 'utf-8',
+        }
+      );
     }
 
     if (result.error) throw result.error;

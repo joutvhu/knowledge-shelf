@@ -12,7 +12,7 @@
 
 ### Security
 - Enforced strict path containment (`resolveInsideDir`) across `manifest.doc`, case-insensitive document lookups, workflow names, workflow `copy` sources, workflow `copy`/`mkdir` target paths, `.cache/` clone targets, and all CLI commands (`remove`, `add`, `update`, `info`, `export`, `validate`).
-- Blocked reserved, dot-prefixed (`.hidden`, `.cache`, `.registry.json`), and slash-containing unit names in `resolveSafeUnitDir()` and `cmdInstall`.
+- Blocked reserved, dot-prefixed (`.hidden`, `.cache`, `.registry.json`), and slash-containing unit names in `resolveSafeUnitDir()`, `cmdInstall`, and `cmdExport`.
 - Added Zip Slip and Tar Slip traversal protection in `assertSafeArchivePaths` for `import` and `update` archive extraction.
 - Sanitized repository names derived from git URLs (`deriveNameFromUrl`) and verified `.cache/` containment (`getCloneTarget`) so URLs ending in `..`, `.`, or `.git` cannot delete the knowledge directory.
 - Hardened Windows `.cmd`/`.bat` script execution (`isSafeCmdArg`) by rejecting arguments containing `cmd.exe` metacharacters (`" % ! ^ & | < >` or control characters) that could trigger command injection or environment variable expansion (BatBadBut class of issues).
@@ -23,7 +23,11 @@
 - Blocked `publish --path` destinations containing hidden directory segments (e.g. `units/.hidden`).
 
 ### Fixed
-- Fixed `cmdExport` to support multi-layer `--dir` lookup and exclude `.git/` folder and metadata from exported zip and tar archives.
+- Fixed `cmdExport` to support multi-layer `--dir` lookup and exclude `.git/` folder and metadata from exported zip and tar archives without accidentally omitting `.gitignore` or other dotfiles.
+- Fixed `cmdPublish --message` flag validation to correctly reject bare help flags (`-h`, `--help`) while accepting commit messages with leading dashes.
+- Fixed `loadTeamConfig` to validate required `name` and `url` strings on `knowledge-shelf.json` sources to report clear syntax errors rather than crashing.
+- Fixed `toolRunWorkflow` placeholder scanning in `copy_dir` steps to respect `exclude` globs and detect placeholders in template filenames when `render_filenames` is enabled.
+- Fixed `cmdInfo` on units with malformed `manifest.json` to report JSON syntax errors rather than misidentifying the unit as a standalone document without a manifest.
 - Fixed `cmdCatalog` fallback when no `shelf.json` is present to discover nested standalone `.md` files consistently with `cmdAdd --all` and `cmdIndex`.
 - Fixed `cmdValidate` across multiple `--dir` layers to discover and validate units and standalone documents located in subdirectories of subsequent layers.
 - Fixed `toolRunWorkflow` placeholder scanning to inspect template source files in `copy` and `copy_dir` steps, ensuring `manifest.placeholders` with `required: true` or default/pattern rules are enforced even when placeholders are only used within template file contents.

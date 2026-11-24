@@ -328,4 +328,106 @@ describe('Bug fixes v1.2.7 regression tests', () => {
     expect(resMsg.status).toBe(0);
     expect(resMsg.stdout).toContain("Committed 'msg-unit'");
   });
+
+  it('10. cmdExport blocks reserved internal paths and dot-prefixed paths', () => {
+    const kb = path.join(tmpDir, 'kb-sec');
+    runCli(['init', '--dir', kb]);
+    const outZip = path.join(tmpDir, 'reg.zip');
+
+    const resReg = runCli(['export', '.registry.json', '--dir', kb, '--output', outZip]);
+    expect(resReg.status).not.toBe(0);
+    expect(resReg.stderr).toContain('reserved internal path or starts with');
+    expect(fs.existsSync(outZip)).toBe(false);
+
+    const resCache = runCli(['export', '.cache', '--dir', kb, '--output', outZip]);
+    expect(resCache.status).not.toBe(0);
+    expect(resCache.stderr).toContain('reserved internal path or starts with');
+  });
+
+  it('11. cmdInfo reports invalid manifest syntax when manifest.json is malformed JSON', () => {
+    const kb = path.join(tmpDir, 'kb-info');
+    runCli(['init', '--dir', kb]);
+    const badUnit = path.join(kb, 'broken-unit');
+    fs.mkdirSync(badUnit, { recursive: true });
+    fs.writeFileSync(path.join(badUnit, 'manifest.json'), '{ broken json');
+
+    const resInfo = runCli(['info', 'broken-unit', '--dir', kb, '--no-global']);
+    expect(resInfo.status).toBe(0);
+    expect(resInfo.stdout).toContain('Type:         invalid manifest (invalid manifest.json:');
+  });
+
+  it('12. cmdSync throws clean error when source entry in knowledge-shelf.json is missing url', () => {
+    const kb = path.join(tmpDir, 'kb-sync-err');
+    runCli(['init', '--dir', kb]);
+    const badCfg = path.join(tmpDir, 'bad-team-shelf.json');
+    fs.writeFileSync(badCfg, JSON.stringify({ version: '1.0', sources: [{ name: 'missing-url' }] }));
+
+    const resSync = runCli(['sync', '--file', badCfg, '--dir', kb]);
+    expect(resSync.status).not.toBe(0);
+    expect(resSync.stderr).toContain("sources[0] must be an object with non-empty 'name' and 'url' strings");
+  });
+
+  it('13. toolRunWorkflow copy_dir respects exclude patterns and detects filename placeholders', async () => {
+    const kd = path.join(tmpDir, 'kd-copydir');
+    const u = path.join(kd, 'cd-unit');
+    fs.mkdirSync(path.join(u, 'templates', 'sub'), { recursive: true });
+    fs.mkdirSync(path.join(u, 'workflows'), { recursive: true });
+
+    // File that is excluded contains an undeclared/required placeholder {{EXCLUDED_ONLY}}
+    fs.writeFileSync(path.join(u, 'templates', 'sub', 'ignored.bak'), '{{EXCLUDED_ONLY}}\n');
+    // File that is included has placeholder in filename {{FILENAME_PH}}
+    fs.writeFileSync(path.join(u, 'templates', 'sub', '{{FILENAME_PH}}.txt'), 'content\n');
+
+    fs.writeFileSync(
+      path.join(u, 'manifest.json'),
+      JSON.stringify({
+        name: 'cd-unit',
+        version: '1.0.0',
+        type: 'template',
+        description: 'Test copy_dir placeholder detection',
+        placeholders: {
+          TARGET: { required: true, type: 'path' },
+          EXCLUDED_ONLY: { required: true, type: 'string' },
+          FILENAME_PH: { required: true, type: 'string' },
+        },
+      }),
+      'utf-8'
+    );
+
+    fs.writeFileSync(
+      path.join(u, 'workflows', 'setup.json'),
+      JSON.stringify({
+        steps: [
+          {
+            action: 'copy_dir',
+            source: 'templates/sub',
+            target: '{{TARGET}}/out',
+            exclude: ['**/*.bak'],
+          },
+        ],
+      }),
+      'utf-8'
+    );
+
+    const outDir = path.join(tmpDir, 'cd-out');
+    // Because **/*.bak is excluded, EXCLUDED_ONLY should NOT be required!
+    // But FILENAME_PH is used in filename, so missing FILENAME_PH should fail:
+    const resMissing = await toolRunWorkflow(kd, 'cd-unit', 'setup', { TARGET: outDir }, { dryRun: false });
+    expect(resMissing.isError).toBe(true);
+    const errObj = JSON.parse(resMissing.text);
+    expect(errObj.error).toContain('Missing required inputs: ["FILENAME_PH"]');
+    expect(errObj.error).not.toContain('EXCLUDED_ONLY');
+
+    // Supplying FILENAME_PH should succeed and create rendered filename:
+    const resOk = await toolRunWorkflow(
+      kd,
+      'cd-unit',
+      'setup',
+      { TARGET: outDir, FILENAME_PH: 'my-file' },
+      { dryRun: false }
+    );
+    expect(resOk.isError).toBeFalsy();
+    expect(fs.existsSync(path.join(outDir, 'out', 'my-file.txt'))).toBe(true);
+    expect(fs.existsSync(path.join(outDir, 'out', 'ignored.bak'))).toBe(false);
+  });
 });

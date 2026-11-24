@@ -392,5 +392,20 @@ export function loadTeamConfig(configPath: string): TeamConfig {
   if (!parsed || typeof parsed !== 'object' || !Array.isArray(parsed.sources)) {
     throw new Error(`Invalid team config '${configPath}': expected an object with a "sources" array.`);
   }
+  for (let i = 0; i < parsed.sources.length; i++) {
+    const s = parsed.sources[i];
+    if (
+      !s ||
+      typeof s !== 'object' ||
+      typeof s.name !== 'string' ||
+      !s.name.trim() ||
+      typeof s.url !== 'string' ||
+      !s.url.trim()
+    ) {
+      throw new Error(
+        `Invalid team config '${configPath}': sources[${i}] must be an object with non-empty 'name' and 'url' strings.`
+      );
+    }
+  }
   return parsed;
 }

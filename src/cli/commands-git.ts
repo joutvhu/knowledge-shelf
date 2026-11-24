@@ -2083,7 +2083,9 @@ export function cmdPublish(knowledgeDir: string, args: string[]): void {
         subPath += '/';
       }
       if (subPath && subPath.split(/[\\/]+/).some((seg) => seg && seg !== '.' && seg.startsWith('.'))) {
-        console.error(`Error: Access denied. Destination path contains hidden segment: '${rawSub}'.`);
+        console.error(
+          `Error: Invalid destination path '${rawSub}'. Destination path contains hidden segment.`
+        );
         process.exit(1);
       }
     } else if (args[i] === '--branch') {
@@ -2094,7 +2096,22 @@ export function cmdPublish(knowledgeDir: string, args: string[]): void {
       branchName = args[++i];
     } else if (args[i] === '--message' || args[i] === '-m') {
       const next = args[i + 1];
-      if (i + 1 >= args.length || !next || next === '--push' || next === '--force' || next === '-f' || next === '--to' || next === '--path' || next === '--branch') {
+      const isKnownFlag =
+        !next ||
+        next === '-h' ||
+        next === '--help' ||
+        next === '-m' ||
+        next === '--message' ||
+        next === '--push' ||
+        next === '--force' ||
+        next === '-f' ||
+        next === '--to' ||
+        next === '--path' ||
+        next === '--branch' ||
+        next === '--dir' ||
+        next === '--include-global' ||
+        next === '--no-global';
+      if (i + 1 >= args.length || isKnownFlag) {
         console.error('Error: --message requires a commit message.');
         process.exit(1);
       }
