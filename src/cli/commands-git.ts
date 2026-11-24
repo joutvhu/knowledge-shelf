@@ -2442,9 +2442,18 @@ export function cmdPublish(
         if (destSubpath) {
           removeDirSync(destInRepo);
         } else {
+          const isPreservedRepoEntry = (entryName: string): boolean => {
+            if (entryName === '.git' || entryName === 'shelf.json') return true;
+            if (fs.existsSync(path.join(unitDir, entryName))) return false;
+            const lower = entryName.toLowerCase();
+            if (entryName === '.github' || entryName === '.gitignore' || entryName === '.gitattributes') return true;
+            if (lower.startsWith('license') || lower === 'code_of_conduct.md' || lower === 'contributing.md') return true;
+            return false;
+          };
+
           const entries = fs.readdirSync(destInRepo, { withFileTypes: true });
           for (const entry of entries) {
-            if (entry.name === '.git' || entry.name === 'shelf.json') continue;
+            if (isPreservedRepoEntry(entry.name)) continue;
             const full = path.join(destInRepo, entry.name);
             if (entry.isDirectory()) {
               removeDirSync(full);

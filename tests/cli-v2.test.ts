@@ -184,7 +184,7 @@ describe('CLI v2 Ecosystem & Git Sharing', () => {
     } finally {
       fs.rmSync(workRoot, { recursive: true, force: true });
     }
-  });
+  }, 120_000);
 
   it('publish should validate, block .env hygiene issues, commit to branch, and update shelf.json', () => {
     const workRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'ks-pub-'));

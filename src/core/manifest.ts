@@ -136,6 +136,7 @@ export function validateManifestUnitDir(
 
   const folderBase = path.basename(unitDir);
   const expectedName = ctx.expectedUnitName || folderBase;
+  const expectedBase = path.basename(expectedName.replace(/\\/g, '/'));
   const manifestPath = path.join(unitDir, 'manifest.json');
   const errors: string[] = [];
   const warnings: string[] = [];
@@ -187,9 +188,10 @@ export function validateManifestUnitDir(
     typeof manifest.name === 'string' &&
     manifest.name &&
     manifest.name !== expectedName &&
-    manifest.name !== folderBase
+    manifest.name !== folderBase &&
+    manifest.name !== expectedBase
   ) {
-    errors.push(`manifest.name "${manifest.name}" does not match folder name "${expectedName}"`);
+    errors.push(`manifest.name "${manifest.name}" does not match folder name "${expectedBase}"`);
   }
 
   if (manifest.status !== undefined) {
