@@ -31,11 +31,11 @@ import {
 } from './commands-manage.js';
 import {
   assertGitAvailable,
-  assertSafeArchivePaths,
   assertSafeGitArg,
   collectUnitFolders,
   copyDirSync,
   deriveNameFromUrl,
+  extractArchiveSafely,
   getCloneTarget,
   gitClone,
   gitCloneAtRef,
@@ -70,6 +70,7 @@ import {
   recordInstalledSource,
   resolveSafeUnitDir,
   saveRegistry,
+  tryResolveSafeUnitDir,
   withRegistryLock,
 } from './registry.js';
 
@@ -369,7 +370,12 @@ export function cmdAdd(knowledgeDir: string, args: string[]): void {
       syncName: boolean
     ): 'installed' | 'skipped' | 'invalid' => {
       const isFile = fs.statSync(sourceDir).isFile();
-      const destDir = resolveSafeUnitDir(knowledgeDir, unitName);
+      const destRes = tryResolveSafeUnitDir(knowledgeDir, unitName);
+      if (!destRes.path) {
+        console.error(`Error: ${destRes.error}`);
+        return 'invalid';
+      }
+      const destDir = destRes.path;
       const existing = registry.sources.find((s) => isSameUnitName(s.name, unitName));
       if ((existing || fs.existsSync(destDir)) && !force) {
         return 'skipped';
@@ -545,7 +551,13 @@ export function cmdAdd(knowledgeDir: string, args: string[]): void {
 
     for (const mdFile of standaloneMds) {
       const docName = path.relative(baseDir, mdFile).replace(/\\/g, '/');
-      const destFile = resolveSafeUnitDir(knowledgeDir, docName);
+      const destRes = tryResolveSafeUnitDir(knowledgeDir, docName);
+      if (!destRes.path) {
+        console.error(`Error: ${destRes.error}`);
+        invalid++;
+        continue;
+      }
+      const destFile = destRes.path;
       const existing = registry.sources.find((s) => isSameUnitName(s.name, docName));
       if ((existing || fs.existsSync(destFile)) && !force) {
         console.log(`  Skipping '${docName}' (already exists)`);
@@ -618,7 +630,13 @@ export function cmdAdd(knowledgeDir: string, args: string[]): void {
     if (sourceDir.toLowerCase().endsWith('.md') && !name.toLowerCase().endsWith('.md')) {
       name = `${name}.md`;
     }
-    const destFile = resolveSafeUnitDir(knowledgeDir, name);
+    const destRes = tryResolveSafeUnitDir(knowledgeDir, name);
+    if (!destRes.path) {
+      console.error(`Error: ${destRes.error}`);
+      removeDirSync(cloneTarget);
+      process.exit(1);
+    }
+    const destFile = destRes.path;
 
     const existing = registry.sources.find((s) => isSameUnitName(s.name, name));
     if (existing && !force) {
@@ -690,7 +708,13 @@ export function cmdAdd(knowledgeDir: string, args: string[]): void {
     }
   }
   const name = customName || derivedDefault;
-  const destDir = resolveSafeUnitDir(knowledgeDir, name);
+  const destRes = tryResolveSafeUnitDir(knowledgeDir, name);
+  if (!destRes.path) {
+    console.error(`Error: ${destRes.error}`);
+    removeDirSync(cloneTarget);
+    process.exit(1);
+  }
+  const destDir = destRes.path;
 
   const existing = registry.sources.find((s) => isSameUnitName(s.name, name));
   if (existing && !force) {
@@ -855,7 +879,13 @@ export function cmdUpdate(
         continue;
       }
       try {
-        const destDir = resolveSafeUnitDir(layerDir, source.name);
+        const destRes = tryResolveSafeUnitDir(layerDir, source.name);
+        if (!destRes.path) {
+          console.error(`  Error: ${destRes.error}`);
+          failed++;
+          continue;
+        }
+        const destDir = destRes.path;
         if (!force && hasLocalModifications(destDir, source.checksum)) {
           console.log(
             `  ⚠ Skipping '${source.name}' (local modifications detected; pass --force to overwrite)`
@@ -892,35 +922,7 @@ export function cmdUpdate(
       fs.mkdirSync(cacheDir, { recursive: true });
       const extractDir = path.join(cacheDir, `update-archive-${process.pid}-${Date.now()}`);
       try {
-        assertSafeArchivePaths(archivePath);
-        fs.mkdirSync(extractDir, { recursive: true });
-        const lower = archivePath.toLowerCase();
-        let res: ReturnType<typeof spawnSync>;
-        if (lower.endsWith('.tar.gz') || lower.endsWith('.tgz')) {
-          res = spawnSync('tar', ['-xzf', archivePath, '-C', extractDir], { stdio: 'pipe', encoding: 'utf-8' });
-        } else if (lower.endsWith('.zip')) {
-          if (process.platform === 'win32') {
-            const escSrc = archivePath.replace(/'/g, "''");
-            const escDst = extractDir.replace(/'/g, "''");
-            res = spawnSync(
-              'powershell',
-              [
-                '-NoProfile',
-                '-Command',
-                `Add-Type -AssemblyName System.IO.Compression.FileSystem; [System.IO.Compression.ZipFile]::ExtractToDirectory('${escSrc}', '${escDst}')`,
-              ],
-              { stdio: 'pipe', encoding: 'utf-8' }
-            );
-          } else {
-            res = spawnSync('unzip', ['-q', archivePath, '-d', extractDir], { stdio: 'pipe', encoding: 'utf-8' });
-          }
-        } else {
-          throw new Error('Unsupported archive format.');
-        }
-
-        if (res.error || res.status !== 0) {
-          throw new Error(String(res.stderr || (res.error ? res.error.message : 'extraction failed')));
-        }
+        extractArchiveSafely(archivePath, extractDir);
 
         const entries = fs
           .readdirSync(extractDir, { withFileTypes: true })
@@ -989,7 +991,13 @@ export function cmdUpdate(
           continue;
         }
 
-        const destDir = resolveSafeUnitDir(layerDir, source.name);
+        const destRes = tryResolveSafeUnitDir(layerDir, source.name);
+        if (!destRes.path) {
+          console.error(`  Error: ${destRes.error}`);
+          failed++;
+          continue;
+        }
+        const destDir = destRes.path;
         if (!force && hasLocalModifications(destDir, source.checksum)) {
           console.log(
             `  ⚠ Skipping '${source.name}' (local modifications detected; pass --force to overwrite)`
@@ -1038,7 +1046,12 @@ export function cmdUpdate(
     const remoteSha = gitLsRemote(url, branch ? `refs/heads/${branch}` : 'HEAD');
     const pending: RegistryEntry[] = [];
     for (const { source } of group) {
-      const destDir = resolveSafeUnitDir(layerDir, source.name);
+      const destRes = tryResolveSafeUnitDir(layerDir, source.name);
+      if (!destRes.path) {
+        pending.push(source);
+        continue;
+      }
+      const destDir = destRes.path;
       if (
         !force &&
         remoteSha &&
@@ -1074,7 +1087,13 @@ export function cmdUpdate(
 
       for (const source of pending) {
         console.log(`Updating '${source.name}'...`);
-        const destDir = resolveSafeUnitDir(layerDir, source.name);
+        const destRes = tryResolveSafeUnitDir(layerDir, source.name);
+        if (!destRes.path) {
+          console.error(`  Error: ${destRes.error}`);
+          failed++;
+          continue;
+        }
+        const destDir = destRes.path;
 
         if (!force && newCommit === source.commit && fs.existsSync(destDir)) {
           console.log(`  Already up to date (${newCommit})`);
@@ -1231,7 +1250,11 @@ export function cmdPin(
         throw new Error(`Path '${source.path}' not found at ref '${version}'.`);
       }
 
-      const destDir = resolveSafeUnitDir(targetKnowledgeDir, source.name);
+      const destRes = tryResolveSafeUnitDir(targetKnowledgeDir, source.name);
+      if (!destRes.path) {
+        throw new Error(destRes.error);
+      }
+      const destDir = destRes.path;
       const ok = installValidated(targetKnowledgeDir, sourceDir, destDir, source.name, noVerify);
       if (!ok) {
         installFailed = true;
@@ -1580,7 +1603,13 @@ export function cmdSync(knowledgeDir: string, args: string[]): void {
       const branch = gitGetBranch(cloneTarget);
 
       for (const s of group) {
-        const destDir = resolveSafeUnitDir(knowledgeDir, s.name);
+        const destRes = tryResolveSafeUnitDir(knowledgeDir, s.name);
+        if (!destRes.path) {
+          console.error(`  Error: ${destRes.error}`);
+          failed++;
+          continue;
+        }
+        const destDir = destRes.path;
         const existing = registry.sources.find((r) => isSameUnitName(r.name, s.name));
         const effectivePin = s.pin || (s.ref && (!branch || s.ref !== branch) ? s.ref : undefined);
         const pinMatches = (effectivePin || undefined) === (existing?.pin || undefined);
@@ -2401,11 +2430,21 @@ export function cmdPublish(
           const isRootSubpath = subPath === '.' || subPath === './';
           if (subPath && !isRootSubpath) {
             const isDirLike = subPath.endsWith('/') || subPath.endsWith('\\');
+            const looksLikeMdFile = subPath.toLowerCase().endsWith('.md');
             const resolvedPath = resolveInsideDir(cloneRoot, subPath, true);
             if (!resolvedPath) {
               throw new Error(`Invalid destination path '${subPath}' inside target repository.`);
             }
-            if (isDirLike || (fs.existsSync(resolvedPath) && fs.statSync(resolvedPath).isDirectory())) {
+            if (
+              isDirLike ||
+              !looksLikeMdFile ||
+              (fs.existsSync(resolvedPath) && fs.statSync(resolvedPath).isDirectory())
+            ) {
+              if (fs.existsSync(resolvedPath) && fs.statSync(resolvedPath).isFile()) {
+                throw new Error(
+                  `Destination path '${subPath}' is an existing file in target repository.`
+                );
+              }
               destPathInClone = path.join(resolvedPath, fileName);
             } else {
               destPathInClone = resolvedPath;

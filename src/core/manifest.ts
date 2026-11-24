@@ -202,6 +202,18 @@ export function validateManifestUnitDir(
     }
   }
 
+  if (manifest.tags !== undefined) {
+    if (!Array.isArray(manifest.tags) || manifest.tags.some((t) => typeof t !== 'string')) {
+      errors.push('Field "tags" must be an array of strings');
+    }
+  }
+
+  if (manifest.aliases !== undefined) {
+    if (!Array.isArray(manifest.aliases) || manifest.aliases.some((a) => typeof a !== 'string')) {
+      errors.push('Field "aliases" must be an array of strings');
+    }
+  }
+
   if (manifest.requires !== undefined) {
     if (!Array.isArray(manifest.requires)) {
       errors.push('Field "requires" must be an array of unit names');
@@ -421,13 +433,17 @@ export function validateManifestUnitDir(
   }
 
   // Placeholders validation
-  if (manifest.placeholders !== undefined && isRecord(manifest.placeholders)) {
-    for (const [phKey, phDef] of Object.entries(manifest.placeholders)) {
-      if (isRecord(phDef) && typeof phDef.pattern === 'string') {
-        try {
-          new RegExp(phDef.pattern);
-        } catch (e: any) {
-          errors.push(`placeholders.${phKey}: invalid regex pattern '${phDef.pattern}': ${e?.message || e}`);
+  if (manifest.placeholders !== undefined) {
+    if (!isRecord(manifest.placeholders)) {
+      errors.push('Field "placeholders" must be an object');
+    } else {
+      for (const [phKey, phDef] of Object.entries(manifest.placeholders)) {
+        if (isRecord(phDef) && typeof phDef.pattern === 'string') {
+          try {
+            new RegExp(phDef.pattern);
+          } catch (e: any) {
+            errors.push(`placeholders.${phKey}: invalid regex pattern '${phDef.pattern}': ${e?.message || e}`);
+          }
         }
       }
     }
@@ -465,7 +481,9 @@ export function validateManifestUnitDir(
         }
 
         const wfInputs = new Set(isRecord(wfDef.inputs) ? Object.keys(wfDef.inputs) : []);
-        if (isRecord(wfDef.inputs)) {
+        if (wfDef.inputs !== undefined && !isRecord(wfDef.inputs)) {
+          errors.push(`${displayRel}: field "inputs" must be an object`);
+        } else if (isRecord(wfDef.inputs)) {
           for (const [inKey, inDef] of Object.entries(wfDef.inputs)) {
             if (isRecord(inDef) && typeof inDef.pattern === 'string') {
               try {
@@ -611,6 +629,11 @@ export function validateManifestUnitDir(
                 errors.push(`${prefix} (run): script escapes unit folder: ${script}`);
               } else if (!fs.existsSync(scriptPath) || !fs.statSync(scriptPath).isFile()) {
                 errors.push(`${prefix} (run): script not found: ${script}`);
+              }
+            }
+            if (step.args !== undefined) {
+              if (!Array.isArray(step.args) || step.args.some((a) => typeof a !== 'string')) {
+                errors.push(`${prefix} (run): "args" must be an array of strings`);
               }
             }
             if (typeof step.interpreter === 'string' && step.interpreter.trim()) {

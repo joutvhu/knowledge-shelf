@@ -327,6 +327,21 @@ export function formatSize(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
+export function assertNoSymlinks(dir: string): void {
+  if (!fs.existsSync(dir)) return;
+  const entries = fs.readdirSync(dir, { withFileTypes: true });
+  for (const entry of entries) {
+    const full = path.join(dir, entry.name);
+    const lstat = fs.lstatSync(full);
+    if (lstat.isSymbolicLink()) {
+      throw new Error(`Archive contains unsafe symbolic link: '${entry.name}'`);
+    }
+    if (lstat.isDirectory()) {
+      assertNoSymlinks(full);
+    }
+  }
+}
+
 export function assertSafeArchivePaths(archivePath: string): void {
   const lower = archivePath.toLowerCase();
   if (lower.endsWith('.tar.gz') || lower.endsWith('.tgz')) {
@@ -341,6 +356,19 @@ export function assertSafeArchivePaths(archivePath: string): void {
       const normalized = line.replace(/\\/g, '/');
       if (normalized.startsWith('/') || /^[A-Za-z]:/.test(normalized) || normalized.split('/').includes('..')) {
         throw new Error(`Archive contains unsafe path: '${line}'`);
+      }
+    }
+    const verboseRes = spawnSync('tar', ['-ztvf', archivePath], { stdio: 'pipe', encoding: 'utf-8' });
+    if (verboseRes.status !== 0) {
+      throw new Error(
+        `Failed to inspect archive entries '${path.basename(archivePath)}': ${String(verboseRes.stderr || 'tar command failed')}`
+      );
+    }
+    for (const vLine of (verboseRes.stdout || '').split(/\r?\n/)) {
+      const trimmed = vLine.trim();
+      if (!trimmed) continue;
+      if (/^[lh][-rwxstST]{9}/.test(trimmed)) {
+        throw new Error(`Archive contains symbolic or hard link entry, which is not permitted.`);
       }
     }
   } else if (lower.endsWith('.zip')) {
@@ -391,5 +419,39 @@ export function assertSafeArchivePaths(archivePath: string): void {
   } else {
     throw new Error(`Unsupported archive format for '${path.basename(archivePath)}'. Expected .zip, .tar.gz, or .tgz.`);
   }
+}
+
+export function extractArchiveSafely(archivePath: string, extractDir: string): void {
+  assertSafeArchivePaths(archivePath);
+  fs.mkdirSync(extractDir, { recursive: true });
+  const lower = archivePath.toLowerCase();
+  let res: ReturnType<typeof spawnSync>;
+  if (lower.endsWith('.tar.gz') || lower.endsWith('.tgz')) {
+    res = spawnSync('tar', ['-xzf', archivePath, '-C', extractDir], { stdio: 'pipe', encoding: 'utf-8' });
+  } else if (lower.endsWith('.zip')) {
+    if (process.platform === 'win32') {
+      const escSrc = archivePath.replace(/'/g, "''");
+      const escDst = extractDir.replace(/'/g, "''");
+      res = spawnSync(
+        'powershell',
+        [
+          '-NoProfile',
+          '-Command',
+          `Add-Type -AssemblyName System.IO.Compression.FileSystem; [System.IO.Compression.ZipFile]::ExtractToDirectory('${escSrc}', '${escDst}')`,
+        ],
+        { stdio: 'pipe', encoding: 'utf-8' }
+      );
+    } else {
+      res = spawnSync('unzip', ['-q', archivePath, '-d', extractDir], { stdio: 'pipe', encoding: 'utf-8' });
+    }
+  } else {
+    throw new Error('Unsupported archive format. Use .zip, .tar.gz, or .tgz.');
+  }
+
+  if (res.error || res.status !== 0) {
+    throw new Error(String(res.stderr || (res.error ? res.error.message : 'extraction failed')));
+  }
+
+  assertNoSymlinks(extractDir);
 }
 

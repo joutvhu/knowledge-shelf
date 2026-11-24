@@ -101,27 +101,36 @@ export function getCacheDir(knowledgeDir: string): string {
   return path.join(knowledgeDir, '.cache');
 }
 
-export function resolveSafeUnitDir(knowledgeDir: string, name: string): string {
+export function tryResolveSafeUnitDir(
+  knowledgeDir: string,
+  name: string
+): { path?: string; error?: string } {
   const trimmed = (name || '').trim().replace(/[\\/]+$/, '');
   if (!trimmed || trimmed === '.' || trimmed === '..') {
-    console.error(`Error: Invalid knowledge unit name '${name}'.`);
-    process.exit(1);
+    return { error: `Invalid knowledge unit name '${name}'.` };
   }
   const canonicalDir = fs.existsSync(knowledgeDir) ? fs.realpathSync(knowledgeDir) : path.resolve(knowledgeDir);
   const resolved = resolveInsideDir(canonicalDir, trimmed, true);
   if (!resolved) {
-    console.error(`Error: Access denied. '${name}' is outside the knowledge directory.`);
-    process.exit(1);
+    return { error: `Access denied. '${name}' is outside the knowledge directory.` };
   }
   const segments = trimmed.split(/[\\/]+/);
   if (
     isReservedPath(canonicalDir, resolved) ||
     segments.some((seg) => !seg || seg === '.' || seg === '..' || seg.startsWith('.'))
   ) {
-    console.error(`Error: Access denied. '${name}' is a reserved internal path or starts with '.'.`);
+    return { error: `Access denied. '${name}' is a reserved internal path or starts with '.'.` };
+  }
+  return { path: resolved };
+}
+
+export function resolveSafeUnitDir(knowledgeDir: string, name: string): string {
+  const res = tryResolveSafeUnitDir(knowledgeDir, name);
+  if (!res.path) {
+    console.error(`Error: ${res.error}`);
     process.exit(1);
   }
-  return resolved;
+  return res.path;
 }
 
 /**

@@ -7,6 +7,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import {
+  canonicalizePath,
   expandHome,
   findManifestFolders,
   findMdFiles,
@@ -26,8 +27,8 @@ import {
   walkUnitFiles,
 } from '../core.js';
 import {
-  assertSafeArchivePaths,
   collectUnitFolders,
+  extractArchiveSafely,
   formatSize,
   removeDirSync,
   replaceDirSync,
@@ -45,6 +46,7 @@ import {
   recordInstalledSource,
   resolveSafeUnitDir,
   saveRegistry,
+  tryResolveSafeUnitDir,
   withRegistryLock,
 } from './registry.js';
 
@@ -956,7 +958,11 @@ export function cmdInstall(
       fail(`\nError: Validation failed with ${errors.length} error(s). Aborting install.`);
     }
 
-    const destFile = resolveSafeUnitDir(knowledgeDir, baseName);
+    const destRes = tryResolveSafeUnitDir(knowledgeDir, baseName);
+    if (!destRes.path) {
+      fail(`Error: ${destRes.error}`);
+    }
+    const destFile = destRes.path!;
     if (isSamePath(destFile, resolvedSource)) {
       fail(`Error: Source and destination are the same path (${destFile}).`);
     }
@@ -1044,7 +1050,11 @@ export function cmdInstall(
           unitName = rootManifest.name;
         }
       }
-      const destDir = resolveSafeUnitDir(knowledgeDir, unitName);
+      const destRes = tryResolveSafeUnitDir(knowledgeDir, unitName);
+      if (!destRes.path) {
+        fail(`Error: ${destRes.error}`);
+      }
+      const destDir = destRes.path!;
       if (isSamePath(destDir, unitDir)) {
         console.log(`  Skipping '${unitName}' (source and destination are the same directory)`);
         skipped++;
@@ -1068,7 +1078,11 @@ export function cmdInstall(
 
     for (const mdFile of standaloneMds) {
       const docName = path.relative(resolvedSource, mdFile).replace(/\\/g, '/');
-      const destFile = resolveSafeUnitDir(knowledgeDir, docName);
+      const destRes = tryResolveSafeUnitDir(knowledgeDir, docName);
+      if (!destRes.path) {
+        fail(`Error: ${destRes.error}`);
+      }
+      const destFile = destRes.path!;
       if (isSamePath(destFile, mdFile)) {
         console.log(`  Skipping '${docName}' (source and destination are the same path)`);
         skipped++;
@@ -1119,7 +1133,11 @@ export function cmdInstall(
     fail(`\nError: Validation failed with ${errors.length} error(s). Aborting install.`);
   }
 
-  const destDir = resolveSafeUnitDir(knowledgeDir, unitName);
+  const destResSingle = tryResolveSafeUnitDir(knowledgeDir, unitName);
+  if (!destResSingle.path) {
+    fail(`Error: ${destResSingle.error}`);
+  }
+  const destDir = destResSingle.path!;
   if (isSamePath(destDir, resolvedSource)) {
     fail(`Error: Source and destination are the same directory (${destDir}).`);
   }
@@ -1353,6 +1371,18 @@ export function cmdExport(
     }
   }
 
+  if (fs.statSync(targetPath).isDirectory()) {
+    const canonTarget = canonicalizePath(targetPath);
+    const canonOutput = canonicalizePath(outputPath);
+    const relOut = path.relative(canonTarget, canonOutput);
+    if (!relOut || (relOut !== '..' && !relOut.startsWith('..' + path.sep) && !path.isAbsolute(relOut))) {
+      console.error(
+        `Error: Output path '${outputPath}' cannot be inside the exported unit directory '${targetPath}'. Pass --output <path> outside the unit.`
+      );
+      process.exit(1);
+    }
+  }
+
   console.log(`Exporting '${relName}' to ${outputPath}...`);
 
   try {
@@ -1478,34 +1508,7 @@ export function cmdImport(knowledgeDir: string, args: string[]): void {
 
   let exitCode = 0;
   try {
-    assertSafeArchivePaths(archivePath);
-    const lower = archivePath.toLowerCase();
-    let res: ReturnType<typeof spawnSync>;
-    if (lower.endsWith('.tar.gz') || lower.endsWith('.tgz')) {
-      res = spawnSync('tar', ['-xzf', archivePath, '-C', extractDir], { stdio: 'pipe', encoding: 'utf-8' });
-    } else if (lower.endsWith('.zip')) {
-      if (process.platform === 'win32') {
-        const escSrc = archivePath.replace(/'/g, "''");
-        const escDst = extractDir.replace(/'/g, "''");
-        res = spawnSync(
-          'powershell',
-          [
-            '-NoProfile',
-            '-Command',
-            `Add-Type -AssemblyName System.IO.Compression.FileSystem; [System.IO.Compression.ZipFile]::ExtractToDirectory('${escSrc}', '${escDst}')`,
-          ],
-          { stdio: 'pipe', encoding: 'utf-8' }
-        );
-      } else {
-        res = spawnSync('unzip', ['-q', archivePath, '-d', extractDir], { stdio: 'pipe', encoding: 'utf-8' });
-      }
-    } else {
-      throw new Error('Unsupported archive format. Use .zip, .tar.gz, or .tgz.');
-    }
-
-    if (res.error || res.status !== 0) {
-      throw new Error(String(res.stderr || (res.error ? res.error.message : 'extraction failed')));
-    }
+    extractArchiveSafely(archivePath, extractDir);
 
     const entries = fs
       .readdirSync(extractDir, { withFileTypes: true })
