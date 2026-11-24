@@ -5,7 +5,7 @@
 import * as crypto from 'node:crypto';
 import fs from 'node:fs';
 import * as path from 'node:path';
-import { isReservedPath, resolveInsideDir, walkDir, walkUnitFiles } from '../core.js';
+import { isReservedPath, resolveInsideDir, stripBom, walkDir, walkUnitFiles } from '../core.js';
 
 export interface RegistryEntry {
   name: string;
@@ -23,8 +23,16 @@ export interface RegistryEntry {
 
 export interface RegistrySource extends RegistryEntry {}
 
+export function isSameUnitName(a: string, b: string): boolean {
+  if (a === b) return true;
+  if (process.platform === 'win32') {
+    return a.toLowerCase() === b.toLowerCase();
+  }
+  return false;
+}
+
 export function recordInstalledSource(registry: Registry, entry: RegistryEntry): RegistryEntry {
-  const existingIndex = registry.sources.findIndex((s) => s.name === entry.name);
+  const existingIndex = registry.sources.findIndex((s) => isSameUnitName(s.name, entry.name));
   if (existingIndex !== -1) {
     registry.sources[existingIndex] = entry;
     return entry;
@@ -119,7 +127,7 @@ export function loadRegistry(knowledgeDir: string, options: LoadRegistryOptions 
   }
   try {
     const content = fs.readFileSync(registryPath, 'utf-8');
-    const parsed = JSON.parse(content) as Registry;
+    const parsed = JSON.parse(stripBom(content)) as Registry;
     if (!parsed || typeof parsed !== 'object' || !Array.isArray(parsed.sources)) {
       throw new Error('expected an object with a "sources" array');
     }
@@ -370,7 +378,7 @@ export function loadShelfCatalog(repoDir: string): ShelfCatalog | null {
   const shelfPath = path.join(repoDir, 'shelf.json');
   if (!fs.existsSync(shelfPath)) return null;
   try {
-    const parsed = JSON.parse(fs.readFileSync(shelfPath, 'utf-8')) as ShelfCatalog;
+    const parsed = JSON.parse(stripBom(fs.readFileSync(shelfPath, 'utf-8'))) as ShelfCatalog;
     if (!parsed || typeof parsed !== 'object' || !Array.isArray(parsed.units)) return null;
     return parsed;
   } catch {
@@ -380,7 +388,7 @@ export function loadShelfCatalog(repoDir: string): ShelfCatalog | null {
 
 export function loadTeamConfig(configPath: string): TeamConfig {
   const content = fs.readFileSync(configPath, 'utf-8');
-  const parsed = JSON.parse(content) as TeamConfig;
+  const parsed = JSON.parse(stripBom(content)) as TeamConfig;
   if (!parsed || typeof parsed !== 'object' || !Array.isArray(parsed.sources)) {
     throw new Error(`Invalid team config '${configPath}': expected an object with a "sources" array.`);
   }

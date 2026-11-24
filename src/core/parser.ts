@@ -4,7 +4,7 @@
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { IGNORED_FILES, resolveInsideDir } from './config.js';
+import { IGNORED_FILES, resolveInsideDir, stripBom } from './config.js';
 
 export interface SectionInfo {
   level: number;
@@ -129,7 +129,7 @@ export function loadManifest(folder: string): Manifest | null {
   if (!fs.existsSync(manifestPath)) return null;
   try {
     const content = fs.readFileSync(manifestPath, 'utf-8');
-    const parsed = JSON.parse(content);
+    const parsed = JSON.parse(stripBom(content));
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
       return null;
     }

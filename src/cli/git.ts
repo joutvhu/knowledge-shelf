@@ -5,7 +5,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { findManifestFolders, resolveInsideDir } from '../core.js';
+import { findManifestFolders, resolveInsideDir, stripBom } from '../core.js';
 import { getCacheDir } from './registry.js';
 
 let _gitChecked = false;
@@ -90,6 +90,7 @@ export function gitCloneSparse(url: string, targetDir: string, sparsePath: strin
   assertGitAvailable();
   assertSafeGitArg(url, 'repository URL');
   assertSafeGitArg(sparsePath, 'sparse path');
+  const normalizedSparse = sparsePath.replace(/\\/g, '/').replace(/^\/+|\/+$/g, '');
   const args = ['clone', '--depth', '1', '--filter=blob:none', '--sparse'];
   if (branch) {
     assertSafeGitArg(branch, 'branch');
@@ -103,7 +104,7 @@ export function gitCloneSparse(url: string, targetDir: string, sparsePath: strin
     gitClone(url, targetDir, branch);
     return;
   }
-  const sparseResult = spawnSync('git', ['sparse-checkout', 'set', '--no-cone', '--', sparsePath], {
+  const sparseResult = spawnSync('git', ['sparse-checkout', 'set', '--no-cone', '--', normalizedSparse], {
     cwd: targetDir,
     stdio: 'pipe',
     encoding: 'utf-8',
@@ -309,7 +310,7 @@ export function syncManifestName(unitDir: string, targetName: string): void {
   const manifestPath = path.join(unitDir, 'manifest.json');
   if (!fs.existsSync(manifestPath)) return;
   try {
-    const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf-8')) as Record<string, unknown>;
+    const manifest = JSON.parse(stripBom(fs.readFileSync(manifestPath, 'utf-8'))) as Record<string, unknown>;
     if (manifest.name !== targetName) {
       manifest.name = targetName;
       fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + '\n', 'utf-8');

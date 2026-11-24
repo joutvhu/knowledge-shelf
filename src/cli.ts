@@ -49,6 +49,7 @@ const VAL_OPTIONS = new Set([
   '--tag',
   '--tags',
   '--max',
+  '--format',
 ]);
 
 function printHelp(): void {
@@ -184,7 +185,13 @@ export function runCli(rawArgs: string[]): void {
     command === 'help' ||
     command === '--help' ||
     command === '-h' ||
-    args.some((arg, idx) => (arg === '--help' || arg === '-h') && !VAL_OPTIONS.has(args[idx - 1]));
+    args.some((arg, idx) => {
+      if (arg !== '--help' && arg !== '-h') return false;
+      const prev = args[idx - 1];
+      if (!prev) return true;
+      if (prev === '-f' && command !== 'sync') return true;
+      return !VAL_OPTIONS.has(prev);
+    });
 
   if (wantsHelp) {
     printHelp();

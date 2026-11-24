@@ -4,7 +4,7 @@
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { isReservedPath, resolveInsideDir } from './config.js';
+import { isReservedPath, resolveInsideDir, stripBom } from './config.js';
 import { scanDocuments } from './index-cache.js';
 import {
   isRecord,
@@ -138,7 +138,7 @@ function isUnitTrusted(layerDir: string, unitName: string): { trusted: boolean; 
     return { trusted: true };
   }
   try {
-    const parsed = JSON.parse(fs.readFileSync(registryPath, 'utf-8')) as {
+    const parsed = JSON.parse(stripBom(fs.readFileSync(registryPath, 'utf-8'))) as {
       sources?: Array<{ name?: string; url?: string; trusted?: boolean }>;
     };
     if (!parsed || !Array.isArray(parsed.sources)) {
@@ -632,7 +632,7 @@ export function toolGetManifest(knowledgeDirs: string | string[], name: string):
   if (fs.existsSync(manifestPath)) {
     try {
       const content = fs.readFileSync(manifestPath, 'utf-8');
-      const manifest = JSON.parse(content) as Record<string, unknown>;
+      const manifest = JSON.parse(stripBom(content)) as Record<string, unknown>;
       if (!isRecord(manifest)) {
         return {
           text: JSON.stringify(
@@ -792,7 +792,7 @@ export async function toolRunWorkflow(
 
   let workflowDef: Record<string, unknown>;
   try {
-    workflowDef = JSON.parse(fs.readFileSync(workflowPath, 'utf-8'));
+    workflowDef = JSON.parse(stripBom(fs.readFileSync(workflowPath, 'utf-8')));
   } catch (e) {
     return {
       text: JSON.stringify({ error: `Failed to load workflow: ${e}` }, null, 2),

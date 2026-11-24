@@ -20,6 +20,7 @@ import {
   rankDocuments,
   resolveInsideDir,
   scanDocuments,
+  stripBom,
   validateManifestUnitDir,
   validateStandaloneMdFile,
   walkUnitFiles,
@@ -37,6 +38,7 @@ import {
   computeUnitChecksum,
   getCacheDir,
   getRegistryPath,
+  isSameUnitName,
   loadRegistry,
   mutateRegistry,
   recordInstalledSource,
@@ -231,12 +233,12 @@ export function cmdRemove(knowledgeDir: string, args: string[]): void {
 
   let destDir = resolveSafeUnitDir(knowledgeDir, name);
   let registry = loadRegistry(knowledgeDir);
-  let idx = registry.sources.findIndex((s) => s.name === name);
+  let idx = registry.sources.findIndex((s) => isSameUnitName(s.name, name));
 
   if (idx === -1 && !name.toLowerCase().endsWith('.md')) {
     const mdName = `${name}.md`;
     const mdCandidate = resolveSafeUnitDir(knowledgeDir, mdName);
-    const mdIdx = registry.sources.findIndex((s) => s.name === mdName);
+    const mdIdx = registry.sources.findIndex((s) => isSameUnitName(s.name, mdName));
     if (mdIdx !== -1 || fs.existsSync(mdCandidate)) {
       name = mdName;
       destDir = mdCandidate;
@@ -262,15 +264,16 @@ export function cmdRemove(knowledgeDir: string, args: string[]): void {
     return;
   }
 
+  const matchedName = registry.sources[idx].name;
   removeDirSync(destDir);
   mutateRegistry(knowledgeDir, (reg) => {
-    const targetIdx = reg.sources.findIndex((s) => s.name === name);
+    const targetIdx = reg.sources.findIndex((s) => isSameUnitName(s.name, matchedName));
     if (targetIdx !== -1) {
       reg.sources.splice(targetIdx, 1);
     }
   });
 
-  console.log(`✓ Removed '${name}'`);
+  console.log(`✓ Removed '${matchedName}'`);
 }
 
 export function cmdInfo(knowledgeDirs: string | string[], args: string[]): void {
@@ -390,7 +393,7 @@ export function cmdInfo(knowledgeDirs: string | string[], args: string[]): void 
   let manifest: Record<string, unknown> | null = null;
   if (fs.existsSync(manifestPath)) {
     try {
-      manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf-8'));
+      manifest = JSON.parse(stripBom(fs.readFileSync(manifestPath, 'utf-8')));
     } catch {
       manifest = null;
     }
@@ -784,7 +787,7 @@ export function cmdInstall(
     mutateRegistry(knowledgeDir, (reg) => {
       const now = new Date().toISOString();
       const checksum = computeUnitChecksum(destPath);
-      const existingIndex = reg.sources.findIndex((s) => s.name === unitName);
+      const existingIndex = reg.sources.findIndex((s) => isSameUnitName(s.name, unitName));
       const existing = existingIndex !== -1 ? reg.sources[existingIndex] : undefined;
 
       let url = `local:${originPath}`;
@@ -1331,7 +1334,7 @@ export function cmdImport(knowledgeDir: string, args: string[]): void {
       installSource = extractDir;
       if (!customName) {
         try {
-          const m = JSON.parse(fs.readFileSync(path.join(extractDir, 'manifest.json'), 'utf-8'));
+          const m = JSON.parse(stripBom(fs.readFileSync(path.join(extractDir, 'manifest.json'), 'utf-8')));
           if (m?.name && typeof m.name === 'string' && isSafeUnitSegment(m.name)) {
             customName = m.name;
           }
@@ -1341,7 +1344,25 @@ export function cmdImport(knowledgeDir: string, args: string[]): void {
       }
     }
 
-    const hasManifestDirectly = fs.existsSync(path.join(installSource, 'manifest.json'));
+    let hasManifestDirectly = fs.existsSync(path.join(installSource, 'manifest.json'));
+    if (!hasManifestDirectly && fs.statSync(installSource).isDirectory()) {
+      const allManifests = findManifestFolders(installSource);
+      const allMds = findMdFiles(installSource).filter(
+        (md) =>
+          !allManifests.some((mf) => {
+            const rmf = path.resolve(mf);
+            const rmd = path.resolve(md);
+            return rmd === rmf || rmd.startsWith(rmf + path.sep);
+          })
+      );
+      if (allManifests.length === 0 && allMds.length === 1) {
+        installSource = allMds[0];
+      } else if (allManifests.length === 1 && allMds.length === 0) {
+        installSource = allManifests[0];
+        hasManifestDirectly = true;
+      }
+    }
+
     const isSingleDoc = !hasManifestDirectly && fs.statSync(installSource).isFile();
     const shouldPassAll =
       (importAll && !hasManifestDirectly && !isSingleDoc) ||
@@ -1414,9 +1435,9 @@ export function cmdTrust(knowledgeDir: string, args: string[], trusted: boolean)
 
   let found = false;
   mutateRegistry(knowledgeDir, (registry) => {
-    let entry = registry.sources.find((s) => s.name === name);
+    let entry = registry.sources.find((s) => isSameUnitName(s.name, name));
     if (!entry && !name.toLowerCase().endsWith('.md')) {
-      entry = registry.sources.find((s) => s.name === `${name}.md`);
+      entry = registry.sources.find((s) => isSameUnitName(s.name, `${name}.md`));
     }
     if (!entry) {
       return;

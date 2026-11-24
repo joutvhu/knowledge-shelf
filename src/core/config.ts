@@ -30,6 +30,10 @@ export const ALLOWED_INTERPRETERS = new Set([
 
 export const ROOT_PLACEHOLDER_RE = /^\{\{[A-Za-z0-9_]+\}\}(?:[/\\].*)?$/;
 
+export function stripBom(text: string): string {
+  return text.charCodeAt(0) === 0xFEFF ? text.slice(1) : text;
+}
+
 export function isSafeUnitSegment(name: string): boolean {
   return Boolean(name) && !name.startsWith('.') && !name.includes('/') && !name.includes('\\') && name !== '..';
 }
@@ -41,7 +45,7 @@ export const MAX_WORKFLOW_TIMEOUT_MS = 600_000;
 export function getPackageVersion(): string {
   try {
     const pkgPath = new URL('../../package.json', import.meta.url);
-    const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf-8')) as { version?: string };
+    const pkg = JSON.parse(stripBom(fs.readFileSync(pkgPath, 'utf-8'))) as { version?: string };
     return pkg.version || '0.0.0';
   } catch {
     return '0.0.0';

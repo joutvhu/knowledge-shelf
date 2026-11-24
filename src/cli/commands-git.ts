@@ -17,6 +17,7 @@ import {
   isSafeUnitSegment,
   loadManifest,
   resolveInsideDir,
+  stripBom,
   validateManifestUnitDir,
   validateStandaloneMdFile,
 } from '../core.js';
@@ -56,6 +57,7 @@ import {
   computeUnitChecksum,
   getCacheDir,
   hasLocalModifications,
+  isSameUnitName,
   loadRegistry,
   loadShelfCatalog,
   loadTeamConfig,
@@ -109,7 +111,7 @@ export function validateStaged(
     if (fs.existsSync(manifestPath)) {
       let expectedName: string | undefined = undefined;
       try {
-        const m = JSON.parse(fs.readFileSync(manifestPath, 'utf-8'));
+        const m = JSON.parse(stripBom(fs.readFileSync(manifestPath, 'utf-8')));
         if (typeof m.name === 'string') expectedName = m.name;
       } catch {
         // validateManifestUnitDir will catch invalid JSON
@@ -259,7 +261,7 @@ export function cmdAdd(knowledgeDir: string, args: string[]): void {
         console.error('Error: --path requires a subfolder argument.');
         process.exit(1);
       }
-      subPath = args[++i];
+      subPath = args[++i].replace(/\\/g, '/').replace(/^\/+|\/+$/g, '');
     } else if (args[i] === '--name') {
       if (i + 1 >= args.length || args[i + 1].startsWith('-')) {
         console.error('Error: --name requires an alias argument.');
@@ -349,7 +351,7 @@ export function cmdAdd(knowledgeDir: string, args: string[]): void {
     ): 'installed' | 'skipped' | 'invalid' => {
       const isFile = fs.statSync(sourceDir).isFile();
       const destDir = resolveSafeUnitDir(knowledgeDir, unitName);
-      const existing = registry.sources.find((s) => s.name === unitName);
+      const existing = registry.sources.find((s) => isSameUnitName(s.name, unitName));
       if ((existing || fs.existsSync(destDir)) && !force) {
         return 'skipped';
       }
@@ -520,7 +522,7 @@ export function cmdAdd(knowledgeDir: string, args: string[]): void {
     for (const mdFile of standaloneMds) {
       const docName = path.relative(baseDir, mdFile).replace(/\\/g, '/');
       const destFile = resolveSafeUnitDir(knowledgeDir, docName);
-      const existing = registry.sources.find((s) => s.name === docName);
+      const existing = registry.sources.find((s) => isSameUnitName(s.name, docName));
       if ((existing || fs.existsSync(destFile)) && !force) {
         console.log(`  Skipping '${docName}' (already exists)`);
         skipped++;
@@ -588,7 +590,7 @@ export function cmdAdd(knowledgeDir: string, args: string[]): void {
     }
     const destFile = resolveSafeUnitDir(knowledgeDir, name);
 
-    const existing = registry.sources.find((s) => s.name === name);
+    const existing = registry.sources.find((s) => isSameUnitName(s.name, name));
     if (existing && !force) {
       console.error(`Error: '${name}' is already installed.  Use 'update ${name}' or pass --force.`);
       removeDirSync(cloneTarget);
@@ -610,7 +612,13 @@ export function cmdAdd(knowledgeDir: string, args: string[]): void {
       }
     }
 
-    fs.copyFileSync(sourceDir, destFile);
+    fs.mkdirSync(path.dirname(destFile), { recursive: true });
+    try {
+      fs.copyFileSync(sourceDir, destFile);
+    } catch (e) {
+      removeDirSync(cloneTarget);
+      throw e;
+    }
 
     const now = new Date().toISOString();
     const checksum = computeUnitChecksum(destFile);
@@ -647,7 +655,7 @@ export function cmdAdd(knowledgeDir: string, args: string[]): void {
   const name = customName || derivedDefault;
   const destDir = resolveSafeUnitDir(knowledgeDir, name);
 
-  const existing = registry.sources.find((s) => s.name === name);
+  const existing = registry.sources.find((s) => isSameUnitName(s.name, name));
   if (existing && !force) {
     console.error(`Error: '${name}' is already installed.  Use 'update ${name}' or pass --force.`);
     removeDirSync(cloneTarget);
@@ -736,8 +744,8 @@ export function cmdUpdate(knowledgeDir: string, args: string[]): void {
   const toUpdate = cleanTargetName
     ? registry.sources.filter(
         (s) =>
-          s.name === cleanTargetName ||
-          (!cleanTargetName.toLowerCase().endsWith('.md') && s.name === `${cleanTargetName}.md`)
+          isSameUnitName(s.name, cleanTargetName) ||
+          (!cleanTargetName.toLowerCase().endsWith('.md') && isSameUnitName(s.name, `${cleanTargetName}.md`))
       )
     : registry.sources;
   if (cleanTargetName && toUpdate.length === 0) {
@@ -1027,7 +1035,7 @@ export function cmdUpdate(knowledgeDir: string, args: string[]): void {
   if (updatedEntries.length > 0) {
     mutateRegistry(knowledgeDir, (reg) => {
       for (const s of updatedEntries) {
-        const existing = reg.sources.find((item) => item.name === s.name);
+        const existing = reg.sources.find((item) => isSameUnitName(item.name, s.name));
         if (existing) {
           existing.commit = s.commit;
           existing.fullCommit = s.fullCommit;
@@ -1060,9 +1068,9 @@ export function cmdPin(knowledgeDir: string, args: string[]): void {
   }
 
   const registry = loadRegistry(knowledgeDir);
-  let source = registry.sources.find((s) => s.name === name);
+  let source = registry.sources.find((s) => isSameUnitName(s.name, name));
   if (!source && !name.toLowerCase().endsWith('.md')) {
-    source = registry.sources.find((s) => s.name === `${name}.md`);
+    source = registry.sources.find((s) => isSameUnitName(s.name, `${name}.md`));
   }
 
   if (!source) {
@@ -1123,7 +1131,7 @@ export function cmdPin(knowledgeDir: string, args: string[]): void {
   }
 
   mutateRegistry(knowledgeDir, (reg) => {
-    const s = reg.sources.find((item) => item.name === name);
+    const s = reg.sources.find((item) => isSameUnitName(item.name, name));
     if (s) {
       s.pin = version || s.commit;
       if (source.commit) s.commit = source.commit;
@@ -1150,9 +1158,9 @@ export function cmdUnpin(knowledgeDir: string, args: string[]): void {
   }
 
   const registry = loadRegistry(knowledgeDir);
-  let source = registry.sources.find((s) => s.name === name);
+  let source = registry.sources.find((s) => isSameUnitName(s.name, name));
   if (!source && !name.toLowerCase().endsWith('.md')) {
-    source = registry.sources.find((s) => s.name === `${name}.md`);
+    source = registry.sources.find((s) => isSameUnitName(s.name, `${name}.md`));
   }
 
   if (!source) {
@@ -1167,7 +1175,7 @@ export function cmdUnpin(knowledgeDir: string, args: string[]): void {
   }
 
   mutateRegistry(knowledgeDir, (reg) => {
-    const s = reg.sources.find((item) => item.name === name);
+    const s = reg.sources.find((item) => isSameUnitName(item.name, name));
     if (s) {
       delete s.pin;
     }
@@ -1301,7 +1309,7 @@ export function cmdSync(knowledgeDir: string, args: string[]): void {
   if (frozen) {
     for (const s of sources) {
       const destDir = resolveSafeUnitDir(knowledgeDir, s.name);
-      const regEntry = registry.sources.find((r) => r.name === s.name);
+      const regEntry = registry.sources.find((r) => isSameUnitName(r.name, s.name));
       if (!fs.existsSync(destDir) || !regEntry) {
         console.error(`Error (--frozen): '${s.name}' is not installed.`);
         process.exit(1);
@@ -1373,7 +1381,7 @@ export function cmdSync(knowledgeDir: string, args: string[]): void {
 
       for (const s of group) {
         const destDir = resolveSafeUnitDir(knowledgeDir, s.name);
-        const existing = registry.sources.find((r) => r.name === s.name);
+        const existing = registry.sources.find((r) => isSameUnitName(r.name, s.name));
         const effectivePin = s.pin || (s.ref && (!branch || s.ref !== branch) ? s.ref : undefined);
         const pinMatches = (effectivePin || undefined) === (existing?.pin || undefined);
 
@@ -2007,7 +2015,12 @@ export function cmdPublish(knowledgeDir: string, args: string[]): void {
         console.error('Error: --path requires a relative destination path in target repo.');
         process.exit(1);
       }
-      subPath = args[++i];
+      const rawSub = args[++i];
+      const hasTrailing = rawSub.endsWith('/') || rawSub.endsWith('\\');
+      subPath = rawSub.replace(/\\/g, '/').replace(/^\/+|\/+$/g, '');
+      if (hasTrailing && subPath) {
+        subPath += '/';
+      }
     } else if (args[i] === '--branch') {
       if (i + 1 >= args.length || args[i + 1].startsWith('-')) {
         console.error('Error: --branch requires a branch name.');

@@ -11,6 +11,7 @@ import {
   MIN_WORKFLOW_TIMEOUT_MS,
   ROOT_PLACEHOLDER_RE,
   resolveInsideDir,
+  stripBom,
 } from './config.js';
 import {
   Manifest,
@@ -146,7 +147,7 @@ export function validateManifestUnitDir(
 
   let manifest: Manifest;
   try {
-    manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf-8')) as Manifest;
+    manifest = JSON.parse(stripBom(fs.readFileSync(manifestPath, 'utf-8'))) as Manifest;
   } catch (e) {
     errors.push(`manifest.json is invalid JSON: ${e}`);
     return { errors, warnings };
@@ -455,7 +456,7 @@ export function validateManifestUnitDir(
 
       try {
         const wfContent = fs.readFileSync(workflowPath, 'utf-8');
-        const wfDef = JSON.parse(wfContent) as Record<string, unknown>;
+        const wfDef = JSON.parse(stripBom(wfContent)) as Record<string, unknown>;
         if (!wfDef.steps || !Array.isArray(wfDef.steps)) {
           errors.push(`${displayRel}: missing or invalid "steps" array`);
           continue;
@@ -808,7 +809,7 @@ export function inspectUnitSecurity(unitDir: string): UnitSecuritySummary {
   let manifest: Manifest | null = null;
   if (fs.existsSync(manifestPath)) {
     try {
-      manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf-8')) as Manifest;
+      manifest = JSON.parse(stripBom(fs.readFileSync(manifestPath, 'utf-8'))) as Manifest;
       if (isRecord(manifest.scripts)) {
         for (const s of Object.values(manifest.scripts)) {
           if (isRecord(s) && typeof s.file === 'string' && s.file) {
@@ -851,7 +852,7 @@ export function inspectUnitSecurity(unitDir: string): UnitSecuritySummary {
     const { workflowPath } = resolveWorkflowFilePath(unitDir, manifest, wfName);
     if (!workflowPath || !fs.existsSync(workflowPath)) continue;
     try {
-      const wfDef = JSON.parse(fs.readFileSync(workflowPath, 'utf-8')) as { steps?: Array<{ action?: string }> };
+      const wfDef = JSON.parse(stripBom(fs.readFileSync(workflowPath, 'utf-8'))) as { steps?: Array<{ action?: string }> };
       if (Array.isArray(wfDef.steps) && wfDef.steps.some((s) => s?.action === 'run')) {
         runWorkflows.add(wfName);
       }
