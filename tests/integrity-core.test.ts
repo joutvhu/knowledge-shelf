@@ -395,6 +395,18 @@ describe('Task 19.1 unit tests: hygiene rules, token boundaries, and secret assi
     expect(hasLiteralSecretAssignment('password=abc')).toBe(false);
     expect(hasLiteralSecretAssignment('password="   "')).toBe(false);
     expect(hasLiteralSecretAssignment('password=""')).toBe(false);
+    expect(hasLiteralSecretAssignment('password: string')).toBe(false);
+    expect(hasLiteralSecretAssignment('secret: boolean')).toBe(false);
+    expect(hasLiteralSecretAssignment('api_key: number')).toBe(false);
+    expect(hasLiteralSecretAssignment('password: null')).toBe(false);
+    expect(hasLiteralSecretAssignment('secret: undefined')).toBe(false);
+    expect(hasLiteralSecretAssignment('secret: process.env.JWT_SECRET')).toBe(false);
+    expect(hasLiteralSecretAssignment('api_key: import.meta.env.VITE_API_KEY')).toBe(false);
+    expect(hasLiteralSecretAssignment('api_key: os.getenv("API_KEY")')).toBe(false);
+    expect(hasLiteralSecretAssignment('password: System.getenv("DB_PASS")')).toBe(false);
+    expect(hasLiteralSecretAssignment('password: dto.password')).toBe(false);
+    expect(hasLiteralSecretAssignment('password: "********"')).toBe(false);
+    expect(hasLiteralSecretAssignment('secret: "REDACTED"')).toBe(false);
   });
 
   it('binary .npmrc is still flagged as sensitive file, but content scanning is skipped', () => {

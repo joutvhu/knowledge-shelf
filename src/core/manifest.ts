@@ -919,6 +919,14 @@ export const TOKEN_RULES: HygieneRule[] = [
 export const SECRET_ASSIGN_RE =
   /(password|secret|api_key|apikey)[A-Za-z0-9_-]*["']?[^\S\r\n]*[:=][^\S\r\n]*(?:"([^"\r\n]*)"|'([^'\r\n]*)'|([^\s"',;]+))/gi;
 
+const NON_SECRET_UNQUOTED_KEYWORDS_RE =
+  /^(?:string|number|boolean|bool|object|array|any|unknown|never|void|null|undefined|none|nil|true|false|required|optional|nullable|str|int|float|bytes|secretstr)(?:\[\])?$/i;
+
+const CODE_EXPR_UNQUOTED_RE =
+  /^(?:[A-Za-z_][A-Za-z0-9_$.]*[(\[]|(?:process\.env|import\.meta\.env|Deno\.env|os\.environ|env|config|cfg|settings|options|opts|params|props|state|req|res|ctx|body|headers|form|dto|user|data|model|this|self)\.[A-Za-z0-9_$.]+)$/i;
+
+const MASKED_SECRET_RE = /^(?:\*{4,}|•{4,}|REDACTED)$/i;
+
 export function isPlaceholderValue(v: string): boolean {
   const t = v.trim();
   return t === '' || /^(?:\{\{|\$|<|%)/.test(t);
@@ -926,8 +934,15 @@ export function isPlaceholderValue(v: string): boolean {
 
 export function hasLiteralSecretAssignment(text: string): boolean {
   for (const m of text.matchAll(SECRET_ASSIGN_RE)) {
+    const isQuoted = m[2] !== undefined || m[3] !== undefined;
     const value = m[2] ?? m[3] ?? m[4] ?? '';
     if (isPlaceholderValue(value)) continue;
+    const trimmed = value.trim();
+    if (MASKED_SECRET_RE.test(trimmed)) continue;
+    if (!isQuoted) {
+      if (NON_SECRET_UNQUOTED_KEYWORDS_RE.test(trimmed)) continue;
+      if (CODE_EXPR_UNQUOTED_RE.test(trimmed)) continue;
+    }
     if (value.replace(/\s/g, '').length >= 4) return true;
   }
   return false;

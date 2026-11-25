@@ -254,4 +254,55 @@ describe('Bug fixes v1.3.1', () => {
     expect(val.errors.some((e) => e.includes('field "inputs" must be an object'))).toBe(true);
     expect(val.errors.some((e) => e.includes('(run): "args" must be an array of strings'))).toBe(true);
   });
+
+  it('6. sync updates unit when source path changes at the same commit and --frozen detects path/url mismatches', () => {
+    const repoDir = path.join(tmpDir, 'mono-repo');
+    fs.mkdirSync(repoDir, { recursive: true });
+    expect(runCli(['scaffold', 'unit-a', '--output', repoDir]).status).toBe(0);
+    expect(runCli(['scaffold', 'unit-b', '--output', repoDir]).status).toBe(0);
+    git(tmpDir, ['init', '-b', 'main', repoDir]);
+    git(repoDir, ['config', 'user.email', 'test@example.com']);
+    git(repoDir, ['config', 'user.name', 'Test']);
+    git(repoDir, ['add', '.']);
+    git(repoDir, ['commit', '-m', 'init monorepo']);
+
+    const kDir = path.join(tmpDir, 'shelf');
+    const cfgPath = path.join(tmpDir, 'knowledge-shelf.json');
+    fs.writeFileSync(
+      cfgPath,
+      JSON.stringify({
+        version: '1.0',
+        sources: [{ name: 'my-slot', url: repoDir, path: 'unit-a' }],
+      }),
+      'utf-8'
+    );
+
+    const sync1 = runCli(['sync', '--file', cfgPath, '--dir', kDir, '--no-global']);
+    expect(sync1.status).toBe(0);
+    expect(fs.readFileSync(path.join(kDir, 'my-slot', 'overview.md'), 'utf-8')).toContain('# unit-a');
+
+    // Change path to unit-b at the exact same commit
+    fs.writeFileSync(
+      cfgPath,
+      JSON.stringify({
+        version: '1.0',
+        sources: [{ name: 'my-slot', url: repoDir, path: 'unit-b' }],
+      }),
+      'utf-8'
+    );
+
+    const frozenMismatch = runCli(['sync', '--file', cfgPath, '--frozen', '--dir', kDir, '--no-global']);
+    expect(frozenMismatch.status).toBe(1);
+    expect(frozenMismatch.stderr).toContain('path mismatch');
+
+    const sync2 = runCli(['sync', '--file', cfgPath, '--dir', kDir, '--no-global']);
+    expect(sync2.status).toBe(0);
+    expect(fs.readFileSync(path.join(kDir, 'my-slot', 'overview.md'), 'utf-8')).toContain('# unit-b');
+
+    const reg = JSON.parse(fs.readFileSync(path.join(kDir, '.registry.json'), 'utf-8'));
+    expect(reg.sources.find((s: { name: string }) => s.name === 'my-slot')?.path).toBe('unit-b');
+
+    const frozenOk = runCli(['sync', '--file', cfgPath, '--frozen', '--dir', kDir, '--no-global']);
+    expect(frozenOk.status).toBe(0);
+  });
 });

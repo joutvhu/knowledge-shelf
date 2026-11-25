@@ -314,6 +314,7 @@ export function createKnowledgeServer(
           resources: docs.map((d) => ({
             uri: `knowledge://${d.name.split('/').map(encodeURIComponent).join('/')}`,
             name: d.title || d.name,
+            title: d.title || d.name,
             description: d.description || undefined,
             mimeType: 'text/markdown',
           })),

@@ -1449,6 +1449,12 @@ export function cmdOutdated(
   }
 }
 
+function normalizeSyncSubPath(p?: string): string | undefined {
+  if (!p) return undefined;
+  const cleaned = p.replace(/\\/g, '/').replace(/^\.\//, '').replace(/^\/+|\/+$/g, '');
+  return !cleaned || cleaned === '.' ? undefined : cleaned;
+}
+
 export function cmdSync(knowledgeDir: string, args: string[]): void {
   let fileArg = '';
   let frozen = false;
@@ -1534,6 +1540,14 @@ export function cmdSync(knowledgeDir: string, args: string[]): void {
         console.error(`Error (--frozen): '${s.name}' is not installed.`);
         process.exit(1);
       }
+      const expectedPath = normalizeSyncSubPath(s.path);
+      const installedPath = normalizeSyncSubPath(regEntry.path);
+      if (expectedPath !== installedPath) {
+        console.error(
+          `Error (--frozen): '${s.name}' path mismatch (installed: ${installedPath || '.'}, expected: ${expectedPath || '.'}).`
+        );
+        process.exit(1);
+      }
       const targetRef = s.pin || s.ref;
       if (targetRef) {
         const matchedOffline =
@@ -1613,13 +1627,21 @@ export function cmdSync(knowledgeDir: string, args: string[]): void {
         const existing = registry.sources.find((r) => isSameUnitName(r.name, s.name));
         const effectivePin = s.pin || (s.ref && (!branch || s.ref !== branch) ? s.ref : undefined);
         const pinMatches = (effectivePin || undefined) === (existing?.pin || undefined);
+        const expectedPath = normalizeSyncSubPath(s.path);
+        const existingPath = normalizeSyncSubPath(existing?.path);
+        const sourceMatches =
+          Boolean(existing) &&
+          existing!.url === s.url &&
+          expectedPath === existingPath &&
+          (!branch || existing!.branch === branch);
 
         if (
           !force &&
           fs.existsSync(destDir) &&
           existing &&
           existing.commit === commit &&
-          pinMatches
+          pinMatches &&
+          sourceMatches
         ) {
           console.log(`  ✓ '${s.name}' already at ${commit}`);
           continue;
@@ -1633,8 +1655,7 @@ export function cmdSync(knowledgeDir: string, args: string[]): void {
           continue;
         }
 
-        const isRootPath = s.path === '.' || s.path === './';
-        const sourceDir = s.path && !isRootPath ? resolveInsideDir(cloneTarget, s.path, true) : cloneTarget;
+        const sourceDir = expectedPath ? resolveInsideDir(cloneTarget, expectedPath, true) : cloneTarget;
         if (!sourceDir || !fs.existsSync(sourceDir)) {
           console.error(`  Error: Path '${s.path}' not found in repo for '${s.name}'.`);
           failed++;
@@ -1660,7 +1681,7 @@ export function cmdSync(knowledgeDir: string, args: string[]): void {
         const updatedEntry: RegistryEntry = {
           name: s.name,
           url: s.url,
-          path: s.path && !isRootPath ? s.path : undefined,
+          path: expectedPath,
           ...(branch ? { branch } : existing?.branch ? { branch: existing.branch } : {}),
           commit,
           ...(fullCommit ? { fullCommit } : {}),

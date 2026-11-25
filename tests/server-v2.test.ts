@@ -300,7 +300,11 @@ describe('Multi-Layer, Search v2, Module Resolution, Resources & Workflow v1.1',
 
         // 6. MCP Resources list & read
         const { resources } = await client.listResources();
-        expect(resources.some((r) => r.uri === 'knowledge://shared-unit')).toBe(true);
+        const sharedResource = resources.find((r) => r.uri === 'knowledge://shared-unit');
+        expect(sharedResource).toBeDefined();
+        expect(sharedResource?.title).toBe('shared-unit');
+        const legacyResource = resources.find((r) => r.uri === 'knowledge://legacy-unit');
+        expect(legacyResource?.title).toBe('legacy-unit');
         const readRes = await client.readResource({ uri: 'knowledge://shared-unit/references/deep-guide.md' });
         expect((readRes.contents[0] as { text?: string }).text).toContain('Connection Pooling');
       } finally {
