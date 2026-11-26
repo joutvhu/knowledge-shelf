@@ -276,8 +276,9 @@ export function cmdRemove(
     }
   }
 
-  // If not tracked in primaryDir, check if it's tracked in another layer's registry
-  if (idx === -1 && knowledgeDirs.length > 1) {
+  // If not tracked in primaryDir (and not present unmanaged on disk in primaryDir),
+  // check if it's tracked in another layer's registry
+  if (idx === -1 && !fs.existsSync(destDir) && knowledgeDirs.length > 1) {
     for (const kDir of knowledgeDirs) {
       if (kDir === primaryDir || !fs.existsSync(kDir) || !fs.existsSync(getRegistryPath(kDir))) continue;
       let otherReg;
@@ -358,6 +359,18 @@ export function cmdInfo(knowledgeDirs: string | string[], args: string[]): void 
   }
 
   const dirs = Array.isArray(knowledgeDirs) ? knowledgeDirs : [knowledgeDirs];
+  const loadInfoRegistry = () => {
+    const isSingleLayer = dirs.length <= 1;
+    try {
+      return loadRegistry(knowledgeDir, { exitOnError: isSingleLayer });
+    } catch (e) {
+      if (isSingleLayer) throw e;
+      console.warn(
+        `  ⚠ Warning: Skipping invalid registry in '${knowledgeDir}': ${e instanceof Error ? e.message : e}`
+      );
+      return { version: '1.0' as const, sources: [] };
+    }
+  };
   let unitDir: string | null = null;
   let knowledgeDir = dirs[0];
 
@@ -403,7 +416,7 @@ export function cmdInfo(knowledgeDirs: string | string[], args: string[]): void 
     const displayName = path.relative(canonicalKd, unitDir).replace(/\\/g, '/');
     const content = fs.readFileSync(unitDir, 'utf-8');
     const { metadata } = parseFrontmatter(content);
-    const registry = loadRegistry(knowledgeDir);
+    const registry = loadInfoRegistry();
     const findSource = (targetName: string) => {
       const normTarget = targetName.toLowerCase().replace(/\\/g, '/');
       let found = registry.sources.find((s) => s.name.toLowerCase().replace(/\\/g, '/') === normTarget);
@@ -477,7 +490,7 @@ export function cmdInfo(knowledgeDirs: string | string[], args: string[]): void 
     }
   });
 
-  const registry = loadRegistry(knowledgeDir);
+  const registry = loadInfoRegistry();
   const findSource = (targetName: string) => {
     const normTarget = targetName.toLowerCase().replace(/\\/g, '/');
     let found = registry.sources.find((s) => s.name.toLowerCase().replace(/\\/g, '/') === normTarget);
@@ -572,7 +585,15 @@ export function cmdInfo(knowledgeDirs: string | string[], args: string[]): void 
   console.log('');
 }
 
-export function cmdValidate(knowledgeDirs: string | string[], args: string[]): void {
+export interface CmdValidateOptions {
+  isExplicitDir?: boolean;
+}
+
+export function cmdValidate(
+  knowledgeDirs: string | string[],
+  args: string[],
+  options: CmdValidateOptions = {}
+): void {
   rejectUnknownFlags(args, 'validate');
   if (args.length > 1) {
     console.error(`Error: Unexpected argument '${args[1]}'. 'validate' takes at most one target.`);
@@ -586,6 +607,7 @@ export function cmdValidate(knowledgeDirs: string | string[], args: string[]): v
     : undefined;
 
   let knowledgeDir = dirs[0];
+  let foundInKnowledgeDir = false;
   if (targetArg) {
     for (const d of dirs) {
       if (!fs.existsSync(d)) continue;
@@ -593,6 +615,7 @@ export function cmdValidate(knowledgeDirs: string | string[], args: string[]): v
       const targetMd = targetArg.toLowerCase().endsWith('.md') ? targetDir : `${targetDir}.md`;
       if (fs.existsSync(targetDir) || fs.existsSync(targetMd)) {
         knowledgeDir = d;
+        foundInKnowledgeDir = true;
         break;
       }
       const manifests = findManifestFolders(d);
@@ -602,6 +625,7 @@ export function cmdValidate(knowledgeDirs: string | string[], args: string[]): v
       });
       if (hasManifest) {
         knowledgeDir = d;
+        foundInKnowledgeDir = true;
         break;
       }
       const mds = findMdFiles(d);
@@ -612,6 +636,7 @@ export function cmdValidate(knowledgeDirs: string | string[], args: string[]): v
       });
       if (hasMd) {
         knowledgeDir = d;
+        foundInKnowledgeDir = true;
         break;
       }
     }
@@ -642,7 +667,13 @@ export function cmdValidate(knowledgeDirs: string | string[], args: string[]): v
       targetArg.toLowerCase().endsWith('.md') ||
       path.isAbsolute(targetArg);
 
-    if (fs.existsSync(localCandidate) && (hasPathSyntax || !fs.existsSync(path.join(knowledgeDir, targetArg)))) {
+    const preferInstalledOverCwd = Boolean(options.isExplicitDir && foundInKnowledgeDir && !isExplicitLocalPath);
+
+    if (
+      !preferInstalledOverCwd &&
+      fs.existsSync(localCandidate) &&
+      (hasPathSyntax || !foundInKnowledgeDir)
+    ) {
       const stat = fs.statSync(localCandidate);
       if (stat.isFile()) {
         const display = path.basename(localCandidate);
@@ -1538,7 +1569,7 @@ export function cmdImport(knowledgeDir: string, args: string[]): void {
 
     let hasManifestDirectly = fs.existsSync(path.join(installSource, 'manifest.json'));
     if (!hasManifestDirectly && fs.statSync(installSource).isDirectory()) {
-      const allManifests = findManifestFolders(installSource);
+      const allManifests = filterTopLevelManifestFolders(findManifestFolders(installSource));
       const allMds = findMdFiles(installSource).filter(
         (md) =>
           !allManifests.some((mf) => {
@@ -1646,11 +1677,12 @@ export function cmdTrust(
 
   let targetKnowledgeDir = primaryDir;
   let targetEntryName: string | null = null;
+  const isSingleLayer = knowledgeDirs.length <= 1;
 
   for (const kDir of knowledgeDirs) {
     if (!fs.existsSync(kDir) || !fs.existsSync(getRegistryPath(kDir))) continue;
     try {
-      const reg = loadRegistry(kDir, { exitOnError: false });
+      const reg = loadRegistry(kDir, { exitOnError: isSingleLayer });
       let entry = reg.sources.find((s) => isSameUnitName(s.name, name));
       if (!entry && !name.toLowerCase().endsWith('.md')) {
         entry = reg.sources.find((s) => isSameUnitName(s.name, `${name}.md`));
@@ -1660,8 +1692,11 @@ export function cmdTrust(
         targetEntryName = entry.name;
         break;
       }
-    } catch {
-      /* skip invalid layer registry */
+    } catch (e) {
+      if (isSingleLayer) throw e;
+      console.warn(
+        `  ⚠ Warning: Skipping invalid registry in '${kDir}': ${e instanceof Error ? e.message : e}`
+      );
     }
   }
 

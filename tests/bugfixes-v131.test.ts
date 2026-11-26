@@ -12,7 +12,7 @@ import { spawnSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { clearIndexCache, validateManifestUnitDir } from '../src/core.js';
+import { clearIndexCache, toolRunWorkflow, toolSearchDocs, validateManifestUnitDir } from '../src/core.js';
 import { assertNoSymlinks, assertSafeArchivePaths } from '../src/cli/git.js';
 
 const CLI_PATH = path.resolve(__dirname, '..', 'dist', 'index.js');
@@ -304,5 +304,724 @@ describe('Bug fixes v1.3.1', () => {
 
     const frozenOk = runCli(['sync', '--file', cfgPath, '--frozen', '--dir', kDir, '--no-global']);
     expect(frozenOk.status).toBe(0);
+  });
+
+  it('7. sync --frozen detects branch mismatch', () => {
+    const bareRepo = path.join(tmpDir, 'branch-repo.git');
+    const seed = path.join(tmpDir, 'branch-seed');
+    git(tmpDir, ['init', '--bare', '-b', 'main', bareRepo]);
+    git(tmpDir, ['clone', bareRepo, seed]);
+    git(seed, ['config', 'user.email', 'test@example.com']);
+    git(seed, ['config', 'user.name', 'Test']);
+    expect(runCli(['scaffold', 'unit-a', '--output', seed]).status).toBe(0);
+    git(seed, ['add', '.']);
+    git(seed, ['commit', '-m', 'main init']);
+    git(seed, ['push', '-u', 'origin', 'main']);
+
+    git(seed, ['checkout', '-b', 'v2']);
+    fs.appendFileSync(path.join(seed, 'unit-a', 'overview.md'), '\n## v2\n', 'utf-8');
+    git(seed, ['add', '.']);
+    git(seed, ['commit', '-m', 'v2 branch']);
+    git(seed, ['push', '-u', 'origin', 'v2']);
+
+    const kDir = path.join(tmpDir, 'shelf-branch');
+    const cfgPath = path.join(tmpDir, 'branch-sync.json');
+    fs.writeFileSync(
+      cfgPath,
+      JSON.stringify({
+        version: '1.0',
+        sources: [{ name: 'unit-a', url: bareRepo, path: 'unit-a', branch: 'main' }],
+      }),
+      'utf-8'
+    );
+    expect(runCli(['sync', '--file', cfgPath, '--dir', kDir, '--no-global']).status).toBe(0);
+    expect(runCli(['sync', '--file', cfgPath, '--frozen', '--dir', kDir, '--no-global']).status).toBe(0);
+
+    fs.writeFileSync(
+      cfgPath,
+      JSON.stringify({
+        version: '1.0',
+        sources: [{ name: 'unit-a', url: bareRepo, path: 'unit-a', branch: 'v2' }],
+      }),
+      'utf-8'
+    );
+    const mismatch = runCli(['sync', '--file', cfgPath, '--frozen', '--dir', kDir, '--no-global']);
+    expect(mismatch.status).toBe(1);
+    expect(mismatch.stderr).toContain('branch mismatch');
+  });
+
+  it('8. index cache invalidates when non-markdown code reference files change', () => {
+    const kDir = path.join(tmpDir, 'cache-java');
+    const unitDir = path.join(kDir, 'java-unit');
+    fs.mkdirSync(unitDir, { recursive: true });
+    const refPath = path.join(unitDir, 'Guide.java');
+    fs.writeFileSync(refPath, '// alphaUniqueToken\n', 'utf-8');
+    fs.writeFileSync(
+      path.join(unitDir, 'manifest.json'),
+      JSON.stringify({
+        name: 'java-unit',
+        version: '1.0.0',
+        type: 'toolkit',
+        description: 'Java reference unit',
+        references: { guide: { file: 'Guide.java', description: 'Java guide' } },
+      }),
+      'utf-8'
+    );
+
+    const before = JSON.parse(toolSearchDocs(kDir, 'betaUniqueToken', 10, { includeContent: true }).text);
+    expect(before.total).toBe(0);
+
+    fs.writeFileSync(refPath, '// betaUniqueToken updated content\n', 'utf-8');
+    const after = JSON.parse(toolSearchDocs(kDir, 'betaUniqueToken', 10, { includeContent: true }).text);
+    expect(after.total).toBe(1);
+  });
+
+  it('9. dry_run simulates sequential copy and patch steps and rejects non-object workflow steps cleanly', async () => {
+    const kDir = path.join(tmpDir, 'wf-dry');
+    const unitDir = path.join(kDir, 'demo');
+    const targetDir = path.join(tmpDir, 'wf-target');
+    fs.mkdirSync(path.join(unitDir, 'templates'), { recursive: true });
+    fs.mkdirSync(path.join(unitDir, 'workflows'), { recursive: true });
+    fs.mkdirSync(targetDir, { recursive: true });
+
+    fs.writeFileSync(
+      path.join(unitDir, 'manifest.json'),
+      JSON.stringify({
+        name: 'demo',
+        version: '1.0.0',
+        type: 'toolkit',
+        description: 'Dry run test',
+        workflows: { chain: {}, bad: {} },
+      }),
+      'utf-8'
+    );
+    fs.writeFileSync(path.join(unitDir, 'templates', 'host.txt'), 'header\nANCHOR_ONE\n', 'utf-8');
+    fs.writeFileSync(
+      path.join(unitDir, 'workflows', 'chain.json'),
+      JSON.stringify({
+        inputs: { TARGET: { required: true } },
+        steps: [
+          { action: 'copy', source: 'templates/host.txt', target: '{{TARGET}}/host.txt' },
+          { action: 'patch', target: '{{TARGET}}/host.txt', mode: 'replace', anchor: 'ANCHOR_ONE', content: 'ANCHOR_TWO' },
+          { action: 'patch', target: '{{TARGET}}/host.txt', mode: 'replace', anchor: 'ANCHOR_TWO', content: 'FINAL_OK' },
+        ],
+      }),
+      'utf-8'
+    );
+    fs.writeFileSync(
+      path.join(unitDir, 'workflows', 'bad.json'),
+      JSON.stringify({ steps: [null] }),
+      'utf-8'
+    );
+
+    const dryRes = await toolRunWorkflow(kDir, 'demo', 'chain', { TARGET: targetDir }, { dryRun: true });
+    expect(dryRes.isError).toBe(false);
+    const dryJson = JSON.parse(dryRes.text);
+    expect(dryJson.files_created).toHaveLength(1);
+    expect(dryJson.files_patched).toHaveLength(2);
+    expect(fs.existsSync(path.join(targetDir, 'host.txt'))).toBe(false);
+
+    const realRes = await toolRunWorkflow(kDir, 'demo', 'chain', { TARGET: targetDir });
+    expect(realRes.isError).toBe(false);
+    expect(fs.readFileSync(path.join(targetDir, 'host.txt'), 'utf-8')).toBe('header\nFINAL_OK\n');
+
+    const badRes = await toolRunWorkflow(kDir, 'demo', 'bad', {});
+    expect(badRes.isError).toBe(true);
+    const badJson = JSON.parse(badRes.text);
+    expect(badJson.errors[0]).toContain('Step 1: Step must be a JSON object.');
+  });
+
+  it('10. workflow run timeout terminates spawned child processes', async () => {
+    const kDir = path.join(tmpDir, 'wf-timeout');
+    const unitDir = path.join(kDir, 'timeout-unit');
+    const targetDir = path.join(tmpDir, 'wf-timeout-target');
+    fs.mkdirSync(path.join(unitDir, 'scripts'), { recursive: true });
+    fs.mkdirSync(path.join(unitDir, 'workflows'), { recursive: true });
+    fs.mkdirSync(targetDir, { recursive: true });
+
+    fs.writeFileSync(
+      path.join(unitDir, 'manifest.json'),
+      JSON.stringify({
+        name: 'timeout-unit',
+        version: '1.0.0',
+        type: 'toolkit',
+        description: 'Timeout tree kill test',
+        workflows: { hang: {} },
+      }),
+      'utf-8'
+    );
+    fs.writeFileSync(
+      path.join(unitDir, 'scripts', 'spawn-child.mjs'),
+      [
+        "import { spawn } from 'node:child_process';",
+        "const out = process.argv[2];",
+        "const code = 'setTimeout(() => require(\"node:fs\").writeFileSync(process.argv[1], \"survived\"), 2000)';",
+        "spawn(process.execPath, ['-e', code, out], { stdio: 'ignore' });",
+        "setInterval(() => {}, 1000);",
+      ].join('\n'),
+      'utf-8'
+    );
+    fs.writeFileSync(
+      path.join(unitDir, 'workflows', 'hang.json'),
+      JSON.stringify({
+        inputs: { TARGET: { required: true } },
+        steps: [
+          {
+            action: 'run',
+            script: 'scripts/spawn-child.mjs',
+            args: ['{{TARGET}}/survived.txt'],
+            timeout_ms: 1000,
+          },
+        ],
+      }),
+      'utf-8'
+    );
+
+    const res = await toolRunWorkflow(kDir, 'timeout-unit', 'hang', { TARGET: targetDir });
+    expect(res.isError).toBe(true);
+    const parsed = JSON.parse(res.text);
+    expect(parsed.errors[0]).toContain('timed out');
+
+    await new Promise((r) => setTimeout(r, 1500));
+    expect(fs.existsSync(path.join(targetDir, 'survived.txt'))).toBe(false);
+  });
+
+  it('11. validateManifestUnitDir validates and warns on undeclared workflows/*.json files', () => {
+    const unitDir = path.join(tmpDir, 'undeclared-wf');
+    fs.mkdirSync(path.join(unitDir, 'workflows'), { recursive: true });
+    fs.writeFileSync(
+      path.join(unitDir, 'manifest.json'),
+      JSON.stringify({
+        name: 'undeclared-wf',
+        version: '1.0.0',
+        type: 'toolkit',
+        description: 'Test undeclared workflow validation',
+      }),
+      'utf-8'
+    );
+    fs.writeFileSync(
+      path.join(unitDir, 'workflows', 'sneaky.json'),
+      JSON.stringify({
+        steps: [{ action: 'copy', source: '../outside.txt', target: '/abs/no-placeholder' }],
+      }),
+      'utf-8'
+    );
+
+    const val = validateManifestUnitDir(unitDir, 'undeclared-wf');
+    expect(val.warnings.some((w) => w.includes('workflows/sneaky.json') && w.includes('not declared'))).toBe(true);
+    expect(val.errors.some((e) => e.includes('workflows/sneaky.json') && e.includes('escapes unit folder'))).toBe(true);
+    expect(val.errors.some((e) => e.includes('workflows/sneaky.json') && e.includes('root placeholder'))).toBe(true);
+  });
+
+  it('12. cmdRemove does not delete lower-layer tracked unit when primary layer holds an unmanaged unit of the same name', () => {
+    const layer1 = path.join(tmpDir, 'rm-l1');
+    const layer2 = path.join(tmpDir, 'rm-l2');
+    fs.mkdirSync(path.join(layer1, 'shared'), { recursive: true });
+    fs.writeFileSync(
+      path.join(layer1, 'shared', 'manifest.json'),
+      JSON.stringify({ name: 'shared', version: '1.0.0', type: 'toolkit', description: 'L1 unmanaged' }),
+      'utf-8'
+    );
+
+    const draft2 = path.join(tmpDir, 'rm-draft2');
+    fs.mkdirSync(draft2, { recursive: true });
+    fs.writeFileSync(
+      path.join(draft2, 'manifest.json'),
+      JSON.stringify({ name: 'shared', version: '1.0.0', type: 'toolkit', description: 'L2 tracked' }),
+      'utf-8'
+    );
+    expect(runCli(['install', draft2, '--dir', layer2, '--no-global']).status).toBe(0);
+
+    const rmRes = runCli(['remove', 'shared', '--dir', layer1, '--dir', layer2, '--no-global']);
+    expect(rmRes.status).toBe(0);
+    expect(fs.existsSync(path.join(layer1, 'shared'))).toBe(false);
+    expect(fs.existsSync(path.join(layer2, 'shared', 'manifest.json'))).toBe(true);
+  });
+
+  it('13. sync --frozen succeeds when config sets both branch and pin/tag ref', () => {
+    const bareRepo = path.join(tmpDir, 'pin-branch-repo.git');
+    const seed = path.join(tmpDir, 'pin-branch-seed');
+    git(tmpDir, ['init', '--bare', '-b', 'main', bareRepo]);
+    git(tmpDir, ['clone', bareRepo, seed]);
+    git(seed, ['config', 'user.email', 'test@example.com']);
+    git(seed, ['config', 'user.name', 'Test']);
+    expect(runCli(['scaffold', 'unit-p', '--output', seed]).status).toBe(0);
+    git(seed, ['add', '.']);
+    git(seed, ['commit', '-m', 'v1']);
+    git(seed, ['tag', 'v1.0.0']);
+    git(seed, ['push', '-u', 'origin', 'main', '--tags']);
+
+    const kDir = path.join(tmpDir, 'shelf-pin-branch');
+    const cfgPath = path.join(tmpDir, 'pin-branch-sync.json');
+    fs.writeFileSync(
+      cfgPath,
+      JSON.stringify({
+        version: '1.0',
+        sources: [{ name: 'unit-p', url: bareRepo, path: 'unit-p', branch: 'main', pin: 'v1.0.0' }],
+      }),
+      'utf-8'
+    );
+
+    expect(runCli(['sync', '--file', cfgPath, '--dir', kDir, '--no-global']).status).toBe(0);
+    const frozenOk = runCli(['sync', '--file', cfgPath, '--frozen', '--dir', kDir, '--no-global']);
+    expect(frozenOk.status).toBe(0);
+  });
+
+  it('14. dry_run tracks patch create_if_missing for subsequent when.exists and when.not_exists', async () => {
+    const kDir = path.join(tmpDir, 'wf-dry-patch-when');
+    const unitDir = path.join(kDir, 'demo');
+    const targetDir = path.join(tmpDir, 'wf-dry-patch-target');
+    fs.mkdirSync(path.join(unitDir, 'workflows'), { recursive: true });
+    fs.mkdirSync(targetDir, { recursive: true });
+
+    fs.writeFileSync(
+      path.join(unitDir, 'manifest.json'),
+      JSON.stringify({
+        name: 'demo',
+        version: '1.0.0',
+        type: 'toolkit',
+        description: 'Dry run patch when test',
+        workflows: { check: {} },
+      }),
+      'utf-8'
+    );
+    fs.writeFileSync(
+      path.join(unitDir, 'workflows', 'check.json'),
+      JSON.stringify({
+        inputs: { TARGET: { required: true } },
+        steps: [
+          {
+            action: 'patch',
+            target: '{{TARGET}}/created.txt',
+            mode: 'append',
+            content: 'hello',
+            create_if_missing: true,
+          },
+          { action: 'message', text: 'EXISTS_OK', when: { exists: '{{TARGET}}/created.txt' } },
+          { action: 'message', text: 'NOT_EXISTS_FAIL', when: { not_exists: '{{TARGET}}/created.txt' } },
+        ],
+      }),
+      'utf-8'
+    );
+
+    const dryRes = await toolRunWorkflow(kDir, 'demo', 'check', { TARGET: targetDir }, { dryRun: true });
+    expect(dryRes.isError).toBe(false);
+    const dryJson = JSON.parse(dryRes.text);
+    expect(dryJson.messages).toEqual(['EXISTS_OK']);
+    expect(fs.existsSync(path.join(targetDir, 'created.txt'))).toBe(false);
+  });
+
+  it('15. update, outdated, pin, unpin, and trust fail on corrupted single-layer registry and warn on multi-layer', () => {
+    const corruptLayer = path.join(tmpDir, 'corrupt-single');
+    fs.mkdirSync(corruptLayer, { recursive: true });
+    fs.writeFileSync(path.join(corruptLayer, '.registry.json'), '{ invalid json', 'utf-8');
+
+    for (const cmdArgs of [
+      ['update', '--dir', corruptLayer, '--no-global'],
+      ['outdated', '--dir', corruptLayer, '--no-global'],
+      ['pin', 'foo', '--dir', corruptLayer, '--no-global'],
+      ['unpin', 'foo', '--dir', corruptLayer, '--no-global'],
+      ['trust', 'foo', '--dir', corruptLayer, '--no-global'],
+    ]) {
+      const res = runCli(cmdArgs);
+      expect(res.status, cmdArgs.join(' ')).toBe(1);
+      expect(res.stderr, cmdArgs.join(' ')).toContain('Cannot read registry');
+    }
+
+    const okLayer = path.join(tmpDir, 'valid-layer');
+    const draft = path.join(tmpDir, 'draft-multi');
+    expect(runCli(['scaffold', 'u-ok', '--output', draft]).status).toBe(0);
+    expect(runCli(['install', path.join(draft, 'u-ok'), '--dir', okLayer, '--no-global']).status).toBe(0);
+
+    const outMulti = runCli(['outdated', '--dir', corruptLayer, '--dir', okLayer, '--no-global']);
+    expect(outMulti.status).toBe(0);
+    expect(outMulti.stderr).toContain('Warning: Skipping invalid registry');
+    expect(outMulti.stdout).toContain('u-ok: local');
+  });
+
+  it('16. sync does not inherit trusted or branch when unit URL changes to a different repository', () => {
+    const bare1 = path.join(tmpDir, 'sync-url1.git');
+    const seed1 = path.join(tmpDir, 'sync-seed1');
+    git(tmpDir, ['init', '--bare', '-b', 'main', bare1]);
+    git(tmpDir, ['clone', bare1, seed1]);
+    git(seed1, ['config', 'user.email', 'test@example.com']);
+    git(seed1, ['config', 'user.name', 'Test']);
+    expect(runCli(['scaffold', 'swap-unit', '--output', seed1]).status).toBe(0);
+    git(seed1, ['add', '.']);
+    git(seed1, ['commit', '-m', 'init 1']);
+    git(seed1, ['push', '-u', 'origin', 'main']);
+
+    const bare2 = path.join(tmpDir, 'sync-url2.git');
+    const seed2 = path.join(tmpDir, 'sync-seed2');
+    git(tmpDir, ['init', '--bare', '-b', 'trunk', bare2]);
+    git(tmpDir, ['clone', bare2, seed2]);
+    git(seed2, ['config', 'user.email', 'test@example.com']);
+    git(seed2, ['config', 'user.name', 'Test']);
+    expect(runCli(['scaffold', 'swap-unit', '--output', seed2]).status).toBe(0);
+    git(seed2, ['add', '.']);
+    git(seed2, ['commit', '-m', 'init 2']);
+    git(seed2, ['tag', 'v2.0.0']);
+    git(seed2, ['push', '-u', 'origin', 'trunk', '--tags']);
+
+    const kDir = path.join(tmpDir, 'shelf-url-swap');
+    expect(runCli(['add', bare1, '--path', 'swap-unit', '--trust', '--dir', kDir, '--no-global']).status).toBe(0);
+
+    const cfgPath = path.join(tmpDir, 'swap-sync.json');
+    fs.writeFileSync(
+      cfgPath,
+      JSON.stringify({
+        version: '1.0',
+        sources: [{ name: 'swap-unit', url: bare2, path: 'swap-unit', pin: 'v2.0.0' }],
+      }),
+      'utf-8'
+    );
+
+    const syncRes = runCli(['sync', '--file', cfgPath, '--dir', kDir, '--no-global']);
+    expect(syncRes.status).toBe(0);
+
+    const reg = JSON.parse(fs.readFileSync(path.join(kDir, '.registry.json'), 'utf-8'));
+    expect(reg.sources).toHaveLength(1);
+    expect(reg.sources[0].url).toBe(bare2);
+    expect(reg.sources[0].trusted).toBeUndefined();
+    expect(reg.sources[0].branch).toBeUndefined();
+    expect(reg.sources[0].pin).toBe('v2.0.0');
+  });
+
+  it('17. validate --dir prioritizes installed unit/doc over same-named file in CWD', () => {
+    const kDir = path.join(tmpDir, 'val-dir');
+    const draftDir = path.join(tmpDir, 'val-draft');
+    const cwdDir = path.join(tmpDir, 'val-cwd');
+    fs.mkdirSync(draftDir, { recursive: true });
+    fs.mkdirSync(cwdDir, { recursive: true });
+
+    const validMd = path.join(draftDir, 'guide.md');
+    fs.writeFileSync(
+      validMd,
+      '---\ntitle: Guide\ndescription: Valid guide\ntags: [docs]\n---\n# Guide\nContent.\n',
+      'utf-8'
+    );
+    expect(runCli(['install', validMd, '--dir', kDir, '--no-global']).status).toBe(0);
+
+    // Put an empty file with the same name in CWD
+    fs.writeFileSync(path.join(cwdDir, 'guide.md'), '', 'utf-8');
+
+    const resInstalled = runCli(['validate', 'guide.md', '--dir', kDir, '--no-global'], cwdDir);
+    expect(resInstalled.status).toBe(0);
+    expect(resInstalled.stdout).toContain('guide.md — OK');
+
+    // Explicit ./ path still targets CWD
+    const resExplicitLocal = runCli(['validate', './guide.md', '--dir', kDir, '--no-global'], cwdDir);
+    expect(resExplicitLocal.status).toBe(1);
+    expect(resExplicitLocal.stdout).toContain('Markdown file is empty');
+  });
+
+  it('18. info warns on corrupted registry in multi-layer mode and still displays unit metadata', () => {
+    const layer1 = path.join(tmpDir, 'info-corrupt');
+    const layer2 = path.join(tmpDir, 'info-ok');
+    expect(runCli(['scaffold', 'info-unit', '--output', layer1]).status).toBe(0);
+    fs.writeFileSync(path.join(layer1, '.registry.json'), '{ invalid json', 'utf-8');
+    fs.mkdirSync(layer2, { recursive: true });
+
+    const infoRes = runCli(['info', 'info-unit', '--dir', layer1, '--dir', layer2, '--no-global']);
+    expect(infoRes.status).toBe(0);
+    expect(infoRes.stderr).toContain('Warning: Skipping invalid registry');
+    expect(infoRes.stdout).toContain('info-unit');
+    expect(infoRes.stdout).toContain('boilerplate');
+  });
+
+  it('19. CLI rejects --read-only after subcommand while allowing it before subcommand', () => {
+    const kDir = path.join(tmpDir, 'cli-flag-dir');
+    expect(runCli(['init', '--dir', kDir, '--no-global']).status).toBe(0);
+
+    const beforeRes = runCli(['--read-only', 'list', '--dir', kDir, '--no-global']);
+    expect(beforeRes.status).toBe(0);
+
+    const afterRes = runCli(['search', '--read-only', '--dir', kDir, '--no-global']);
+    expect(afterRes.status).toBe(1);
+    expect(afterRes.stderr).toContain("Unknown option '--read-only' for 'search'");
+  });
+
+  it('20. -f acts as --force without swallowing following --dir or --name=val options', () => {
+    const kDir = path.join(tmpDir, 'cli-f-dir');
+    const draftDir = path.join(tmpDir, 'cli-f-draft');
+    fs.mkdirSync(draftDir, { recursive: true });
+    expect(runCli(['scaffold', 'force-unit', '--output', draftDir]).status).toBe(0);
+    const unitSrc = path.join(draftDir, 'force-unit');
+
+    const res1 = runCli(['install', '-f', '--dir', kDir, '--no-global', unitSrc]);
+    expect(res1.status).toBe(0);
+    expect(fs.existsSync(path.join(kDir, 'force-unit', 'manifest.json'))).toBe(true);
+
+    const res2 = runCli(['--dir', kDir, '--no-global', 'install', '-f', '--name=aliased-unit', unitSrc]);
+    expect(res2.status).toBe(0);
+    expect(fs.existsSync(path.join(kDir, 'aliased-unit', 'manifest.json'))).toBe(true);
+  });
+
+  it('21. add --path rejects non-markdown single files unless --no-verify is passed', () => {
+    const repoDir = path.join(tmpDir, 'non-md-repo');
+    const kDir = path.join(tmpDir, 'non-md-kb');
+    fs.mkdirSync(repoDir, { recursive: true });
+    fs.writeFileSync(path.join(repoDir, 'config.json'), '{"a":1}', 'utf-8');
+    git(tmpDir, ['init', '-b', 'main', repoDir]);
+    git(repoDir, ['config', 'user.email', 'test@example.com']);
+    git(repoDir, ['config', 'user.name', 'Test']);
+    git(repoDir, ['add', '.']);
+    git(repoDir, ['commit', '-m', 'init']);
+
+    const failRes = runCli(['add', repoDir, '--path', 'config.json', '--dir', kDir, '--no-global']);
+    expect(failRes.status).toBe(1);
+    expect(failRes.stdout + failRes.stderr).toContain('File is not a Markdown (.md) document');
+    expect(fs.existsSync(path.join(kDir, 'config.json'))).toBe(false);
+
+    const bypassRes = runCli(['add', repoDir, '--path', 'config.json', '--no-verify', '--dir', kDir, '--no-global']);
+    expect(bypassRes.status).toBe(0);
+    expect(fs.existsSync(path.join(kDir, 'config.json'))).toBe(true);
+  });
+
+  it('22. publish --dir prioritizes explicit knowledge directory over same-named CWD folder', () => {
+    const kDir = path.join(tmpDir, 'pub-kb');
+    const draftDir = path.join(tmpDir, 'pub-draft');
+    const cwdDir = path.join(tmpDir, 'pub-cwd');
+    const bareRepo = path.join(tmpDir, 'pub-bare.git');
+    fs.mkdirSync(draftDir, { recursive: true });
+    fs.mkdirSync(path.join(cwdDir, 'auth'), { recursive: true });
+    fs.writeFileSync(path.join(cwdDir, 'auth', 'index.ts'), 'export const app = true;\n', 'utf-8');
+
+    expect(runCli(['scaffold', 'auth', '--output', draftDir]).status).toBe(0);
+    expect(runCli(['install', path.join(draftDir, 'auth'), '--dir', kDir, '--no-global']).status).toBe(0);
+    git(tmpDir, ['init', '--bare', '--initial-branch=main', bareRepo]);
+
+    const res = runCli(
+      ['publish', 'auth', '--dir', kDir, '--no-global', '--to', bareRepo, '--branch', 'main', '--push'],
+      cwdDir
+    );
+    expect(res.status).toBe(0);
+    expect(res.stdout).toContain("Published 'auth'");
+
+    // Explicit ./ path still targets CWD
+    const explicitRes = runCli(
+      ['publish', './auth', '--dir', kDir, '--no-global', '--to', bareRepo, '--branch', 'main'],
+      cwdDir
+    );
+    expect(explicitRes.status).toBe(1);
+    expect(explicitRes.stdout + explicitRes.stderr).toContain('manifest.json not found');
+  });
+
+  it('23. toolRunWorkflow skips manifest.placeholders required checks for steps skipped by when.input', async () => {
+    const kDir = path.join(tmpDir, 'cond-kb');
+    const unitDir = path.join(kDir, 'cond-unit');
+    const targetDir = path.join(tmpDir, 'cond-target');
+    fs.mkdirSync(path.join(unitDir, 'templates'), { recursive: true });
+    fs.mkdirSync(path.join(unitDir, 'workflows'), { recursive: true });
+    fs.mkdirSync(targetDir, { recursive: true });
+
+    fs.writeFileSync(
+      path.join(unitDir, 'manifest.json'),
+      JSON.stringify({
+        name: 'cond-unit',
+        version: '1.0.0',
+        type: 'boilerplate',
+        description: 'Conditional placeholder test',
+        placeholders: {
+          TARGET: { required: true, type: 'path' },
+          USE_AUTH: { default: 'false', type: 'string' },
+          AUTH_PROVIDER: { required: true, type: 'string' },
+        },
+      }),
+      'utf-8'
+    );
+    fs.writeFileSync(path.join(unitDir, 'templates', 'base.txt'), 'Base\n', 'utf-8');
+    fs.writeFileSync(path.join(unitDir, 'templates', 'auth.txt'), 'Provider: {{AUTH_PROVIDER}}\n', 'utf-8');
+    fs.writeFileSync(
+      path.join(unitDir, 'workflows', 'setup.json'),
+      JSON.stringify({
+        inputs: {
+          TARGET: { required: true },
+          USE_AUTH: { default: 'false' },
+        },
+        steps: [
+          { action: 'copy', source: 'templates/base.txt', target: '{{TARGET}}/base.txt' },
+          {
+            action: 'copy',
+            when: { input: 'USE_AUTH', equals: 'true' },
+            source: 'templates/auth.txt',
+            target: '{{TARGET}}/auth.txt',
+          },
+        ],
+      }),
+      'utf-8'
+    );
+
+    // When USE_AUTH is false, AUTH_PROVIDER is not needed
+    const resFalse = await toolRunWorkflow(kDir, 'cond-unit', 'setup', {
+      TARGET: targetDir,
+      USE_AUTH: 'false',
+    });
+    expect(resFalse.isError).toBeFalsy();
+    expect(fs.existsSync(path.join(targetDir, 'base.txt'))).toBe(true);
+    expect(fs.existsSync(path.join(targetDir, 'auth.txt'))).toBe(false);
+
+    // When USE_AUTH is true, AUTH_PROVIDER becomes required
+    const resTrueMissing = await toolRunWorkflow(kDir, 'cond-unit', 'setup', {
+      TARGET: targetDir,
+      USE_AUTH: 'true',
+    });
+    expect(resTrueMissing.isError).toBe(true);
+    expect(resTrueMissing.text).toContain('Missing required inputs: [\\"AUTH_PROVIDER\\"]');
+
+    const resTrueOk = await toolRunWorkflow(kDir, 'cond-unit', 'setup', {
+      TARGET: targetDir,
+      USE_AUTH: 'true',
+      AUTH_PROVIDER: 'jwt',
+    });
+    expect(resTrueOk.isError).toBeFalsy();
+    expect(fs.readFileSync(path.join(targetDir, 'auth.txt'), 'utf-8')).toBe('Provider: jwt\n');
+  });
+
+  it('24. import unwraps single unit containing nested templates/manifest.json with --name', () => {
+    const wrapRoot = path.join(tmpDir, 'wrap');
+    const extUnit = path.join(wrapRoot, 'release-bundle', 'chrome-ext');
+    fs.mkdirSync(path.join(extUnit, 'templates'), { recursive: true });
+    fs.writeFileSync(
+      path.join(extUnit, 'manifest.json'),
+      JSON.stringify({
+        name: 'chrome-ext',
+        version: '1.0.0',
+        type: 'boilerplate',
+        doc: 'overview.md',
+        description: 'Chrome extension starter',
+      }),
+      'utf-8'
+    );
+    fs.writeFileSync(path.join(extUnit, 'overview.md'), '# Chrome Ext\n', 'utf-8');
+    fs.writeFileSync(
+      path.join(extUnit, 'templates', 'manifest.json'),
+      JSON.stringify({ manifest_version: 3, name: 'My Ext', version: '1.0' }),
+      'utf-8'
+    );
+
+    const tarPath = path.join(tmpDir, 'bundle.tar.gz');
+    const tarRes = spawnSync('tar', ['-czf', tarPath, '-C', wrapRoot, 'release-bundle'], { stdio: 'pipe' });
+    expect(tarRes.status).toBe(0);
+
+    const kDir = path.join(tmpDir, 'kb-import');
+    const impRes = runCli(['import', tarPath, '--name', 'my-ext', '--dir', kDir, '--no-global']);
+    expect(impRes.status).toBe(0);
+    expect(fs.existsSync(path.join(kDir, 'my-ext', 'manifest.json'))).toBe(true);
+    expect(fs.existsSync(path.join(kDir, 'my-ext', 'templates', 'manifest.json'))).toBe(true);
+  });
+
+  it('25. publish --path . preserves existing repository README.md when unit has no README.md', () => {
+    const bareRepo = path.join(tmpDir, 'root-readme.git');
+    const seedDir = path.join(tmpDir, 'root-seed');
+    git(tmpDir, ['init', '--bare', '-b', 'main', bareRepo]);
+    git(tmpDir, ['clone', bareRepo, seedDir]);
+    git(seedDir, ['config', 'user.email', 'test@example.com']);
+    git(seedDir, ['config', 'user.name', 'Test']);
+    fs.writeFileSync(path.join(seedDir, 'README.md'), '# Team Repo\nKeep me.\n', 'utf-8');
+    fs.writeFileSync(path.join(seedDir, 'LICENSE'), 'Apache-2.0\n', 'utf-8');
+    git(seedDir, ['add', '.']);
+    git(seedDir, ['commit', '-m', 'init']);
+    git(seedDir, ['push', '-u', 'origin', 'main']);
+
+    const unitSrc = path.join(tmpDir, 'src');
+    fs.mkdirSync(unitSrc, { recursive: true });
+    expect(runCli(['scaffold', 'solo-unit', '--output', unitSrc]).status).toBe(0);
+
+    const pubRes = runCli([
+      'publish',
+      path.join(unitSrc, 'solo-unit'),
+      '--to',
+      bareRepo,
+      '--path',
+      '.',
+      '--branch',
+      'main',
+      '--push',
+    ]);
+    expect(pubRes.status).toBe(0);
+
+    const verifyDir = path.join(tmpDir, 'verify-readme');
+    git(tmpDir, ['clone', '-b', 'main', bareRepo, verifyDir]);
+    expect(fs.existsSync(path.join(verifyDir, 'README.md'))).toBe(true);
+    expect(fs.readFileSync(path.join(verifyDir, 'README.md'), 'utf-8')).toContain('Keep me.');
+    expect(fs.existsSync(path.join(verifyDir, 'LICENSE'))).toBe(true);
+    expect(fs.existsSync(path.join(verifyDir, 'manifest.json'))).toBe(true);
+  });
+
+  it('26. toolRunWorkflow under strictTrust allows execution when run step is skipped by when.input', async () => {
+    const kDir = path.join(tmpDir, 'trust-cond-kb');
+    const unitDir = path.join(kDir, 'cond-script-unit');
+    fs.mkdirSync(path.join(unitDir, 'scripts'), { recursive: true });
+    fs.mkdirSync(path.join(unitDir, 'workflows'), { recursive: true });
+
+    fs.writeFileSync(
+      path.join(unitDir, 'manifest.json'),
+      JSON.stringify({
+        name: 'cond-script-unit',
+        version: '1.0.0',
+        type: 'toolkit',
+        description: 'Conditional run step trust test',
+        scripts: {
+          hello: { file: 'scripts/hello.mjs', interpreter: 'node' },
+        },
+        workflows: {
+          setup: { description: 'Optional script run' },
+        },
+      }),
+      'utf-8'
+    );
+    fs.writeFileSync(path.join(unitDir, 'scripts', 'hello.mjs'), 'console.log("RAN");\n', 'utf-8');
+    fs.writeFileSync(
+      path.join(unitDir, 'workflows', 'setup.json'),
+      JSON.stringify({
+        inputs: {
+          DO_RUN: { default: 'no' },
+        },
+        steps: [
+          { action: 'message', text: 'Setup message' },
+          { action: 'run', script_ref: 'hello', when: { input: 'DO_RUN', equals: 'yes' } },
+        ],
+      }),
+      'utf-8'
+    );
+    fs.writeFileSync(
+      path.join(kDir, '.registry.json'),
+      JSON.stringify({
+        version: '1.0',
+        sources: [
+          {
+            name: 'cond-script-unit',
+            url: 'https://example.com/cond-script-unit.git',
+            commit: 'abc1234',
+            installedAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+          },
+        ],
+      }),
+      'utf-8'
+    );
+
+    const resSkipped = await toolRunWorkflow(
+      kDir,
+      'cond-script-unit',
+      'setup',
+      { DO_RUN: 'no' },
+      { strictTrust: true, dryRun: false }
+    );
+    expect(resSkipped.isError).toBeFalsy();
+    const parsedSkipped = JSON.parse(resSkipped.text);
+    expect(parsedSkipped.messages).toContain('Setup message');
+    expect(parsedSkipped.scripts_run).toHaveLength(0);
+
+    const resActive = await toolRunWorkflow(
+      kDir,
+      'cond-script-unit',
+      'setup',
+      { DO_RUN: 'yes' },
+      { strictTrust: true, dryRun: false }
+    );
+    expect(resActive.isError).toBe(true);
+    expect(resActive.text).toContain('strict trust policy');
   });
 });

@@ -454,6 +454,221 @@ export function validateManifestUnitDir(
     isRecord(manifest.placeholders) ? Object.keys(manifest.placeholders) : []
   );
 
+  const validateWorkflowFile = (workflowPath: string, displayRel: string) => {
+    try {
+      const wfContent = fs.readFileSync(workflowPath, 'utf-8');
+      const wfDef = JSON.parse(stripBom(wfContent)) as Record<string, unknown>;
+      if (!isRecord(wfDef) || !Array.isArray(wfDef.steps)) {
+        errors.push(`${displayRel}: missing or invalid "steps" array`);
+        return;
+      }
+
+      const wfInputs = new Set(isRecord(wfDef.inputs) ? Object.keys(wfDef.inputs) : []);
+      if (wfDef.inputs !== undefined && !isRecord(wfDef.inputs)) {
+        errors.push(`${displayRel}: field "inputs" must be an object`);
+      } else if (isRecord(wfDef.inputs)) {
+        for (const [inKey, inDef] of Object.entries(wfDef.inputs)) {
+          if (isRecord(inDef) && typeof inDef.pattern === 'string') {
+            try {
+              new RegExp(inDef.pattern);
+            } catch (e: any) {
+              errors.push(
+                `${displayRel}: input '${inKey}' invalid regex pattern '${inDef.pattern}': ${e?.message || e}`
+              );
+            }
+          }
+        }
+      }
+      const usedPlaceholders = new Set<string>();
+
+      for (let i = 0; i < wfDef.steps.length; i++) {
+        const rawStep = wfDef.steps[i];
+        const prefix = `${displayRel} step ${i + 1}`;
+        if (!isRecord(rawStep)) {
+          errors.push(`${prefix}: step must be a JSON object`);
+          continue;
+        }
+        const step = rawStep;
+        const action = typeof step.action === 'string' ? step.action : '';
+        if (!ALLOWED_WORKFLOW_ACTIONS.has(action)) {
+          errors.push(`${prefix}: unknown or missing action '${action}'`);
+          continue;
+        }
+
+        collectStepPlaceholders(step, usedPlaceholders);
+
+        if (step.when !== undefined) {
+          if (!isRecord(step.when)) {
+            errors.push(`${prefix}: "when" must be an object`);
+          } else {
+            const hasInputCond =
+              typeof step.when.input === 'string' &&
+              (step.when.equals !== undefined ||
+                step.when.not_equals !== undefined ||
+                Array.isArray(step.when.in));
+            const hasFileCond =
+              typeof step.when.exists === 'string' || typeof step.when.not_exists === 'string';
+            if (!hasInputCond && !hasFileCond) {
+              errors.push(
+                `${prefix}: "when" must specify input + (equals|not_equals|in) or exists/not_exists`
+              );
+            }
+            if (typeof step.when.exists === 'string') {
+              const cond = step.when.exists.trim();
+              if (!ROOT_PLACEHOLDER_RE.test(cond)) {
+                errors.push(
+                  `${prefix}: when.exists path '${step.when.exists}' must start with a root placeholder (e.g. {{TARGET}}/...)`
+                );
+              }
+            }
+            if (typeof step.when.not_exists === 'string') {
+              const cond = step.when.not_exists.trim();
+              if (!ROOT_PLACEHOLDER_RE.test(cond)) {
+                errors.push(
+                  `${prefix}: when.not_exists path '${step.when.not_exists}' must start with a root placeholder (e.g. {{TARGET}}/...)`
+                );
+              }
+            }
+          }
+        }
+
+        if (action === 'copy') {
+          const src = typeof step.source === 'string' ? step.source : '';
+          const tgt = typeof step.target === 'string' ? step.target.trim() : '';
+          if (!src) {
+            errors.push(`${prefix} (copy): missing "source"`);
+          } else {
+            const srcPath = resolveInsideDir(unitDir, src, true);
+            if (!srcPath) {
+              errors.push(`${prefix} (copy): source escapes unit folder: ${src}`);
+            } else if (!fs.existsSync(srcPath) || !fs.statSync(srcPath).isFile()) {
+              errors.push(`${prefix} (copy): source not found: ${src}`);
+            }
+          }
+          if (!tgt || !ROOT_PLACEHOLDER_RE.test(tgt)) {
+            errors.push(`${prefix} (copy): target must start with a root placeholder (e.g. {{TARGET}}/...)`);
+          }
+        } else if (action === 'copy_dir') {
+          const src = typeof step.source === 'string' ? step.source : '';
+          const tgt = typeof step.target === 'string' ? step.target.trim() : '';
+          if (!src) {
+            errors.push(`${prefix} (copy_dir): missing "source"`);
+          } else {
+            const srcPath = resolveInsideDir(unitDir, src, true);
+            if (!srcPath) {
+              errors.push(`${prefix} (copy_dir): source escapes unit folder: ${src}`);
+            } else if (!fs.existsSync(srcPath) || !fs.statSync(srcPath).isDirectory()) {
+              errors.push(`${prefix} (copy_dir): source directory not found: ${src}`);
+            }
+          }
+          if (!tgt || !ROOT_PLACEHOLDER_RE.test(tgt)) {
+            errors.push(
+              `${prefix} (copy_dir): target must start with a root placeholder (e.g. {{TARGET}}/...)`
+            );
+          }
+          if (
+            step.exclude !== undefined &&
+            (!Array.isArray(step.exclude) || step.exclude.some((x) => typeof x !== 'string'))
+          ) {
+            errors.push(`${prefix} (copy_dir): "exclude" must be an array of strings`);
+          }
+        } else if (action === 'patch') {
+          const tgt = typeof step.target === 'string' ? step.target.trim() : '';
+          const mode = typeof step.mode === 'string' ? step.mode : 'append';
+          if (!tgt || !ROOT_PLACEHOLDER_RE.test(tgt)) {
+            errors.push(`${prefix} (patch): target must start with a root placeholder (e.g. {{TARGET}}/...)`);
+          }
+          if (!VALID_PATCH_MODES.has(mode)) {
+            errors.push(`${prefix} (patch): invalid mode '${mode}'`);
+          }
+          if (typeof step.content !== 'string') {
+            errors.push(`${prefix} (patch): missing string "content"`);
+          }
+          if (
+            (mode === 'insert_before' || mode === 'insert_after' || mode === 'replace') &&
+            (!step.anchor || typeof step.anchor !== 'string')
+          ) {
+            errors.push(`${prefix} (patch): mode '${mode}' requires non-empty "anchor"`);
+          }
+        } else if (action === 'mkdir') {
+          const p = typeof step.path === 'string' ? step.path.trim() : '';
+          if (!p || !ROOT_PLACEHOLDER_RE.test(p)) {
+            errors.push(`${prefix} (mkdir): path must start with a root placeholder (e.g. {{TARGET}}/...)`);
+          }
+        } else if (action === 'run') {
+          const scriptRef = typeof step.script_ref === 'string' ? step.script_ref.trim() : '';
+          let script = typeof step.script === 'string' ? step.script : '';
+          if (scriptRef) {
+            const refDef =
+              isRecord(manifest.scripts) && isRecord(manifest.scripts[scriptRef])
+                ? manifest.scripts[scriptRef]
+                : null;
+            if (!refDef || typeof refDef.file !== 'string') {
+              errors.push(`${prefix} (run): unknown script_ref '${scriptRef}'`);
+            } else {
+              script = refDef.file;
+            }
+          }
+          if (!script) {
+            errors.push(`${prefix} (run): missing "script" or "script_ref"`);
+          } else {
+            const scriptPath = resolveInsideDir(unitDir, script, true);
+            if (!scriptPath) {
+              errors.push(`${prefix} (run): script escapes unit folder: ${script}`);
+            } else if (!fs.existsSync(scriptPath) || !fs.statSync(scriptPath).isFile()) {
+              errors.push(`${prefix} (run): script not found: ${script}`);
+            }
+          }
+          if (step.args !== undefined) {
+            if (!Array.isArray(step.args) || step.args.some((a) => typeof a !== 'string')) {
+              errors.push(`${prefix} (run): "args" must be an array of strings`);
+            }
+          }
+          if (typeof step.interpreter === 'string' && step.interpreter.trim()) {
+            const rawInterp = step.interpreter.trim().toLowerCase();
+            const interp = rawInterp === 'cmd /c' ? 'cmd' : rawInterp;
+            if (!ALLOWED_INTERPRETERS.has(interp)) {
+              errors.push(`${prefix} (run): interpreter '${step.interpreter}' is not allowed`);
+            }
+          }
+          if (typeof step.cwd === 'string' && step.cwd.trim()) {
+            const cwdTemplate = step.cwd.trim();
+            if (!ROOT_PLACEHOLDER_RE.test(cwdTemplate)) {
+              errors.push(`${prefix} (run): cwd must start with a root placeholder (e.g. {{TARGET}})`);
+            }
+          }
+          if (step.timeout_ms !== undefined) {
+            if (!isValidTimeoutMs(step.timeout_ms)) {
+              errors.push(
+                `${prefix} (run): timeout_ms must be an integer between ${MIN_WORKFLOW_TIMEOUT_MS} and ${MAX_WORKFLOW_TIMEOUT_MS}`
+              );
+            }
+          }
+        } else if (action === 'message') {
+          if (typeof step.text !== 'string') {
+            errors.push(`${prefix} (message): missing string "text"`);
+          }
+        }
+      }
+
+      for (const ph of usedPlaceholders) {
+        if (!wfInputs.has(ph) && !declaredManifestPlaceholders.has(ph)) {
+          warnings.push(
+            `${displayRel}: placeholder '{{${ph}}}' is not declared in workflow.inputs or manifest.placeholders`
+          );
+        }
+      }
+    } catch (e) {
+      errors.push(`${displayRel}: invalid JSON: ${e}`);
+    }
+  };
+
+  const validatedWorkflowPaths = new Set<string>();
+  const wfKey = (p: string) => {
+    const canon = fs.existsSync(p) ? fs.realpathSync(p) : path.resolve(p);
+    return process.platform === 'win32' ? canon.toLowerCase() : canon;
+  };
+
   if (manifest.workflows !== undefined && !isRecord(manifest.workflows)) {
     errors.push('Field "workflows" must be an object');
   } else if (isRecord(manifest.workflows)) {
@@ -472,207 +687,25 @@ export function validateManifestUnitDir(
         continue;
       }
 
+      validatedWorkflowPaths.add(wfKey(workflowPath));
+      validateWorkflowFile(workflowPath, displayRel);
+    }
+  }
+
+  const workflowsDir = path.join(unitDir, 'workflows');
+  if (fs.existsSync(workflowsDir) && fs.statSync(workflowsDir).isDirectory()) {
+    for (const fileName of fs.readdirSync(workflowsDir).sort()) {
+      if (!fileName.toLowerCase().endsWith('.json')) continue;
+      const wfPath = path.join(workflowsDir, fileName);
       try {
-        const wfContent = fs.readFileSync(workflowPath, 'utf-8');
-        const wfDef = JSON.parse(stripBom(wfContent)) as Record<string, unknown>;
-        if (!wfDef.steps || !Array.isArray(wfDef.steps)) {
-          errors.push(`${displayRel}: missing or invalid "steps" array`);
-          continue;
-        }
-
-        const wfInputs = new Set(isRecord(wfDef.inputs) ? Object.keys(wfDef.inputs) : []);
-        if (wfDef.inputs !== undefined && !isRecord(wfDef.inputs)) {
-          errors.push(`${displayRel}: field "inputs" must be an object`);
-        } else if (isRecord(wfDef.inputs)) {
-          for (const [inKey, inDef] of Object.entries(wfDef.inputs)) {
-            if (isRecord(inDef) && typeof inDef.pattern === 'string') {
-              try {
-                new RegExp(inDef.pattern);
-              } catch (e: any) {
-                errors.push(
-                  `${displayRel}: input '${inKey}' invalid regex pattern '${inDef.pattern}': ${e?.message || e}`
-                );
-              }
-            }
-          }
-        }
-        const usedPlaceholders = new Set<string>();
-
-        for (let i = 0; i < wfDef.steps.length; i++) {
-          const step = wfDef.steps[i] as Record<string, unknown>;
-          const prefix = `${displayRel} step ${i + 1}`;
-          const action = typeof step?.action === 'string' ? step.action : '';
-          if (!ALLOWED_WORKFLOW_ACTIONS.has(action)) {
-            errors.push(`${prefix}: unknown or missing action '${action}'`);
-            continue;
-          }
-
-          collectStepPlaceholders(step, usedPlaceholders);
-
-          if (step.when !== undefined) {
-            if (!isRecord(step.when)) {
-              errors.push(`${prefix}: "when" must be an object`);
-            } else {
-              const hasInputCond =
-                typeof step.when.input === 'string' &&
-                (step.when.equals !== undefined ||
-                  step.when.not_equals !== undefined ||
-                  Array.isArray(step.when.in));
-              const hasFileCond =
-                typeof step.when.exists === 'string' || typeof step.when.not_exists === 'string';
-              if (!hasInputCond && !hasFileCond) {
-                errors.push(
-                  `${prefix}: "when" must specify input + (equals|not_equals|in) or exists/not_exists`
-                );
-              }
-              if (typeof step.when.exists === 'string') {
-                const cond = step.when.exists.trim();
-                if (!ROOT_PLACEHOLDER_RE.test(cond)) {
-                  errors.push(
-                    `${prefix}: when.exists path '${step.when.exists}' must start with a root placeholder (e.g. {{TARGET}}/...)`
-                  );
-                }
-              }
-              if (typeof step.when.not_exists === 'string') {
-                const cond = step.when.not_exists.trim();
-                if (!ROOT_PLACEHOLDER_RE.test(cond)) {
-                  errors.push(
-                    `${prefix}: when.not_exists path '${step.when.not_exists}' must start with a root placeholder (e.g. {{TARGET}}/...)`
-                  );
-                }
-              }
-            }
-          }
-
-          if (action === 'copy') {
-            const src = typeof step.source === 'string' ? step.source : '';
-            const tgt = typeof step.target === 'string' ? step.target.trim() : '';
-            if (!src) {
-              errors.push(`${prefix} (copy): missing "source"`);
-            } else {
-              const srcPath = resolveInsideDir(unitDir, src, true);
-              if (!srcPath) {
-                errors.push(`${prefix} (copy): source escapes unit folder: ${src}`);
-              } else if (!fs.existsSync(srcPath) || !fs.statSync(srcPath).isFile()) {
-                errors.push(`${prefix} (copy): source not found: ${src}`);
-              }
-            }
-            if (!tgt || !ROOT_PLACEHOLDER_RE.test(tgt)) {
-              errors.push(`${prefix} (copy): target must start with a root placeholder (e.g. {{TARGET}}/...)`);
-            }
-          } else if (action === 'copy_dir') {
-            const src = typeof step.source === 'string' ? step.source : '';
-            const tgt = typeof step.target === 'string' ? step.target.trim() : '';
-            if (!src) {
-              errors.push(`${prefix} (copy_dir): missing "source"`);
-            } else {
-              const srcPath = resolveInsideDir(unitDir, src, true);
-              if (!srcPath) {
-                errors.push(`${prefix} (copy_dir): source escapes unit folder: ${src}`);
-              } else if (!fs.existsSync(srcPath) || !fs.statSync(srcPath).isDirectory()) {
-                errors.push(`${prefix} (copy_dir): source directory not found: ${src}`);
-              }
-            }
-            if (!tgt || !ROOT_PLACEHOLDER_RE.test(tgt)) {
-              errors.push(
-                `${prefix} (copy_dir): target must start with a root placeholder (e.g. {{TARGET}}/...)`
-              );
-            }
-            if (
-              step.exclude !== undefined &&
-              (!Array.isArray(step.exclude) || step.exclude.some((x) => typeof x !== 'string'))
-            ) {
-              errors.push(`${prefix} (copy_dir): "exclude" must be an array of strings`);
-            }
-          } else if (action === 'patch') {
-            const tgt = typeof step.target === 'string' ? step.target.trim() : '';
-            const mode = typeof step.mode === 'string' ? step.mode : 'append';
-            if (!tgt || !ROOT_PLACEHOLDER_RE.test(tgt)) {
-              errors.push(`${prefix} (patch): target must start with a root placeholder (e.g. {{TARGET}}/...)`);
-            }
-            if (!VALID_PATCH_MODES.has(mode)) {
-              errors.push(`${prefix} (patch): invalid mode '${mode}'`);
-            }
-            if (typeof step.content !== 'string') {
-              errors.push(`${prefix} (patch): missing string "content"`);
-            }
-            if (
-              (mode === 'insert_before' || mode === 'insert_after' || mode === 'replace') &&
-              (!step.anchor || typeof step.anchor !== 'string')
-            ) {
-              errors.push(`${prefix} (patch): mode '${mode}' requires non-empty "anchor"`);
-            }
-          } else if (action === 'mkdir') {
-            const p = typeof step.path === 'string' ? step.path.trim() : '';
-            if (!p || !ROOT_PLACEHOLDER_RE.test(p)) {
-              errors.push(`${prefix} (mkdir): path must start with a root placeholder (e.g. {{TARGET}}/...)`);
-            }
-          } else if (action === 'run') {
-            const scriptRef = typeof step.script_ref === 'string' ? step.script_ref.trim() : '';
-            let script = typeof step.script === 'string' ? step.script : '';
-            if (scriptRef) {
-              const refDef =
-                isRecord(manifest.scripts) && isRecord(manifest.scripts[scriptRef])
-                  ? manifest.scripts[scriptRef]
-                  : null;
-              if (!refDef || typeof refDef.file !== 'string') {
-                errors.push(`${prefix} (run): unknown script_ref '${scriptRef}'`);
-              } else {
-                script = refDef.file;
-              }
-            }
-            if (!script) {
-              errors.push(`${prefix} (run): missing "script" or "script_ref"`);
-            } else {
-              const scriptPath = resolveInsideDir(unitDir, script, true);
-              if (!scriptPath) {
-                errors.push(`${prefix} (run): script escapes unit folder: ${script}`);
-              } else if (!fs.existsSync(scriptPath) || !fs.statSync(scriptPath).isFile()) {
-                errors.push(`${prefix} (run): script not found: ${script}`);
-              }
-            }
-            if (step.args !== undefined) {
-              if (!Array.isArray(step.args) || step.args.some((a) => typeof a !== 'string')) {
-                errors.push(`${prefix} (run): "args" must be an array of strings`);
-              }
-            }
-            if (typeof step.interpreter === 'string' && step.interpreter.trim()) {
-              const rawInterp = step.interpreter.trim().toLowerCase();
-              const interp = rawInterp === 'cmd /c' ? 'cmd' : rawInterp;
-              if (!ALLOWED_INTERPRETERS.has(interp)) {
-                errors.push(`${prefix} (run): interpreter '${step.interpreter}' is not allowed`);
-              }
-            }
-            if (typeof step.cwd === 'string' && step.cwd.trim()) {
-              const cwdTemplate = step.cwd.trim();
-              if (!ROOT_PLACEHOLDER_RE.test(cwdTemplate)) {
-                errors.push(`${prefix} (run): cwd must start with a root placeholder (e.g. {{TARGET}})`);
-              }
-            }
-            if (step.timeout_ms !== undefined) {
-              if (!isValidTimeoutMs(step.timeout_ms)) {
-                errors.push(
-                  `${prefix} (run): timeout_ms must be an integer between ${MIN_WORKFLOW_TIMEOUT_MS} and ${MAX_WORKFLOW_TIMEOUT_MS}`
-                );
-              }
-            }
-          } else if (action === 'message') {
-            if (typeof step.text !== 'string') {
-              errors.push(`${prefix} (message): missing string "text"`);
-            }
-          }
-        }
-
-        for (const ph of usedPlaceholders) {
-          if (!wfInputs.has(ph) && !declaredManifestPlaceholders.has(ph)) {
-            warnings.push(
-              `${displayRel}: placeholder '{{${ph}}}' is not declared in workflow.inputs or manifest.placeholders`
-            );
-          }
-        }
-      } catch (e) {
-        errors.push(`${displayRel}: invalid JSON: ${e}`);
+        if (!fs.statSync(wfPath).isFile()) continue;
+      } catch {
+        continue;
       }
+      if (validatedWorkflowPaths.has(wfKey(wfPath))) continue;
+      const displayRel = `workflows/${fileName}`;
+      warnings.push(`${displayRel}: workflow file is not declared in manifest.workflows`);
+      validateWorkflowFile(wfPath, displayRel);
     }
   }
 

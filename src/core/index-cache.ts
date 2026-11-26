@@ -350,23 +350,11 @@ function computeDirSignature(knowledgeDir: string): string {
   if (!fs.existsSync(knowledgeDir)) return 'MISSING';
   const parts: string[] = [];
   walkDir(knowledgeDir, (fp) => {
-    const base = path.basename(fp);
-    const lower = fp.toLowerCase();
-    if (
-      base === 'manifest.json' ||
-      lower.endsWith('.md') ||
-      lower.endsWith('.mdx') ||
-      lower.endsWith('.txt') ||
-      lower.endsWith('.json') ||
-      lower.endsWith('.yaml') ||
-      lower.endsWith('.yml')
-    ) {
-      try {
-        const st = fs.statSync(fp);
-        parts.push(`${path.relative(knowledgeDir, fp)}:${st.mtimeMs}:${st.size}`);
-      } catch {
-        /* skip */
-      }
+    try {
+      const st = fs.statSync(fp);
+      parts.push(`${path.relative(knowledgeDir, fp)}:${st.mtimeMs}:${st.size}`);
+    } catch {
+      /* skip */
     }
   });
   parts.sort();

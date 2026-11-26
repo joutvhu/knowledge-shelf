@@ -4,7 +4,7 @@
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import {
   ALLOWED_INTERPRETERS,
   DEFAULT_WORKFLOW_TIMEOUT_MS,
@@ -97,6 +97,32 @@ export function isSafeCmdArg(arg: string): boolean {
   return !/["%!^&|<>\x00-\x1f]/.test(arg);
 }
 
+function killProcessTree(child: ReturnType<typeof spawn>): void {
+  const pid = child.pid;
+  if (pid && pid > 0) {
+    if (process.platform === 'win32') {
+      try {
+        spawnSync('taskkill', ['/T', '/F', '/PID', String(pid)], { stdio: 'ignore' });
+        return;
+      } catch {
+        /* fall back to child.kill() */
+      }
+    } else {
+      try {
+        process.kill(-pid, 'SIGKILL');
+        return;
+      } catch {
+        /* fall back to child.kill() */
+      }
+    }
+  }
+  try {
+    child.kill('SIGKILL');
+  } catch {
+    /* ignore */
+  }
+}
+
 function runProcessAsync(
   bin: string,
   spawnArgs: string[],
@@ -109,6 +135,7 @@ function runProcessAsync(
       cwd,
       stdio: ['pipe', 'pipe', 'pipe'],
       windowsVerbatimArguments,
+      detached: process.platform !== 'win32',
     });
     child.stdin?.end();
 
@@ -119,7 +146,7 @@ function runProcessAsync(
     const timer = setTimeout(() => {
       if (settled) return;
       settled = true;
-      child.kill();
+      killProcessTree(child);
       resolve({
         stdout,
         stderr,
@@ -151,10 +178,45 @@ function runProcessAsync(
   });
 }
 
+function isVirtualDryPathPresent(
+  resolvedPath: string,
+  results: WorkflowResults,
+  dryRunFiles?: Map<string, string | null>
+): boolean {
+  if (!results.dry_run) return false;
+  const normCheck = resolvedPath.replace(/\\/g, '/');
+  const checkKey = process.platform === 'win32' ? normCheck.toLowerCase() : normCheck;
+
+  const matchesList = (list?: string[]) =>
+    Boolean(
+      list?.some((f) => {
+        const normF = f.replace(/\\/g, '/');
+        const fKey = process.platform === 'win32' ? normF.toLowerCase() : normF;
+        return fKey === checkKey || fKey.startsWith(checkKey + '/');
+      })
+    );
+
+  if (matchesList(results.files_created) || matchesList(results.files_patched)) {
+    return true;
+  }
+
+  if (dryRunFiles) {
+    const vKey = dryFileKey(resolvedPath);
+    if (dryRunFiles.has(vKey)) return true;
+    const vPrefix = vKey.endsWith(path.sep) ? vKey : vKey + path.sep;
+    for (const key of dryRunFiles.keys()) {
+      if (key.startsWith(vPrefix)) return true;
+    }
+  }
+
+  return false;
+}
+
 function evaluateWhenCondition(
   when: unknown,
   inputs: Record<string, string>,
-  results: WorkflowResults
+  results: WorkflowResults,
+  dryRunFiles?: Map<string, string | null>
 ): boolean {
   if (!when || typeof when !== 'object' || Array.isArray(when)) return true;
   const w = when as Record<string, unknown>;
@@ -173,15 +235,7 @@ function evaluateWhenCondition(
       return false;
     }
     const existsOnDisk = fs.existsSync(check.resolvedPath);
-    const normCheck = check.resolvedPath.replace(/\\/g, '/');
-    const checkKey = process.platform === 'win32' ? normCheck.toLowerCase() : normCheck;
-    const existsInDryRun =
-      Boolean(results.dry_run) &&
-      results.files_created.some((f) => {
-        const normF = f.replace(/\\/g, '/');
-        const fKey = process.platform === 'win32' ? normF.toLowerCase() : normF;
-        return fKey === checkKey || fKey.startsWith(checkKey + '/');
-      });
+    const existsInDryRun = isVirtualDryPathPresent(check.resolvedPath, results, dryRunFiles);
     if (!existsOnDisk && !existsInDryRun) return false;
   }
 
@@ -192,29 +246,33 @@ function evaluateWhenCondition(
       return false;
     }
     const existsOnDisk = fs.existsSync(check.resolvedPath);
-    const normCheck = check.resolvedPath.replace(/\\/g, '/');
-    const checkKey = process.platform === 'win32' ? normCheck.toLowerCase() : normCheck;
-    const existsInDryRun =
-      Boolean(results.dry_run) &&
-      results.files_created.some((f) => {
-        const normF = f.replace(/\\/g, '/');
-        const fKey = process.platform === 'win32' ? normF.toLowerCase() : normF;
-        return fKey === checkKey || fKey.startsWith(checkKey + '/');
-      });
+    const existsInDryRun = isVirtualDryPathPresent(check.resolvedPath, results, dryRunFiles);
     if (existsOnDisk || existsInDryRun) return false;
   }
 
   return true;
 }
 
-function writeRenderedFile(sourcePath: string, targetPath: string, inputs: Record<string, string>): void {
-  fs.mkdirSync(path.dirname(targetPath), { recursive: true });
+function dryFileKey(filePath: string): string {
+  const norm = path.resolve(filePath);
+  return process.platform === 'win32' ? norm.toLowerCase() : norm;
+}
+
+function renderSourceContent(sourcePath: string, inputs: Record<string, string>): { isBinary: boolean; text?: string; buf: Buffer } {
   const buf = fs.readFileSync(sourcePath);
   if (buf.subarray(0, 8192).includes(0)) {
-    fs.writeFileSync(targetPath, buf);
+    return { isBinary: true, buf };
+  }
+  return { isBinary: false, text: replacePlaceholders(buf.toString('utf-8'), inputs), buf };
+}
+
+function writeRenderedFile(sourcePath: string, targetPath: string, inputs: Record<string, string>): void {
+  fs.mkdirSync(path.dirname(targetPath), { recursive: true });
+  const rendered = renderSourceContent(sourcePath, inputs);
+  if (rendered.isBinary) {
+    fs.writeFileSync(targetPath, rendered.buf);
   } else {
-    const content = replacePlaceholders(buf.toString('utf-8'), inputs);
-    fs.writeFileSync(targetPath, content, 'utf-8');
+    fs.writeFileSync(targetPath, rendered.text!, 'utf-8');
   }
 }
 
@@ -223,7 +281,8 @@ function executeCopyStep(
   folder: string,
   inputs: Record<string, string>,
   results: WorkflowResults,
-  dryRun: boolean
+  dryRun: boolean,
+  dryRunFiles?: Map<string, string | null>
 ): void {
   const sourceRel = String(step.source || '');
   const targetTemplate = String(step.target || '');
@@ -250,8 +309,9 @@ function executeCopyStep(
     return;
   }
   const targetPath = targetCheck.resolvedPath;
+  const vKey = dryFileKey(targetPath);
 
-  if (skipIfExists && fs.existsSync(targetPath)) {
+  if (skipIfExists && (fs.existsSync(targetPath) || (dryRun && dryRunFiles?.has(vKey)))) {
     results.files_skipped.push(sourceRel);
     return;
   }
@@ -263,6 +323,9 @@ function executeCopyStep(
 
   if (!dryRun) {
     writeRenderedFile(sourcePath, targetPath, inputs);
+  } else if (dryRunFiles) {
+    const rendered = renderSourceContent(sourcePath, inputs);
+    dryRunFiles.set(vKey, rendered.isBinary ? null : rendered.text!);
   }
   results.files_created.push(targetPath);
 }
@@ -272,7 +335,8 @@ function executeCopyDirStep(
   folder: string,
   inputs: Record<string, string>,
   results: WorkflowResults,
-  dryRun: boolean
+  dryRun: boolean,
+  dryRunFiles?: Map<string, string | null>
 ): void {
   const sourceRel = String(step.source || '');
   const targetTemplate = String(step.target || '');
@@ -329,13 +393,17 @@ function executeCopyDirStep(
       return;
     }
 
-    if (skipIfExists && fs.existsSync(destFile)) {
+    const vKey = dryFileKey(destFile);
+    if (skipIfExists && (fs.existsSync(destFile) || (dryRun && dryRunFiles?.has(vKey)))) {
       results.files_skipped.push(path.posix.join(sourceRel.replace(/\\/g, '/'), rel));
       continue;
     }
 
     if (!dryRun) {
       writeRenderedFile(srcFile, destFile, inputs);
+    } else if (dryRunFiles) {
+      const rendered = renderSourceContent(srcFile, inputs);
+      dryRunFiles.set(vKey, rendered.isBinary ? null : rendered.text!);
     }
     results.files_created.push(destFile);
   }
@@ -345,7 +413,8 @@ function executePatchStep(
   step: Record<string, unknown>,
   inputs: Record<string, string>,
   results: WorkflowResults,
-  dryRun: boolean
+  dryRun: boolean,
+  dryRunFiles?: Map<string, string | null>
 ): void {
   const targetTemplate = String(step.target || '');
   const mode = typeof step.mode === 'string' ? step.mode : 'append';
@@ -384,24 +453,21 @@ function executePatchStep(
     return;
   }
 
+  const vKey = dryFileKey(targetPath);
   let existing = '';
-  if (fs.existsSync(targetPath)) {
+  if (dryRun && dryRunFiles?.has(vKey)) {
+    const virtual = dryRunFiles.get(vKey);
+    if (virtual === null) {
+      results.errors.push(`Patch target '${targetPath}' is a binary file.`);
+      return;
+    }
+    existing = virtual!;
+  } else if (fs.existsSync(targetPath)) {
     if (!fs.statSync(targetPath).isFile()) {
       results.errors.push(`Patch target '${targetPath}' is not a file.`);
       return;
     }
     existing = fs.readFileSync(targetPath, 'utf-8');
-  } else if (
-    dryRun &&
-    results.files_created.some((f) =>
-      process.platform === 'win32'
-        ? f.toLowerCase() === targetPath.toLowerCase()
-        : f === targetPath
-    )
-  ) {
-    if (!results.files_patched) results.files_patched = [];
-    results.files_patched.push(targetPath);
-    return;
   } else if (createIfMissing && (mode === 'append' || mode === 'prepend')) {
     existing = '';
   } else {
@@ -423,11 +489,7 @@ function executePatchStep(
   } else if (mode === 'prepend') {
     const sep = existing && !renderedContent.endsWith('\n') ? eol : '';
     updated = `${renderedContent}${sep}${existing}`;
-  } else if (mode === 'insert_before' || mode === 'insert_after' || mode === 'replace') {
-    if (!renderedAnchor) {
-      results.errors.push(`Patch mode '${mode}' requires a non-empty anchor.`);
-      return;
-    }
+  } else {
     const idx = existing.indexOf(renderedAnchor);
     if (idx === -1) {
       results.errors.push(`Patch anchor not found in '${targetPath}': ${renderedAnchor}`);
@@ -447,14 +509,13 @@ function executePatchStep(
     } else {
       updated = `${existing.slice(0, idx)}${renderedContent}${existing.slice(idx + renderedAnchor.length)}`;
     }
-  } else {
-    results.errors.push(`Unknown patch mode '${mode}'.`);
-    return;
   }
 
   if (!dryRun) {
     fs.mkdirSync(path.dirname(targetPath), { recursive: true });
     fs.writeFileSync(targetPath, updated, 'utf-8');
+  } else if (dryRunFiles) {
+    dryRunFiles.set(vKey, updated);
   }
   if (!results.files_patched) results.files_patched = [];
   results.files_patched.push(targetPath);
@@ -672,6 +733,7 @@ export async function executeWorkflowSteps(
   options: WorkflowExecutionOptions = {}
 ): Promise<WorkflowResults> {
   const dryRun = Boolean(options.dryRun);
+  const dryRunFiles = dryRun ? new Map<string, string | null>() : undefined;
   const results: WorkflowResults = {
     workflow: workflowName,
     ...(dryRun ? { dry_run: true } : {}),
@@ -685,21 +747,26 @@ export async function executeWorkflowSteps(
 
   for (let i = 0; i < steps.length; i++) {
     const step = steps[i];
+    if (!step || typeof step !== 'object' || Array.isArray(step)) {
+      results.errors.push(`Step ${i + 1}: Step must be a JSON object.`);
+      results.steps_executed++;
+      break;
+    }
     const action = String(step.action || '');
     const prevErrors = results.errors.length;
 
-    if (step.when !== undefined && !evaluateWhenCondition(step.when, inputValues, results)) {
+    if (step.when !== undefined && !evaluateWhenCondition(step.when, inputValues, results, dryRunFiles)) {
       if (results.errors.length > prevErrors && !step.continue_on_error) break;
       continue;
     }
 
     try {
       if (action === 'copy') {
-        executeCopyStep(step, folder, inputValues, results, dryRun);
+        executeCopyStep(step, folder, inputValues, results, dryRun, dryRunFiles);
       } else if (action === 'copy_dir') {
-        executeCopyDirStep(step, folder, inputValues, results, dryRun);
+        executeCopyDirStep(step, folder, inputValues, results, dryRun, dryRunFiles);
       } else if (action === 'patch') {
-        executePatchStep(step, inputValues, results, dryRun);
+        executePatchStep(step, inputValues, results, dryRun, dryRunFiles);
       } else if (action === 'run') {
         await executeRunStep(step, folder, inputValues, results, options);
       } else if (action === 'mkdir') {

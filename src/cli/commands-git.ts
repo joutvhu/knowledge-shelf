@@ -387,7 +387,7 @@ export function cmdAdd(knowledgeDir: string, args: string[]): void {
       }
 
       if (isFile) {
-        if (!noVerify && sourceDir.toLowerCase().endsWith('.md')) {
+        if (!noVerify) {
           const { errors, warnings } = validateStandaloneMdFile(sourceDir);
           printValidationResults(unitName, errors, warnings);
           if (errors.length > 0) {
@@ -657,7 +657,7 @@ export function cmdAdd(knowledgeDir: string, args: string[]): void {
       process.exit(1);
     }
 
-    if (!noVerify && sourceDir.toLowerCase().endsWith('.md')) {
+    if (!noVerify) {
       const { errors, warnings } = validateStandaloneMdFile(sourceDir);
       printValidationResults(name, errors, warnings);
       if (errors.length > 0) {
@@ -822,10 +822,11 @@ export function cmdUpdate(
   const allSources: Array<{ source: RegistryEntry; layerDir: string }> = [];
   const seenNames = new Set<string>();
 
+  const isSingleLayer = knowledgeDirs.length <= 1;
   for (const d of knowledgeDirs) {
     if (fs.existsSync(d) && fs.existsSync(getRegistryPath(d))) {
       try {
-        const reg = loadRegistry(d, { exitOnError: false });
+        const reg = loadRegistry(d, { exitOnError: isSingleLayer });
         for (const s of reg.sources) {
           const key = process.platform === 'win32' ? s.name.toLowerCase() : s.name;
           if (!seenNames.has(key)) {
@@ -833,8 +834,11 @@ export function cmdUpdate(
             allSources.push({ source: s, layerDir: d });
           }
         }
-      } catch {
-        /* skip invalid layer registry */
+      } catch (e) {
+        if (isSingleLayer) throw e;
+        console.warn(
+          `  ⚠ Warning: Skipping invalid registry in '${d}': ${e instanceof Error ? e.message : e}`
+        );
       }
     }
   }
@@ -1197,11 +1201,12 @@ export function cmdPin(
 
   let targetKnowledgeDir = primaryDir;
   let source: RegistryEntry | undefined;
+  const isSingleLayer = knowledgeDirs.length <= 1;
 
   for (const kDir of knowledgeDirs) {
     if (!fs.existsSync(kDir) || !fs.existsSync(getRegistryPath(kDir))) continue;
     try {
-      const reg = loadRegistry(kDir, { exitOnError: false });
+      const reg = loadRegistry(kDir, { exitOnError: isSingleLayer });
       let s = reg.sources.find((item) => isSameUnitName(item.name, name));
       if (!s && !name.toLowerCase().endsWith('.md')) {
         s = reg.sources.find((item) => isSameUnitName(item.name, `${name}.md`));
@@ -1211,8 +1216,11 @@ export function cmdPin(
         source = s;
         break;
       }
-    } catch {
-      /* skip invalid registry */
+    } catch (e) {
+      if (isSingleLayer) throw e;
+      console.warn(
+        `  ⚠ Warning: Skipping invalid registry in '${kDir}': ${e instanceof Error ? e.message : e}`
+      );
     }
   }
 
@@ -1326,11 +1334,12 @@ export function cmdUnpin(
 
   let targetKnowledgeDir = primaryDir;
   let source: RegistryEntry | undefined;
+  const isSingleLayer = knowledgeDirs.length <= 1;
 
   for (const kDir of knowledgeDirs) {
     if (!fs.existsSync(kDir) || !fs.existsSync(getRegistryPath(kDir))) continue;
     try {
-      const reg = loadRegistry(kDir, { exitOnError: false });
+      const reg = loadRegistry(kDir, { exitOnError: isSingleLayer });
       let s = reg.sources.find((item) => isSameUnitName(item.name, name));
       if (!s && !name.toLowerCase().endsWith('.md')) {
         s = reg.sources.find((item) => isSameUnitName(item.name, `${name}.md`));
@@ -1340,8 +1349,11 @@ export function cmdUnpin(
         source = s;
         break;
       }
-    } catch {
-      /* skip */
+    } catch (e) {
+      if (isSingleLayer) throw e;
+      console.warn(
+        `  ⚠ Warning: Skipping invalid registry in '${kDir}': ${e instanceof Error ? e.message : e}`
+      );
     }
   }
 
@@ -1392,10 +1404,11 @@ export function cmdOutdated(
   const allSources: Array<{ source: RegistryEntry; layerDir: string }> = [];
   const seenNames = new Set<string>();
 
+  const isSingleLayer = knowledgeDirs.length <= 1;
   for (const d of knowledgeDirs) {
     if (fs.existsSync(d) && fs.existsSync(getRegistryPath(d))) {
       try {
-        const reg = loadRegistry(d, { exitOnError: false });
+        const reg = loadRegistry(d, { exitOnError: isSingleLayer });
         for (const s of reg.sources) {
           const key = process.platform === 'win32' ? s.name.toLowerCase() : s.name;
           if (!seenNames.has(key)) {
@@ -1403,8 +1416,11 @@ export function cmdOutdated(
             allSources.push({ source: s, layerDir: d });
           }
         }
-      } catch {
-        /* skip invalid layer registry */
+      } catch (e) {
+        if (isSingleLayer) throw e;
+        console.warn(
+          `  ⚠ Warning: Skipping invalid registry in '${d}': ${e instanceof Error ? e.message : e}`
+        );
       }
     }
   }
@@ -1548,6 +1564,12 @@ export function cmdSync(knowledgeDir: string, args: string[]): void {
         );
         process.exit(1);
       }
+      if (s.branch && !s.pin && !s.ref && regEntry.branch !== s.branch) {
+        console.error(
+          `Error (--frozen): '${s.name}' branch mismatch (installed: ${regEntry.branch || 'detached'}, expected: ${s.branch}).`
+        );
+        process.exit(1);
+      }
       const targetRef = s.pin || s.ref;
       if (targetRef) {
         const matchedOffline =
@@ -1678,16 +1700,17 @@ export function cmdSync(knowledgeDir: string, args: string[]): void {
 
         const now = new Date().toISOString();
         const checksum = computeUnitChecksum(destDir);
+        const sameUrl = existing?.url === s.url;
         const updatedEntry: RegistryEntry = {
           name: s.name,
           url: s.url,
           path: expectedPath,
-          ...(branch ? { branch } : existing?.branch ? { branch: existing.branch } : {}),
+          ...(branch ? { branch } : sameUrl && existing?.branch ? { branch: existing.branch } : {}),
           commit,
           ...(fullCommit ? { fullCommit } : {}),
           ...(effectivePin ? { pin: effectivePin } : {}),
           checksum,
-          ...(existing?.trusted ? { trusted: true } : {}),
+          ...(sameUrl && existing?.trusted ? { trusted: true } : {}),
           installedAt: existing?.installedAt || now,
           updatedAt: now,
         };
@@ -2115,12 +2138,87 @@ export function buildPublishPushArgs(branch: string, isFirstPublish: boolean = t
   return isFirstPublish ? ['push', '-u', 'origin', branch] : ['push', 'origin', branch];
 }
 
+export interface ResolvePublishTargetOptions {
+  isExplicitDir?: boolean;
+}
+
 export function resolvePublishTarget(
   raw: string,
-  knowledgeDirs: string | string[]
+  knowledgeDirs: string | string[],
+  options: ResolvePublishTargetOptions = {}
 ): { kind: 'unit' | 'file'; path: string } | null {
   if (!raw) return null;
   const dirs = Array.isArray(knowledgeDirs) ? knowledgeDirs : [knowledgeDirs];
+
+  const isExplicitLocalPath =
+    raw === '.' ||
+    raw === '..' ||
+    raw.startsWith('./') ||
+    raw.startsWith('.\\') ||
+    raw.startsWith('../') ||
+    raw.startsWith('..\\') ||
+    raw === '~' ||
+    raw.startsWith('~/') ||
+    raw.startsWith('~\\') ||
+    path.isAbsolute(raw);
+
+  const checkDirectPath = (): { kind: 'unit' | 'file'; path: string } | null => {
+    const expanded = path.resolve(expandHome(raw));
+    if (!fs.existsSync(expanded)) return null;
+    const stat = fs.statSync(expanded);
+    if (stat.isDirectory()) {
+      return { kind: 'unit', path: expanded };
+    }
+    if (stat.isFile()) {
+      if (raw.toLowerCase().endsWith('.md')) {
+        return { kind: 'file', path: expanded };
+      }
+    }
+    return null;
+  };
+
+  const checkKnowledgeDirs = (): { kind: 'unit' | 'file'; path: string } | null => {
+    for (const kDir of dirs) {
+      if (!fs.existsSync(kDir)) continue;
+      const relInside = resolveInsideDir(kDir, raw, true);
+      if (relInside && fs.existsSync(relInside)) {
+        const stat = fs.statSync(relInside);
+        if (stat.isDirectory()) {
+          return { kind: 'unit', path: relInside };
+        }
+        if (stat.isFile() && raw.toLowerCase().endsWith('.md')) {
+          return { kind: 'file', path: relInside };
+        }
+      }
+
+      if (!raw.toLowerCase().endsWith('.md')) {
+        const mdRelInside = resolveInsideDir(kDir, `${raw}.md`, true);
+        if (mdRelInside && fs.existsSync(mdRelInside)) {
+          const stat = fs.statSync(mdRelInside);
+          if (stat.isFile()) {
+            return { kind: 'file', path: mdRelInside };
+          }
+        }
+      }
+    }
+    return null;
+  };
+
+  // When --dir is explicitly passed and the argument is a bare unit/doc name (not ./, ../, ~, or absolute),
+  // prefer the explicit knowledge directory over a same-named directory/file in CWD.
+  if (options.isExplicitDir && !isExplicitLocalPath) {
+    const inKnowledge = checkKnowledgeDirs();
+    if (inKnowledge) return inKnowledge;
+    // If raw is a non-.md file in knowledgeDirs, do not fall back to CWD; let caller report non-markdown error.
+    for (const kDir of dirs) {
+      if (!fs.existsSync(kDir)) continue;
+      const relInside = resolveInsideDir(kDir, raw, true);
+      if (relInside && fs.existsSync(relInside) && fs.statSync(relInside).isFile()) {
+        return null;
+      }
+    }
+    return checkDirectPath();
+  }
 
   // 1. Direct path check (with ~ expanded)
   const expanded = path.resolve(expandHome(raw));
@@ -2137,35 +2235,8 @@ export function resolvePublishTarget(
     }
   }
 
-  // 2. Relative to knowledgeDirs: check as-is
-  for (const kDir of dirs) {
-    if (!fs.existsSync(kDir)) continue;
-    const relInside = resolveInsideDir(kDir, raw, true);
-    if (relInside && fs.existsSync(relInside)) {
-      const stat = fs.statSync(relInside);
-      if (stat.isDirectory()) {
-        return { kind: 'unit', path: relInside };
-      }
-      if (stat.isFile()) {
-        if (raw.toLowerCase().endsWith('.md')) {
-          return { kind: 'file', path: relInside };
-        }
-      }
-    }
-
-    // 3. If !raw.endsWith('.md'), check knowledgeDir/<raw>.md
-    if (!raw.toLowerCase().endsWith('.md')) {
-      const mdRelInside = resolveInsideDir(kDir, `${raw}.md`, true);
-      if (mdRelInside && fs.existsSync(mdRelInside)) {
-        const stat = fs.statSync(mdRelInside);
-        if (stat.isFile()) {
-          return { kind: 'file', path: mdRelInside };
-        }
-      }
-    }
-  }
-
-  return null;
+  // 2. Relative to knowledgeDirs
+  return checkKnowledgeDirs();
 }
 
 export interface PublishViaCloneOptions {
@@ -2292,7 +2363,8 @@ export function publishViaClone(opts: PublishViaCloneOptions): void {
 export function cmdPublish(
   primaryDir: string,
   dirsOrArgs: string[] | string,
-  maybeArgs?: string[]
+  maybeArgs?: string[],
+  options: ResolvePublishTargetOptions = {}
 ): void {
   let knowledgeDirs: string[];
   let args: string[];
@@ -2390,20 +2462,19 @@ export function cmdPublish(
     process.exit(1);
   }
 
-  const target = resolvePublishTarget(unitArg, knowledgeDirs);
+  const target = resolvePublishTarget(unitArg, knowledgeDirs, options);
   if (!target) {
     const expanded = path.resolve(expandHome(unitArg));
     let notMdFile = false;
-    if (fs.existsSync(expanded) && fs.statSync(expanded).isFile()) {
-      notMdFile = true;
-    } else {
-      for (const kDir of knowledgeDirs) {
-        const relInside = resolveInsideDir(kDir, unitArg, true);
-        if (relInside && fs.existsSync(relInside) && fs.statSync(relInside).isFile()) {
-          notMdFile = true;
-          break;
-        }
+    for (const kDir of knowledgeDirs) {
+      const relInside = resolveInsideDir(kDir, unitArg, true);
+      if (relInside && fs.existsSync(relInside) && fs.statSync(relInside).isFile()) {
+        notMdFile = true;
+        break;
       }
+    }
+    if (!notMdFile && fs.existsSync(expanded) && fs.statSync(expanded).isFile()) {
+      notMdFile = true;
     }
     if (notMdFile) {
       console.error(`Error: '${unitArg}' is neither a knowledge unit directory nor a Markdown (.md) file.`);
@@ -2541,7 +2612,7 @@ export function cmdPublish(
             if (fs.existsSync(path.join(unitDir, entryName))) return false;
             const lower = entryName.toLowerCase();
             if (entryName === '.github' || entryName === '.gitignore' || entryName === '.gitattributes') return true;
-            if (lower.startsWith('license') || lower === 'code_of_conduct.md' || lower === 'contributing.md') return true;
+            if (lower.startsWith('license') || lower === 'readme.md' || lower === 'code_of_conduct.md' || lower === 'contributing.md') return true;
             return false;
           };
 

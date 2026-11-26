@@ -844,12 +844,45 @@ export async function toolRunWorkflow(
   const workflowInputs = isRecord(workflowDef.inputs) ? workflowDef.inputs : {};
   const manifestPh = isRecord(manifest?.placeholders) ? manifest!.placeholders : {};
 
+  // Pre-compute effective inputs (provided inputs + defaults) to skip placeholders from
+  // steps whose `when.input` condition is already false.
+  const effectiveForWhen: Record<string, string> = { ...inputValues };
+  for (const [k, d] of Object.entries(workflowInputs)) {
+    if (isRecord(d) && d.default !== undefined && !Object.prototype.hasOwnProperty.call(effectiveForWhen, k)) {
+      effectiveForWhen[k] = String(d.default);
+    }
+  }
+  for (const [k, d] of Object.entries(manifestPh)) {
+    if (
+      isRecord(d) &&
+      d.default !== undefined &&
+      !Object.prototype.hasOwnProperty.call(workflowInputs, k) &&
+      !Object.prototype.hasOwnProperty.call(effectiveForWhen, k)
+    ) {
+      effectiveForWhen[k] = String(d.default);
+    }
+  }
+
+  const isSkippedByWhenInput = (when: unknown): boolean => {
+    if (!isRecord(when) || typeof when.input !== 'string') return false;
+    const val = Object.prototype.hasOwnProperty.call(effectiveForWhen, when.input)
+      ? effectiveForWhen[when.input]
+      : '';
+    if (when.equals !== undefined && val !== String(when.equals)) return true;
+    if (when.not_equals !== undefined && val === String(when.not_equals)) return true;
+    if (Array.isArray(when.in) && !when.in.map(String).includes(val)) return true;
+    return false;
+  };
+
   const steps = (Array.isArray(workflowDef.steps) ? workflowDef.steps : []) as Array<Record<string, unknown>>;
   const used = new Set<string>();
   for (const raw of steps) {
     if (!isRecord(raw)) continue;
+    if (isRecord(raw.when) && typeof raw.when.input === 'string' && raw.when.input.trim()) {
+      used.add(raw.when.input.trim());
+    }
+    if (isSkippedByWhenInput(raw.when)) continue;
     collectStepPlaceholders(raw, used);
-    if (isRecord(raw.when) && typeof raw.when.input === 'string') used.add(raw.when.input);
     if (raw.action === 'copy' && typeof raw.source === 'string') {
       const srcPath = resolveInsideDir(folder, raw.source, true);
       if (srcPath && fs.existsSync(srcPath) && fs.statSync(srcPath).isFile()) {
@@ -1003,7 +1036,8 @@ export async function toolRunWorkflow(
     const trustCheck = isUnitTrusted(layerDir, unitRel);
     if (!trustCheck.trusted) {
       blockRunReason = trustCheck.reason;
-      if (!options.dryRun && steps.some((s) => s.action === 'run')) {
+      const hasActiveRunStep = steps.some((s) => s.action === 'run' && !isSkippedByWhenInput(s.when));
+      if (!options.dryRun && hasActiveRunStep) {
         return {
           text: JSON.stringify(
             {

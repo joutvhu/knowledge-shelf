@@ -142,9 +142,15 @@ export function runCli(rawArgs: string[]): void {
   const cliDirs: string[] = [];
   const args: string[] = [];
   let includeGlobal: boolean | undefined;
+  let expectVal = false;
 
   for (let i = 0; i < rawArgs.length; i++) {
     const arg = rawArgs[i];
+    if (expectVal) {
+      args.push(arg);
+      expectVal = false;
+      continue;
+    }
     if (arg.startsWith('--dir=')) {
       const dirVal = arg.slice('--dir='.length);
       if (!dirVal) {
@@ -162,8 +168,8 @@ export function runCli(rawArgs: string[]): void {
       includeGlobal = true;
     } else if (arg === '--no-global') {
       includeGlobal = false;
-    } else if (arg === '--read-only' || arg === '--strict-trust') {
-      // Allowed global MCP flags ignored for CLI subcommands
+    } else if ((arg === '--read-only' || arg === '--strict-trust') && args.length === 0) {
+      // Allowed global MCP flags ignored when placed before CLI subcommands
     } else if (arg.startsWith('--') && arg.includes('=')) {
       const eqIdx = arg.indexOf('=');
       const opt = arg.slice(0, eqIdx);
@@ -179,6 +185,9 @@ export function runCli(rawArgs: string[]): void {
       }
     } else {
       args.push(arg);
+      if (VAL_OPTIONS.has(arg) && (arg !== '-f' || args[0] === 'sync')) {
+        expectVal = true;
+      }
     }
   }
 
@@ -227,7 +236,7 @@ export function runCli(rawArgs: string[]): void {
       cmdScaffold(args.slice(1));
       break;
     case 'publish':
-      cmdPublish(primaryDir, allDirs, args.slice(1));
+      cmdPublish(primaryDir, allDirs, args.slice(1), { isExplicitDir: cliDirs.length > 0 });
       break;
     case 'info':
       cmdInfo(allDirs, args.slice(1));
@@ -244,7 +253,7 @@ export function runCli(rawArgs: string[]): void {
       cmdOutdated(primaryDir, allDirs, args.slice(1));
       break;
     case 'validate':
-      cmdValidate(allDirs, args.slice(1));
+      cmdValidate(allDirs, args.slice(1), { isExplicitDir: cliDirs.length > 0 });
       break;
     case 'update':
     case 'up':
