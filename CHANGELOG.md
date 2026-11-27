@@ -1,83 +1,65 @@
 # Changelog
 
-## [1.1.0] - 2026-11-23
+## [1.1.0] - 2026-11-28
 
 ### Added
+- Added `get_module` MCP tool to resolve a manifest module's files, wiring guides, placeholders, and transitive dependencies in topological order.
+- Added layered knowledge directory support via repeatable `--dir`, `KNOWLEDGE_DIRS` env var, `--include-global`, `--no-global`, and workspace `.agents/knowledges` auto-discovery.
+- Added MCP server governance flags `--read-only` (`KNOWLEDGE_READ_ONLY`) and `--strict-trust` (`KNOWLEDGE_STRICT_TRUST`), along with `knowledge-shelf trust <name>` / `untrust <name>` CLI commands.
+- Added `sync`, `catalog`, `outdated`/`status`, `scaffold`, `index`, `publish`, and `import` CLI commands for team synchronization, remote repository discovery, monorepo indexing, hygiene-checked publishing, and archive installation.
 - Added `install <path> [--name <alias>] [--force] [--all]` CLI command to validate and install drafted knowledge units or standalone `.md` files from a local directory.
 - Added support for passing direct local paths to `validate` before installing into the knowledge directory.
-- Added `--no-verify` flag to `update`, `sync`, and `pin` commands to bypass validation of fetched content.
+- Added `--ref`, `--pack`, `--force`, `--no-verify`, `--trust`, and `--pin` options to `add`, and `--no-verify` to `update`, `sync`, and `pin`.
 - Added `fullCommit` field to `.registry.json` source entries to store full 40-character commit SHAs for exact comparisons during frozen sync.
-- Added support for publishing standalone `.md` files directly into a remote target repo with frontmatter validation and hygiene checks.
-- Added support for custom `type` categories (any non-empty string) in manifests, schema, and MCP `search_docs` filter in addition to built-in types.
+- Added support for publishing standalone `.md` files directly into a remote target repo with frontmatter validation, `--message`/`-m`, and hygiene checks.
+- Added `type`, `tags`, `unit`, and `include_content` filters plus `total_matches` / `truncated` metadata to `search_docs` (and `--type`, `--tag`/`--tags`, `--unit`, `--content`, `--max` to CLI `search`), along with `applies_to` / `references` scoring, whole-token priority, and `deprecated` down-ranking.
+- Added `offset`/`limit` line slicing and Markdown `section` extraction to `get_resource`, and `sections` heading lists to `list_docs`.
+- Added `dry_run` preview mode, conditional `when` expressions (`input`, `exists`, `not_exists`), `copy_dir`, `patch`, and `message` actions, and custom `workflows.*.file` paths for workflows.
+- Added support for custom `type` categories (any non-empty string) in manifests, schema, and `search_docs` filter in addition to built-in types.
+- Added JSON Schemas under `schemas/` (`manifest-v1`, `workflow-v1`, `shelf-v1`, `knowledge-shelf-config-v1`) and in-memory index caching across directory scans.
 
 ### Security
-- Enforced strict path containment (`resolveInsideDir`) across `manifest.doc`, case-insensitive document lookups, workflow names, workflow `copy` sources, workflow `copy`/`mkdir` target paths, `.cache/` clone targets, and all CLI commands (`remove`, `add`, `update`, `info`, `export`, `validate`).
-- Blocked reserved, dot-prefixed (`.hidden`, `.cache`, `.registry.json`), and slash-containing unit names in `resolveSafeUnitDir()`, `cmdInstall`, and `cmdExport`.
-- Added Zip Slip and Tar Slip traversal protection in `assertSafeArchivePaths` for `import` and `update` archive extraction.
+- Enforced strict path containment (`resolveInsideDir`) across `manifest.doc`, case-insensitive document lookups, workflow names, workflow `copy` sources, workflow `copy`/`mkdir` target paths, `.cache/` clone targets, and all CLI commands (`remove`, `add`, `update`, `info`, `export`, `validate`, `pin`).
+- Blocked reserved, dot-prefixed (`.hidden`, `.cache`, `.registry.json`), absolute, drive-prefixed, and parent-traversal (`..`) unit names across `tryResolveSafeUnitDir()`, `resolveSafeUnitDir()`, `cmdInstall`, `cmdScaffold`, `cmdInfo`, and `cmdExport`.
+- Added Zip Slip, Tar Slip, and symlink/hardlink protection (`assertSafeArchivePaths`, `assertNoSymlinks`, `extractArchiveSafely`) for `import` and `update` archive extraction.
+- Prevented unit nesting conflicts and namespace directory overwrites (`checkUnitNestingConflict`) across `add`, `sync`, and `install`.
+- Normalized unit names (backslashes, trailing slashes) in registry matching and `isUnitTrusted` so legacy `.registry.json` entries cannot bypass `--strict-trust`.
 - Sanitized repository names derived from git URLs (`deriveNameFromUrl`) and verified `.cache/` containment (`getCloneTarget`) so URLs ending in `..`, `.`, or `.git` cannot delete the knowledge directory.
-- Hardened Windows `.cmd`/`.bat` script execution (`isSafeCmdArg`) by rejecting arguments containing `cmd.exe` metacharacters (`" % ! ^ & | < >` or control characters) that could trigger command injection or environment variable expansion (BatBadBut class of issues).
+- Hardened Windows `.cmd`/`.bat` script and shim execution (`isSafeCmdArg`, `resolveWindowsExecutable`) by resolving shims in `PATH`/`PATHEXT` order and rejecting arguments or paths containing `cmd.exe` metacharacters (`" % ! ^ & | < >` or control characters).
 - Protected internal dot-prefixed paths (`.registry.json`, `.cache`, `.git`) from removal via `knowledge-shelf remove`.
-- Hygiene scanner enhancements: scanned copy set across dot-prefixed folders and `node_modules`, detecting sensitive files (`.env`, `.env.*`, `.npmrc`, `.netrc`, `.pypirc`, `.secret*`), token patterns (GitHub tokens `ghp_`/`gho_`/`github_pat_`, AWS access key IDs `AKIA...`, Slack tokens `xoxb-`/`xoxp-`, PEM private keys), and hardcoded secret assignments, while safely ignoring placeholder expressions.
+- Hygiene scanner enhancements: scanned copy set across dot-prefixed folders and `node_modules`, detecting sensitive files (`.env`, `.env.*`, `.npmrc`, `.netrc`, `.pypirc`, `.secret*`), token patterns (GitHub tokens `ghp_`/`gho_`/`github_pat_`, AWS access key IDs `AKIA...`, Slack tokens `xoxb-`/`xoxp-`, PEM private keys), and hardcoded secret assignments, while ignoring placeholder expressions, masked values, type keywords, and code/env references.
 - Prevented credential leakage: scanner warning messages never include raw secret values.
-- Excluded `.git/` directories from exported `.tar.gz` and `.zip` archives created by `cmdExport`.
-- Blocked `publish --path` destinations containing hidden directory segments (e.g. `units/.hidden`).
+- Safeguarded `cmdPublish`: blocked hidden destination segments (e.g. `units/.hidden`, `.git`), refused wiping existing container directories or overwriting regular files when `--path` omits a trailing slash, and preserved repository infrastructure files (`.github/`, `.gitignore`, `.gitattributes`, `LICENSE`, `CODE_OF_CONDUCT.md`, `CONTRIBUTING.md`, `README.md`) when publishing to repo root (`--path .`).
+- Excluded `.git/` directories from exported `.tar.gz` and `.zip` archives and refused exporting an archive inside the exported unit directory itself.
+- Capped `expandBraces` expansion count against exponential blowup and restricted `--read-only` / `--strict-trust` CLI flag ignoring to pre-subcommand positions.
+- Enforced validation of all standalone files in `cmdAdd` (rejecting non-markdown single files unless `--no-verify` is passed) and validated undeclared `workflows/*.json` files inside units.
 
 ### Fixed
-- Fixed `cmdExport` to support multi-layer `--dir` lookup and exclude `.git/` folder and metadata from exported zip and tar archives without accidentally omitting `.gitignore` or other dotfiles.
-- Fixed `cmdPublish --message` flag validation to correctly reject bare help flags (`-h`, `--help`) while accepting commit messages with leading dashes.
-- Fixed `loadTeamConfig` to validate required `name` and `url` strings on `knowledge-shelf.json` sources to report clear syntax errors rather than crashing.
-- Fixed `toolRunWorkflow` placeholder scanning in `copy_dir` steps to respect `exclude` globs and detect placeholders in template filenames when `render_filenames` is enabled.
-- Fixed `cmdInfo` on units with malformed `manifest.json` to report JSON syntax errors rather than misidentifying the unit as a standalone document without a manifest.
-- Fixed `cmdCatalog` fallback when no `shelf.json` is present to discover nested standalone `.md` files consistently with `cmdAdd --all` and `cmdIndex`.
-- Fixed `cmdValidate` across multiple `--dir` layers to discover and validate units and standalone documents located in subdirectories of subsequent layers.
-- Fixed `toolRunWorkflow` placeholder scanning to inspect template source files in `copy` and `copy_dir` steps, ensuring `manifest.placeholders` with `required: true` or default/pattern rules are enforced even when placeholders are only used within template file contents.
-- Fixed `toolGetDoc` on units with malformed `manifest.json` to return JSON syntax errors instead of reporting the document as not found.
-- Fixed `cmdSync` preserving root path `"."` or `"./"` in `.registry.json` by normalizing it to `undefined` consistently with `cmdAdd`.
-- Fixed `run_workflow` dry-run under `--strict-trust` to include an explicit warning that script execution would be blocked during real execution.
-- Fixed CLI option parsing to reject empty option arguments (e.g. `--type=`) and properly accept commit messages with leading dashes in `publish`.
-- Fixed `resolveKnowledgeDir()` choosing `.agents/knowledges` as the primary writable directory, which broke `knowledge-shelf install ./.agents/knowledges/<name>` with a self-destination error.
-- Fixed `cmdIndex` failing with `ENOENT` when `--output` path targets a non-existent parent directory, and added warnings when duplicate unit names conflict.
-- Fixed `cmdValidate` across multiple `--dir` layers to inspect all configured directories and filter out nested template `manifest.json` files from false validation failures.
-- Fixed `cmdImport` on wrapped multi-unit archives (e.g. GitHub release zips with a single top-level folder) to automatically detect multiple units and install all of them.
-- Fixed `cmdList` with multiple `--dir` layers to aggregate tracked sources across all layer registries instead of marking them as unmanaged.
-- Fixed glob matching in `isGlobPattern` and `resolveUnitFiles` to treat Next.js route brackets (e.g. `[id]`) as literals, correctly flagging missing literal files.
-- Fixed `toolGetResource` offset handling when `offset` exceeds total line count so lines header is not inverted.
-- Fixed `toolRunWorkflow` patch action `insert_after` to prevent inserting duplicate blank lines when anchors or contents already end/start with newlines.
-- Fixed `toolRunWorkflow` script execution to prioritize `manifest.scripts[script_ref]` file consistently with manifest validation.
-- Percent-encoded resource names in MCP `server.registerResource` list handler for RFC-compliant URIs.
-- Added `--type` to `search` help text and `--all` to `import` help text.
-- Fixed data loss in `parseFrontmatter` where documents containing `---` horizontal rules in the body were truncated after the first rule.
-- Fixed `extractSections` and `get_doc_section` to ignore `#` comment lines inside fenced code blocks (`````` / `~~~`) and prioritize exact heading matches over partial parent heading matches.
-- Fixed binary file corruption in workflow `copy` steps (e.g., `.jar`, `.png`, `.woff2` files are now copied as raw buffers instead of UTF-8 text).
-- Fixed binary detection in `get_resource` by checking buffer bytes for `NUL` instead of relying on an unreachable UTF-8 read exception, and set standard MCP `isError: true` on all error tool responses.
-- Fixed `run_workflow` to apply `default` values defined in workflow input schemas when optional inputs are omitted.
-- Fixed `knowledge-shelf pin <name> <tag|commit>` to check out the requested git ref so on-disk files match the pinned version, and report a clear error for `local:` sources without git history.
-- Fixed `findCaseInsensitive` when looking up subfolder documents without the `.md` extension (`guides/deploy` now resolves to `guides/deploy.md` instead of colliding with same-named files in other folders).
-- Fixed CLI entrypoint handling for `version`/`--version`/`-v`, `--dir` flag placement before subcommands, missing flag arguments, and unknown options.
-- Fixed non-atomic directory replacement during `update`, `install --force`, and `pin` by staging into `.cache/` and swapping via rename with automatic rollback on failure.
-- Fixed `loadRegistry` silently resetting `.registry.json` to empty on parse errors; it now exits with an error to prevent erasing existing entries.
-- Fixed `add --all` and `install --all` to detect duplicate unit folder names across subdirectories and skip nested child units inside parent manifest units.
-- Constrained `search_docs` `max_results` schema to integers between `1` and `100`.
-- Fixed publish to existing remote branches by basing the branch on the remote tracking branch tip (`refs/remotes/origin/<targetBranch>`), fast-forwarding instead of non-fast-forward divergence, and reporting "No changes to publish" without creating empty commits or pushing when remote content matches.
-- Fixed `sync --frozen` to support 40-character full commit SHAs, prefix matching for hex SHAs >= 7 characters, and remote tags/branches.
-- Fixed `sync` discarding local modifications: detects drift via checksums and skips modified units without overwriting unless `--force` is passed.
-- Fixed `update`, `sync`, and `pin` replacing working units with broken incoming content by staging and validating before applying, with `--no-verify` flag support.
-- Fixed checksum coverage to include dot-files and `node_modules` while preserving backward-compatible legacy fallback for untouched units.
-- Fixed atomic registry writes in `saveRegistry` via unique temporary file and rename with Windows retry loop.
-- Fixed manifest placeholder handling in `toolRunWorkflow`: resolved and enforced `default`, `required`, and regex `pattern` validation for used placeholders, and collected placeholders in `patch` step `anchor` and `skip_if_contains`.
-- Fixed schema and validator mismatches: validated `scripts.*.args` shape (`required: boolean`, string `type` and `description`) and enforced integer bounds for `timeout_ms` (1000..600000 ms) in scripts and workflows.
-- Fixed `outdated`, `update`, `sync`, and `pin` commands to properly handle `archive:` sources without attempting git SSH connections.
-- Fixed environment variable precedence between `resolveKnowledgeDir` and `resolveKnowledgeDirs` so `KNOWLEDGE_DIRS` consistently takes priority over `KNOWLEDGE_DIR`.
-- Fixed multi-layer resource shadowing in `toolGetResource` for nested manifest units across directory layers.
-- Fixed glob pattern matching in manifests to support `{a,b}` brace expansion in `resolveUnitFiles` and `matchesAnyGlob`.
-- Fixed CLI flag handling so global flags (`--include-global`, `--no-global`, `--read-only`, `--strict-trust`) work seamlessly with subcommands.
+- Fixed `--no-global` isolation in `resolveKnowledgeDirs`, CLI commands, and MCP server so empty workspaces neither leak global `~/.knowledge` docs nor mutate global state.
+- Fixed `cmdSync` and `cmdSync --frozen`: normalized source subpaths, verified URL/path/branch match before skipping updates at the same commit, enforced local checksum drift checks in both normal and `--frozen` modes, supported `.md` extension fallback, avoided inheriting `trusted`/`branch` when URL changes, persisted valid units while isolating unsafe entries, and supported 40-char SHAs, >=7-char hex prefixes, and `branch` + `pin` combinations.
+- Fixed multi-layer CLI handling across `publish`, `outdated`, `update`, `pin`, `unpin`, `trust`/`untrust`, `info`, `list`, `validate`, `export`, and `remove`: warn and skip corrupted registries in multi-layer mode while failing cleanly in single-layer mode, deduplicate tracked sources case-insensitively on Windows, prevent `cmdRemove` from deleting lower-layer units when shadowed by an unmanaged unit or deleting workspace `.agents/knowledges` drafts when `--dir` is omitted.
+- Fixed nested unit name support (`team/foo`) across `add --name`, `install --name`, `export`, `import --name`, `update`, `sync`, and `validateManifestUnitDir`.
+- Fixed `cmdExport` and `cmdImport`: fixed `zip` CLI argument passing, supported `--output` targeting an existing directory, appended `.tar.gz`/`.zip` when omitted, preserved nested prefixes and dotfiles (excluding `.git/`), automatically unwrapped wrapped multi-unit archives, and unwrapped single units containing nested template `manifest.json` files on `import --name`.
+- Fixed `cmdPublish`: handled standalone `.md` files with `--path <dir>` (no trailing slash), updated `shelf.json` on target branches, based updates on `refs/remotes/origin/<targetBranch>` without force-pushing, reported "No changes to publish" when content matches, prioritized explicit `--dir` over same-named CWD folders, and rejected bare help flags while accepting commit messages with leading dashes.
+- Fixed `cmdValidate`: failed with `Path not found` for nonexistent explicit local paths, prioritized installed units over CWD when `--dir` is explicit, discovered nested units/docs across layers while skipping root `manifest.json` and nested template manifests, rejected directories in `modules.files` (including under brace expansion) and `when.exists` without root placeholder, and validated `tags`, `aliases`, `placeholders`, `inputs`, `run.args`, `message.text`, and `copy_dir.exclude` schemas.
+- Fixed `cmdInfo`, `cmdCatalog`, `cmdIndex`, and `cmdList`: reported JSON syntax errors on malformed `manifest.json`, discovered nested standalone `.md` files when `shelf.json` is absent, created missing `--output` parent directories for `index`, suppressed child units of tracked monorepos from unmanaged lists, and matched standalone `.md` names without `.md` extension.
+- Fixed `search_docs` and CLI `search`: normalized `unit` filter (trim, `./`, trailing `/`, backslashes, optional `.md`), ignored whitespace-only filters, applied `deprecated` down-ranking to total scores including content hits, filtered <=2-char terms by whole-token boundary in content search, and prevented malformed manifest fields from crashing ranking.
+- Fixed `toolRunWorkflow` and workflow execution:
+  - Simulated sequential `copy`, `copy_dir`, `patch` (`create_if_missing`), and `mkdir` steps in a `dry_run` virtual filesystem so `when.exists`/`when.not_exists` and chained `patch` steps evaluate accurately.
+  - Refused `patch` steps on binary files in both `dry_run` and real runs, matched LF multi-line `anchor`/`skip_if_contains` on CRLF files while preserving CRLF, prevented duplicate blank lines on `insert_after`, and rejected empty anchors or non-object steps.
+  - Terminated spawned child process trees on `run` timeout (`taskkill /T /F` on Windows, process group `SIGKILL` on POSIX), clamped/validated `timeout_ms` (1000–600000 ms), and improved error reporting when `cwd` does not exist.
+  - Collected placeholders across `when.input`, `patch` `anchor`/`skip_if_contains`, and `copy`/`copy_dir` template contents and filenames; skipped `manifest.placeholders` required checks and `--strict-trust` blocking when steps are skipped by `when.input`; prevented `manifest.placeholders.*.default` from bypassing `workflow.inputs.*.required: true`; respected `render_filenames: false`; and guarded against `Object.prototype` keys.
+  - Copied binary files as raw buffers in `copy`/`copy_dir`, prioritized `manifest.scripts[script_ref]`, and reported `--strict-trust` script warnings in `dry_run`.
+- Fixed `toolGetManifest`, `toolGetDoc`, `toolGetDocSection`, `toolGetResource`, and MCP resources: rejected non-object/array `manifest.json`, supported nested `.md` files inside manifest units with or without `.md` extension, ignored inline triple backticks and `#` comments in fenced blocks in `extractSections`, added diacritic-folding fallback in `get_doc_section`, prevented inverted line headers when `offset` exceeds file length, detected binary resources via `NUL` bytes, set `isError: true` on error responses, percent-encoded resource URIs, and added `title` to MCP resource listings.
+- Fixed `parseFrontmatter`, `stripBom`, and `index-cache`: prevented `---` horizontal rules from truncating markdown bodies, stripped UTF-8 BOM before JSON parsing, matched `README.md` case-insensitively, indexed uppercase `.MD` files, and invalidated index cache when any non-markdown reference file changes.
+- Fixed CLI entrypoint, registry safety, and cross-platform behavior: showed help in interactive TTY mode without arguments, exited 1 promptly on unknown commands in non-TTY mode, fixed `VAL_OPTIONS` (`-f`, `--dir`, `--key=val`, empty `--opt=`), rejected unexpected extra positional arguments, added PID-aware `.registry.lock` reclamation (`withRegistryLock`), atomic `.registry.json` and directory replacement (`saveRegistry`, `replaceDirSync`, `renameWithRetry`), and prioritized `KNOWLEDGE_DIRS` over `KNOWLEDGE_DIR` and `.agents/knowledges` over global fallback.
 - Added `schemas/` to package distribution files in `package.json`.
-- Improved error messaging for workflow `run` steps when the target `cwd` does not exist on disk.
 
 ### Changed
-- Extracted shared core logic into `src/core.ts` and MCP server factory into `src/server.ts`, unifying search scoring (with whole-token priority and section heading support) between the MCP server and CLI.
+- Refactored core and CLI logic into modular `src/core/*` and `src/cli/*` modules with `src/server.ts` MCP server factory, unifying search scoring between the MCP server and CLI.
 - Updated `update` CLI command to use sparse checkout for subfolder sources (`--path`), and updated `validate` and `add --all` to discover nested manifest units recursively.
 - Replaced duplicated `tests/tool-helper.mjs` test harness with direct MCP SDK `Client` + `InMemoryTransport` and `StdioClientTransport` integration tests against the real server, and added GitHub Actions CI workflow (`.github/workflows/ci.yml`).
+- Updated `README.md`, `docs/`, `schemas/workflow-v1.schema.json`, and `skills/knowledge-builder/` documentation to match 1.1.0 features and `$schema` URLs.
 - Updated `@modelcontextprotocol/sdk`, `zod`, and `vitest` to patch transitive dependency vulnerabilities, and bumped `engines.node` to `>=20.0.0`.
 
 ### Removed
