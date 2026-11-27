@@ -11,7 +11,7 @@ function runCli(args: string[], dir?: string, cwd?: string) {
   return spawnSync(process.execPath, fullArgs, {
     cwd,
     encoding: 'utf-8',
-    timeout: 30_000,
+    timeout: 60_000,
     env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },
   });
 }

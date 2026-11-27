@@ -597,14 +597,16 @@ describe('B9: Atomic registry writes', () => {
     const renameSpy = vi.spyOn(fs, 'renameSync');
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ks-b9-case1-'));
     try {
+      const now = new Date().toISOString();
       const reg: Registry = {
-        version: 1,
+        version: '1.0',
         sources: [
           {
             name: 'unit-a',
-            type: 'local',
-            location: './units/unit-a',
-            installedAt: new Date().toISOString(),
+            url: './units/unit-a',
+            commit: 'abc1234',
+            installedAt: now,
+            updatedAt: now,
           },
         ],
       };
@@ -632,7 +634,7 @@ describe('B9: Atomic registry writes', () => {
       fs.writeFileSync(sentinel, 'intact', 'utf-8');
 
       const reg: Registry = {
-        version: 1,
+        version: '1.0',
         sources: [],
       };
 
@@ -652,13 +654,14 @@ describe('B9: Atomic registry writes', () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ks-b9-case3-'));
     try {
       const reg: Registry = {
-        version: 1,
+        version: '1.0',
         sources: [
           {
             name: 'unit-a',
-            type: 'local',
-            location: './units/unit-a',
+            url: './units/unit-a',
+            commit: 'abc1234',
             installedAt: '2025-01-01T00:00:00.000Z',
+            updatedAt: '2025-01-01T00:00:00.000Z',
           },
         ],
       };
@@ -671,7 +674,7 @@ describe('B9: Atomic registry writes', () => {
       const content = fs.readFileSync(targetPath, 'utf-8');
       const parsed = JSON.parse(content);
       expect(parsed).toEqual(reg);
-      expect(parsed.version).toBe(1);
+      expect(parsed.version).toBe('1.0');
       expect(Array.isArray(parsed.sources)).toBe(true);
 
       const files = fs.readdirSync(tempDir);

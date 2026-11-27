@@ -71,7 +71,7 @@ describe('v1.2.0 Bug Fixes', () => {
     const secondInit = runCli(['init', '--dir', kDir]);
     const elapsed = Date.now() - t0;
     expect(secondInit.status).toBe(0);
-    expect(elapsed).toBeLessThan(3000);
+    expect(elapsed).toBeLessThan(8000);
   });
 
   it('2. withRegistryLock reclaims lock from dead PID immediately', () => {

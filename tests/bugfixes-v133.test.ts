@@ -145,13 +145,14 @@ describe('Bug fixes v1.3.3 (--no-global isolation)', () => {
   });
 
   it('3. MCP server with --no-global returns 0 docs when workspace has no local knowledge dir', async () => {
-    const env: NodeJS.ProcessEnv = {
-      ...process.env,
-      HOME: fakeHome,
-      USERPROFILE: fakeHome,
-    };
-    delete env.KNOWLEDGE_DIR;
-    delete env.KNOWLEDGE_DIRS;
+    const env: Record<string, string> = {};
+    for (const [k, v] of Object.entries(process.env)) {
+      if (v !== undefined && k !== 'KNOWLEDGE_DIR' && k !== 'KNOWLEDGE_DIRS') {
+        env[k] = v;
+      }
+    }
+    env.HOME = fakeHome;
+    env.USERPROFILE = fakeHome;
 
     const transport = new StdioClientTransport({
       command: process.execPath,
@@ -164,7 +165,8 @@ describe('Bug fixes v1.3.3 (--no-global isolation)', () => {
     await client.connect(transport);
     try {
       const listResult = await client.callTool({ name: 'list_docs', arguments: {} });
-      const parsed = JSON.parse((listResult.content[0] as { text: string }).text);
+      const content = listResult.content as Array<{ text: string }>;
+      const parsed = JSON.parse(content[0].text);
       expect(parsed.total).toBe(0);
       expect(parsed.knowledge_dir).toBeUndefined();
 

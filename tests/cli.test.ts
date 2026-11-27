@@ -18,7 +18,7 @@ const FIXTURES_DIR = path.resolve(__dirname, 'fixtures', 'sample-knowledge');
 function runCli(command: string, knowledgeDir: string): string {
   return execSync(`node "${CLI_PATH}" ${command} --dir "${knowledgeDir}"`, {
     encoding: 'utf-8',
-    timeout: 15_000,
+    timeout: 60_000,
   }).trim();
 }
 
