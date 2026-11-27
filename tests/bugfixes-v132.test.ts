@@ -383,5 +383,12 @@ describe('Bug fixes v1.3.2', () => {
     const frozenTampered = runCli(['sync', '--file', cfgPath, '--frozen', '--dir', syncShelf]);
     expect(frozenTampered.status).toBe(1);
     expect(frozenTampered.stderr).toContain('local modifications');
+
+    // D. non-frozen sync at the same commit also warns and skips locally modified unit
+    const syncTampered = runCli(['sync', '--file', cfgPath, '--dir', syncShelf]);
+    expect(syncTampered.status).toBe(0);
+    expect(syncTampered.stdout).toContain("Skipping 'unit-a' (local modifications detected");
+    expect(syncTampered.stdout).toContain('1 skipped');
+    expect(fs.readFileSync(path.join(syncShelf, 'unit-a', 'overview.md'), 'utf-8')).toContain('Tampered locally');
   });
 });

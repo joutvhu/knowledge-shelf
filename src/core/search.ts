@@ -119,12 +119,16 @@ export function rankDocuments(
   options: SearchOptions = {}
 ): SearchResultEntry[] {
   const queryTerms = query.trim().split(/\s+/).filter(Boolean);
-  const hasFilters = Boolean(options.type || options.unit || (options.tags && options.tags.length > 0));
-  if (queryTerms.length === 0 && !hasFilters) return [];
-
   const filterType = options.type?.toLowerCase().trim();
   const filterTags = options.tags?.map((t) => t.toLowerCase().trim()).filter(Boolean) || [];
-  const filterUnit = options.unit?.replace(/\\/g, '/').toLowerCase().trim();
+  const filterUnit = options.unit
+    ?.trim()
+    .replace(/\\/g, '/')
+    .replace(/^(?:\.\/)+/, '')
+    .replace(/\/+$/, '')
+    .toLowerCase();
+  const hasFilters = Boolean(filterType || filterUnit || filterTags.length > 0);
+  if (queryTerms.length === 0 && !hasFilters) return [];
 
   const scored: SearchResultEntry[] = [];
 

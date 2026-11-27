@@ -272,6 +272,14 @@ describe('Multi-Layer, Search v2, Module Resolution, Resources & Workflow v1.1',
         const cbJson = JSON.parse(getText(onlyCookbook));
         expect(cbJson.results.map((r: { name: string }) => r.name)).toEqual(['legacy-unit']);
 
+        // Filter by unit normalizes trailing slash and leading ./
+        const unitSlash = await client.callTool({
+          name: 'search_docs',
+          arguments: { query: 'java', unit: './shared-unit/' },
+        });
+        const usJson = JSON.parse(getText(unitSlash));
+        expect(usJson.results.map((r: { name: string }) => r.name)).toEqual(['shared-unit']);
+
         // 4. get_module resolves transitive dependencies & expands globs (excluding *.bak)
         const modRes = await client.callTool({
           name: 'get_module',

@@ -1711,6 +1711,13 @@ export function cmdSync(knowledgeDir: string, args: string[]): void {
           pinMatches &&
           sourceMatches
         ) {
+          if (hasLocalModifications(destDir, existing.checksum)) {
+            console.log(
+              `  ⚠ Skipping '${canonicalName}' (local modifications detected; pass --force to overwrite)`
+            );
+            skipped++;
+            continue;
+          }
           console.log(`  ✓ '${canonicalName}' already at ${commit}`);
           continue;
         }
