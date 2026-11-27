@@ -314,4 +314,74 @@ describe('Bug fixes v1.3.2', () => {
     expect(fs.existsSync(globalUnit)).toBe(false);
     expect(fs.existsSync(path.join(stagingDir, 'draft-unit', 'manifest.json'))).toBe(true);
   });
+
+  it('7. add --pack and sync normalize standalone .md names without .md suffix, and sync --frozen detects local checksum drift', () => {
+    const bareRepo = path.join(tmpDir, 'md-pack.git');
+    const seedDir = path.join(tmpDir, 'md-pack-seed');
+    git(tmpDir, ['init', '--bare', '-b', 'main', bareRepo]);
+    git(tmpDir, ['clone', bareRepo, seedDir]);
+    git(seedDir, ['config', 'user.email', 'test@example.com']);
+    git(seedDir, ['config', 'user.name', 'Test']);
+
+    fs.mkdirSync(path.join(seedDir, 'docs'), { recursive: true });
+    fs.writeFileSync(
+      path.join(seedDir, 'docs', 'guide.md'),
+      '---\ndescription: Guide for pack and sync\ntags: [guide]\n---\n# Guide\nContent\n',
+      'utf-8'
+    );
+    fs.writeFileSync(
+      path.join(seedDir, 'shelf.json'),
+      JSON.stringify({
+        name: 'md-pack',
+        units: [{ name: 'guide-alias', path: 'docs/guide.md', type: 'standalone' }],
+        packs: { docs: { units: ['guide-alias'] } },
+      }),
+      'utf-8'
+    );
+    expect(runCli(['scaffold', 'unit-a', '--output', path.join(seedDir, 'units')]).status).toBe(0);
+    git(seedDir, ['add', '-A']);
+    git(seedDir, ['commit', '-m', 'init']);
+    git(seedDir, ['push', '-u', 'origin', 'main']);
+
+    // A. add --pack with logical standalone name omitting .md
+    const packShelf = path.join(tmpDir, 'pack-shelf');
+    const packRes = runCli(['add', bareRepo, '--pack', 'docs', '--dir', packShelf]);
+    expect(packRes.status).toBe(0);
+    expect(fs.existsSync(path.join(packShelf, 'guide-alias.md'))).toBe(true);
+    expect(runCli(['search', 'Guide', '--dir', packShelf, '--no-global']).stdout).toContain('guide-alias.md');
+    expect(runCli(['info', 'guide-alias', '--dir', packShelf, '--no-global']).status).toBe(0);
+
+    // B. sync + sync --frozen with standalone name omitting .md
+    const syncShelf = path.join(tmpDir, 'sync-md-shelf');
+    const cfgPath = path.join(tmpDir, 'sync-md.json');
+    fs.writeFileSync(
+      cfgPath,
+      JSON.stringify({
+        version: '1.0',
+        sources: [
+          { name: 'remote-guide', url: bareRepo, path: 'docs/guide.md' },
+          { name: 'unit-a', url: bareRepo, path: 'units/unit-a' },
+        ],
+      }),
+      'utf-8'
+    );
+
+    const syncRes = runCli(['sync', '--file', cfgPath, '--dir', syncShelf]);
+    expect(syncRes.status).toBe(0);
+    expect(fs.existsSync(path.join(syncShelf, 'remote-guide.md'))).toBe(true);
+
+    // Subsequent sync recognizes the installed .md entry as up-to-date
+    const secondSync = runCli(['sync', '--file', cfgPath, '--dir', syncShelf]);
+    expect(secondSync.status).toBe(0);
+    expect(secondSync.stdout).toContain("already at");
+
+    // sync --frozen passes before local edits
+    expect(runCli(['sync', '--file', cfgPath, '--frozen', '--dir', syncShelf]).status).toBe(0);
+
+    // C. sync --frozen fails on local content modification (checksum mismatch)
+    fs.writeFileSync(path.join(syncShelf, 'unit-a', 'overview.md'), '# Tampered locally\n', 'utf-8');
+    const frozenTampered = runCli(['sync', '--file', cfgPath, '--frozen', '--dir', syncShelf]);
+    expect(frozenTampered.status).toBe(1);
+    expect(frozenTampered.stderr).toContain('local modifications');
+  });
 });

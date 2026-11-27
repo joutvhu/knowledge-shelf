@@ -376,8 +376,11 @@ export function cmdAdd(knowledgeDir: string, args: string[]): void {
       sourceSubPath: string | undefined,
       syncName: boolean
     ): 'installed' | 'skipped' | 'invalid' => {
-      const unitName = normalizeUnitName(rawUnitName) || rawUnitName;
+      let unitName = normalizeUnitName(rawUnitName) || rawUnitName;
       const isFile = fs.statSync(sourceDir).isFile();
+      if (isFile && sourceDir.toLowerCase().endsWith('.md') && !unitName.toLowerCase().endsWith('.md')) {
+        unitName = `${unitName}.md`;
+      }
       const destRes = tryResolveSafeUnitDir(knowledgeDir, unitName);
       if (!destRes.path) {
         console.error(`Error: ${destRes.error}`);
@@ -471,14 +474,20 @@ export function cmdAdd(knowledgeDir: string, args: string[]): void {
         invalid++;
         continue;
       }
+      const displayUnitName =
+        fs.statSync(sourceDir).isFile() &&
+        sourceDir.toLowerCase().endsWith('.md') &&
+        !uName.toLowerCase().endsWith('.md')
+          ? `${normalizeUnitName(uName) || uName}.md`
+          : uName;
       const status = installUnitFromSource(uName, sourceDir, isRootUnit ? undefined : rawRelPath, true);
       if (status === 'installed') {
-        console.log(`  ✓ Installed '${uName}'`);
+        console.log(`  ✓ Installed '${displayUnitName}'`);
         installed++;
       } else if (status === 'invalid') {
         invalid++;
       } else {
-        console.log(`  Skipping '${uName}' (already exists)`);
+        console.log(`  Skipping '${displayUnitName}' (already exists)`);
         skipped++;
       }
     }
@@ -1560,10 +1569,25 @@ export function cmdSync(knowledgeDir: string, args: string[]): void {
 
   if (frozen) {
     for (const s of sources) {
-      const destDir = resolveSafeUnitDir(knowledgeDir, s.name);
-      const regEntry = registry.sources.find((r) => isSameUnitName(r.name, s.name));
+      let lookupName = normalizeUnitName(s.name) || s.name;
+      let destDir = resolveSafeUnitDir(knowledgeDir, lookupName);
+      let regEntry = registry.sources.find((r) => isSameUnitName(r.name, lookupName));
+      if ((!fs.existsSync(destDir) || !regEntry) && !lookupName.toLowerCase().endsWith('.md')) {
+        const mdName = `${lookupName}.md`;
+        const mdDest = resolveSafeUnitDir(knowledgeDir, mdName);
+        const mdReg = registry.sources.find((r) => isSameUnitName(r.name, mdName));
+        if (fs.existsSync(mdDest) && mdReg) {
+          lookupName = mdName;
+          destDir = mdDest;
+          regEntry = mdReg;
+        }
+      }
       if (!fs.existsSync(destDir) || !regEntry) {
         console.error(`Error (--frozen): '${s.name}' is not installed.`);
+        process.exit(1);
+      }
+      if (hasLocalModifications(destDir, regEntry.checksum)) {
+        console.error(`Error (--frozen): '${s.name}' has local modifications (checksum mismatch).`);
         process.exit(1);
       }
       const expectedPath = normalizeSyncSubPath(s.path);
@@ -1649,7 +1673,19 @@ export function cmdSync(knowledgeDir: string, args: string[]): void {
       const branch = gitGetBranch(cloneTarget);
 
       for (const s of group) {
-        const canonicalName = normalizeUnitName(s.name) || s.name;
+        let canonicalName = normalizeUnitName(s.name) || s.name;
+        const expectedPath = normalizeSyncSubPath(s.path);
+        const sourceDir = expectedPath ? resolveInsideDir(cloneTarget, expectedPath, true) : cloneTarget;
+        if (!sourceDir || !fs.existsSync(sourceDir)) {
+          console.error(`  Error: Path '${s.path}' not found in repo for '${canonicalName}'.`);
+          failed++;
+          continue;
+        }
+        const isSyncDir = fs.statSync(sourceDir).isDirectory();
+        if (!isSyncDir && sourceDir.toLowerCase().endsWith('.md') && !canonicalName.toLowerCase().endsWith('.md')) {
+          canonicalName = `${canonicalName}.md`;
+        }
+
         const destRes = tryResolveSafeUnitDir(knowledgeDir, canonicalName);
         if (!destRes.path) {
           console.error(`  Error: ${destRes.error}`);
@@ -1660,7 +1696,6 @@ export function cmdSync(knowledgeDir: string, args: string[]): void {
         const existing = registry.sources.find((r) => isSameUnitName(r.name, canonicalName));
         const effectivePin = s.pin || (s.ref && (!branch || s.ref !== branch) ? s.ref : undefined);
         const pinMatches = (effectivePin || undefined) === (existing?.pin || undefined);
-        const expectedPath = normalizeSyncSubPath(s.path);
         const existingPath = normalizeSyncSubPath(existing?.path);
         const sourceMatches =
           Boolean(existing) &&
@@ -1688,14 +1723,6 @@ export function cmdSync(knowledgeDir: string, args: string[]): void {
           continue;
         }
 
-        const sourceDir = expectedPath ? resolveInsideDir(cloneTarget, expectedPath, true) : cloneTarget;
-        if (!sourceDir || !fs.existsSync(sourceDir)) {
-          console.error(`  Error: Path '${s.path}' not found in repo for '${canonicalName}'.`);
-          failed++;
-          continue;
-        }
-
-        const isSyncDir = fs.statSync(sourceDir).isDirectory();
         const nestingErr = checkUnitNestingConflict(knowledgeDir, canonicalName, isSyncDir, registry.sources);
         if (nestingErr) {
           console.error(`  Error: ${nestingErr}`);

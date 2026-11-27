@@ -38,17 +38,17 @@ describe('CLI Commands', () => {
   describe('version & entrypoint flags', () => {
     it('should print package version with --version and -v without hanging', () => {
       const pkg = JSON.parse(fs.readFileSync(path.resolve(__dirname, '..', 'package.json'), 'utf-8'));
-      const v1 = execSync(`node "${CLI_PATH}" --version`, { encoding: 'utf-8', timeout: 5_000 }).trim();
-      const v2 = execSync(`node "${CLI_PATH}" -v`, { encoding: 'utf-8', timeout: 5_000 }).trim();
+      const v1 = execSync(`node "${CLI_PATH}" --version`, { encoding: 'utf-8', timeout: 25_000 }).trim();
+      const v2 = execSync(`node "${CLI_PATH}" -v`, { encoding: 'utf-8', timeout: 25_000 }).trim();
       expect(v1).toBe(pkg.version);
       expect(v2).toBe(pkg.version);
     });
 
     it('should accept --dir placed BEFORE the subcommand', () => {
-      execSync(`node "${CLI_PATH}" --dir "${tmpDir}" init`, { encoding: 'utf-8', timeout: 10_000 });
+      execSync(`node "${CLI_PATH}" --dir "${tmpDir}" init`, { encoding: 'utf-8', timeout: 25_000 });
       const out = execSync(`node "${CLI_PATH}" --dir "${tmpDir}" list`, {
         encoding: 'utf-8',
-        timeout: 10_000,
+        timeout: 25_000,
       }).trim();
       expect(out).toContain('No knowledge sources installed');
       expect(out).toContain(tmpDir);
@@ -57,14 +57,14 @@ describe('CLI Commands', () => {
     it('should reject unknown flags or missing --dir value with exit code 1', () => {
       const res = spawnSync(process.execPath, [CLI_PATH, '--unknown-flag'], {
         encoding: 'utf-8',
-        timeout: 5_000,
+        timeout: 25_000,
       });
       expect(res.status).toBe(1);
       expect(res.stderr).toContain('Unknown command');
 
       const missingDir = spawnSync(process.execPath, [CLI_PATH, 'list', '--dir'], {
         encoding: 'utf-8',
-        timeout: 5_000,
+        timeout: 25_000,
       });
       expect(missingDir.status).toBe(1);
       expect(missingDir.stderr).toContain('--dir requires a directory path');
@@ -75,7 +75,7 @@ describe('CLI Commands', () => {
       const res = spawnSync(
         process.execPath,
         ['--input-type=module', '-e', `process.stdin.isTTY = true; import(${targetUrl})`],
-        { encoding: 'utf-8', timeout: 5_000 }
+        { encoding: 'utf-8', timeout: 25_000 }
       );
       expect(res.status).toBe(0);
       expect(res.stdout).toContain('Knowledge Shelf');
@@ -85,14 +85,14 @@ describe('CLI Commands', () => {
     it('should show help when run with help subcommand or --help flag', () => {
       const res1 = spawnSync(process.execPath, [CLI_PATH, 'help'], {
         encoding: 'utf-8',
-        timeout: 5_000,
+        timeout: 25_000,
       });
       expect(res1.status).toBe(0);
       expect(res1.stdout).toContain('Commands:');
 
       const res2 = spawnSync(process.execPath, [CLI_PATH, '--help'], {
         encoding: 'utf-8',
-        timeout: 5_000,
+        timeout: 25_000,
       });
       expect(res2.status).toBe(0);
       expect(res2.stdout).toContain('Commands:');

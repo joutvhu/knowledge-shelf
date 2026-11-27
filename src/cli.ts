@@ -210,24 +210,34 @@ export function runCli(rawArgs: string[]): void {
     printHelp();
     return;
   }
-  const primaryDir = cliDirs.length > 0 ? resolveKnowledgeDir(cliDirs[0]) : resolveKnowledgeDir();
   const allDirs =
     cliDirs.length > 0
       ? resolveKnowledgeDirs(cliDirs, { includeGlobal })
       : resolveKnowledgeDirs(undefined, { includeGlobal });
+  const primaryDir = cliDirs.length > 0 ? resolveKnowledgeDir(cliDirs[0]) : allDirs[0];
+  const requirePrimaryDir = (): string => {
+    if (primaryDir) return primaryDir;
+    console.error(
+      'Error: No knowledge directory found (global fallback disabled by --no-global). Pass --dir <path> or initialize a local .registry.json / .agents/knowledges directory.'
+    );
+    process.exit(1);
+  };
 
   switch (command) {
     case 'add':
-      cmdAdd(primaryDir, args.slice(1));
+      cmdAdd(requirePrimaryDir(), args.slice(1));
       break;
     case 'install':
-      cmdInstall(primaryDir, args.slice(1), { isExplicitDir: cliDirs.length > 0 });
+      cmdInstall(requirePrimaryDir(), args.slice(1), {
+        isExplicitDir: cliDirs.length > 0,
+        noGlobal: includeGlobal === false,
+      });
       break;
     case 'sync':
-      cmdSync(primaryDir, args.slice(1));
+      cmdSync(requirePrimaryDir(), args.slice(1));
       break;
     case 'catalog':
-      cmdCatalog(primaryDir, args.slice(1));
+      cmdCatalog(primaryDir || '', args.slice(1));
       break;
     case 'index':
       cmdIndex(args.slice(1));
@@ -236,7 +246,7 @@ export function runCli(rawArgs: string[]): void {
       cmdScaffold(args.slice(1));
       break;
     case 'publish':
-      cmdPublish(primaryDir, allDirs, args.slice(1), { isExplicitDir: cliDirs.length > 0 });
+      cmdPublish(primaryDir || '', allDirs, args.slice(1), { isExplicitDir: cliDirs.length > 0 });
       break;
     case 'info':
       cmdInfo(allDirs, args.slice(1));
@@ -246,43 +256,43 @@ export function runCli(rawArgs: string[]): void {
       break;
     case 'list':
     case 'ls':
-      cmdList(primaryDir, allDirs, args.slice(1));
+      cmdList(primaryDir || '', allDirs, args.slice(1));
       break;
     case 'outdated':
     case 'status':
-      cmdOutdated(primaryDir, allDirs, args.slice(1));
+      cmdOutdated(primaryDir || '', allDirs, args.slice(1));
       break;
     case 'validate':
       cmdValidate(allDirs, args.slice(1), { isExplicitDir: cliDirs.length > 0 });
       break;
     case 'update':
     case 'up':
-      cmdUpdate(primaryDir, allDirs, args.slice(1));
+      cmdUpdate(primaryDir || '', allDirs, args.slice(1));
       break;
     case 'pin':
-      cmdPin(primaryDir, allDirs, args.slice(1));
+      cmdPin(requirePrimaryDir(), allDirs, args.slice(1));
       break;
     case 'unpin':
-      cmdUnpin(primaryDir, allDirs, args.slice(1));
+      cmdUnpin(requirePrimaryDir(), allDirs, args.slice(1));
       break;
     case 'trust':
-      cmdTrust(primaryDir, allDirs, args.slice(1), true);
+      cmdTrust(requirePrimaryDir(), allDirs, args.slice(1), true);
       break;
     case 'untrust':
-      cmdTrust(primaryDir, allDirs, args.slice(1), false);
+      cmdTrust(requirePrimaryDir(), allDirs, args.slice(1), false);
       break;
     case 'export':
-      cmdExport(primaryDir, allDirs, args.slice(1));
+      cmdExport(requirePrimaryDir(), allDirs, args.slice(1));
       break;
     case 'import':
-      cmdImport(primaryDir, args.slice(1));
+      cmdImport(requirePrimaryDir(), args.slice(1));
       break;
     case 'remove':
     case 'rm':
-      cmdRemove(primaryDir, allDirs, args.slice(1), { isExplicitDir: cliDirs.length > 0 });
+      cmdRemove(requirePrimaryDir(), allDirs, args.slice(1), { isExplicitDir: cliDirs.length > 0 });
       break;
     case 'init':
-      cmdInit(primaryDir, args.slice(1));
+      cmdInit(requirePrimaryDir(), args.slice(1));
       break;
     case 'version':
     case '--version':

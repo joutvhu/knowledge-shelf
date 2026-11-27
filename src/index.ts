@@ -137,7 +137,7 @@ async function main() {
   const transport = new StdioServerTransport();
   await server.connect(transport);
   console.error(
-    `Knowledge Shelf MCP server running (knowledge_dirs: ${knowledgeDirs.join(', ')})`
+    `Knowledge Shelf MCP server running (knowledge_dirs: ${knowledgeDirs.length > 0 ? knowledgeDirs.join(', ') : '(none)'})`
   );
 }
 

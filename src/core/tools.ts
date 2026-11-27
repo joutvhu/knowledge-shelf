@@ -195,7 +195,7 @@ export function toolListDocs(knowledgeDirs: string | string[]): ToolResponse {
       text: JSON.stringify(
         {
           total: 0,
-          knowledge_dir: dirs[0],
+          ...(dirs[0] ? { knowledge_dir: dirs[0] } : {}),
           ...(dirs.length > 1 ? { knowledge_dirs: dirs } : {}),
           message: 'No documents found.',
         },

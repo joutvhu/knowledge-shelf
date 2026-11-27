@@ -203,10 +203,6 @@ export function resolveKnowledgeDirs(
     }
   }
 
-  if (dirs.length === 0) {
-    dirs.push(globalDir);
-  }
-
   return dedupDirs(dirs);
 }
 

@@ -132,7 +132,7 @@ export function cmdList(primaryDir: string, knowledgeDirs: string[], args: strin
     console.error(`Error: Unexpected argument '${args[0]}' for 'list'.`);
     process.exit(1);
   }
-  const dirs = knowledgeDirs && knowledgeDirs.length > 0 ? knowledgeDirs : [primaryDir];
+  const dirs = knowledgeDirs && knowledgeDirs.length > 0 ? knowledgeDirs : primaryDir ? [primaryDir] : [];
   const allSources: Array<{ source: any; layerDir?: string }> = [];
   const trackedNames = new Set<string>();
   const layerSources = new Map<string, any[]>();
@@ -184,7 +184,9 @@ export function cmdList(primaryDir: string, knowledgeDirs: string[], args: strin
 
   if (allSources.length === 0 && unmanaged.length === 0) {
     console.log('No knowledge sources installed.');
-    console.log(`Knowledge directory: ${primaryDir}`);
+    if (primaryDir) {
+      console.log(`Knowledge directory: ${primaryDir}`);
+    }
     return;
   }
 
@@ -422,7 +424,7 @@ export function cmdInfo(knowledgeDirs: string | string[], args: string[]): void 
   }
 
   if (!unitDir) {
-    const displayDir = dirs.length > 1 ? dirs.join(', ') : dirs[0];
+    const displayDir = dirs.length > 1 ? dirs.join(', ') : dirs[0] || '(none configured)';
     console.error(`Error: '${name}' not found in ${displayDir}`);
     process.exit(1);
   }
@@ -759,8 +761,12 @@ export function cmdValidate(
   let totalWarnings = 0;
 
   if (targetArg) {
-    if (!fs.existsSync(knowledgeDir)) {
-      console.error(`Error: Knowledge directory not found: ${knowledgeDir}`);
+    if (!knowledgeDir || !fs.existsSync(knowledgeDir)) {
+      console.error(
+        knowledgeDir
+          ? `Error: Knowledge directory not found: ${knowledgeDir}`
+          : 'Error: No knowledge directory found (global fallback disabled by --no-global).'
+      );
       process.exit(1);
     }
     resolveSafeUnitDir(knowledgeDir, targetArg);
@@ -820,7 +826,11 @@ export function cmdValidate(
   } else {
     const existingDirs = dirs.filter((d) => fs.existsSync(d));
     if (existingDirs.length === 0) {
-      console.error(`Error: Knowledge directory not found: ${dirs[0]}`);
+      console.error(
+        dirs[0]
+          ? `Error: Knowledge directory not found: ${dirs[0]}`
+          : 'Error: No knowledge directory found (global fallback disabled by --no-global).'
+      );
       process.exit(1);
     }
 
@@ -874,6 +884,7 @@ export interface CmdInstallOptions {
   extractDir?: string;
   defaultTrusted?: boolean;
   isExplicitDir?: boolean;
+  noGlobal?: boolean;
 }
 
 export function cmdInstall(
@@ -925,7 +936,13 @@ export function cmdInstall(
     fail(`Error: Source path not found: ${sourceArg}`);
   }
 
-  if (!options.isExplicitDir && !options.originArchive && !process.env.KNOWLEDGE_DIR && !process.env.KNOWLEDGE_DIRS) {
+  if (
+    !options.isExplicitDir &&
+    !options.noGlobal &&
+    !options.originArchive &&
+    !process.env.KNOWLEDGE_DIR &&
+    !process.env.KNOWLEDGE_DIRS
+  ) {
     const normKd = path.resolve(knowledgeDir);
     const normSrc = path.resolve(resolvedSource);
     const kdKey = process.platform === 'win32' ? normKd.toLowerCase() : normKd;
