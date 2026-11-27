@@ -43,6 +43,7 @@ import {
   isSameUnitName,
   loadRegistry,
   mutateRegistry,
+  normalizeUnitName,
   recordInstalledSource,
   resolveSafeUnitDir,
   saveRegistry,
@@ -136,6 +137,11 @@ export function cmdList(primaryDir: string, knowledgeDirs: string[], args: strin
   const trackedNames = new Set<string>();
   const layerSources = new Map<string, any[]>();
 
+  const normTrackKey = (n: string) => {
+    const cleaned = normalizeUnitName(n);
+    return process.platform === 'win32' ? cleaned.toLowerCase() : cleaned;
+  };
+
   for (const d of dirs) {
     if (fs.existsSync(d) && fs.existsSync(getRegistryPath(d))) {
       const isSinglePrimary = d === primaryDir && dirs.length === 1;
@@ -143,7 +149,7 @@ export function cmdList(primaryDir: string, knowledgeDirs: string[], args: strin
         const reg = loadRegistry(d, { exitOnError: isSinglePrimary });
         layerSources.set(d, reg.sources);
         for (const s of reg.sources) {
-          const trackKey = process.platform === 'win32' ? s.name.toLowerCase() : s.name;
+          const trackKey = normTrackKey(s.name);
           if (!trackedNames.has(trackKey)) {
             trackedNames.add(trackKey);
             allSources.push({ source: s, layerDir: dirs.length > 1 ? d : undefined });
@@ -163,9 +169,9 @@ export function cmdList(primaryDir: string, knowledgeDirs: string[], args: strin
   const allDocs = scanDocuments(dirs);
   const isDocTrackedInLayer = (docName: string, layer: string): boolean => {
     const sources = layerSources.get(layer) || [];
-    const dNameNorm = process.platform === 'win32' ? docName.toLowerCase() : docName;
+    const dNameNorm = normTrackKey(docName);
     for (const s of sources) {
-      const tNorm = process.platform === 'win32' ? s.name.toLowerCase() : s.name;
+      const tNorm = normTrackKey(s.name);
       if (dNameNorm === tNorm || dNameNorm.startsWith(tNorm + '/')) return true;
     }
     return false;
@@ -222,10 +228,15 @@ export function cmdList(primaryDir: string, knowledgeDirs: string[], args: strin
   );
 }
 
+export interface CmdRemoveOptions {
+  isExplicitDir?: boolean;
+}
+
 export function cmdRemove(
   primaryDir: string,
   dirsOrArgs: string[] | string,
-  maybeArgs?: string[]
+  maybeArgs?: string[],
+  options: CmdRemoveOptions = {}
 ): void {
   let knowledgeDirs: string[];
   let args: string[];
@@ -276,9 +287,19 @@ export function cmdRemove(
     }
   }
 
-  // If not tracked in primaryDir (and not present unmanaged on disk in primaryDir),
-  // check if it's tracked in another layer's registry
-  if (idx === -1 && !fs.existsSync(destDir) && knowledgeDirs.length > 1) {
+  const normPrimary = path.resolve(primaryDir);
+  const primaryKey = process.platform === 'win32' ? normPrimary.toLowerCase() : normPrimary;
+  const isAutoAgentsStaging =
+    !options.isExplicitDir &&
+    !process.env.KNOWLEDGE_DIR &&
+    !process.env.KNOWLEDGE_DIRS &&
+    (primaryKey.endsWith(path.sep + '.agents' + path.sep + 'knowledges') ||
+      primaryKey.endsWith('/.agents/knowledges'));
+
+  // If not tracked in primaryDir (and either absent on disk in primaryDir, or primaryDir is
+  // the auto-discovered .agents/knowledges staging dir where drafts live), check other layers' registries
+  // so `remove <name>` uninstalls the installed copy instead of deleting the workspace draft.
+  if (idx === -1 && (!fs.existsSync(destDir) || isAutoAgentsStaging) && knowledgeDirs.length > 1) {
     for (const kDir of knowledgeDirs) {
       if (kDir === primaryDir || !fs.existsSync(kDir) || !fs.existsSync(getRegistryPath(kDir))) continue;
       let otherReg;
@@ -924,13 +945,19 @@ export function cmdInstall(
   const stat = fs.statSync(resolvedSource);
 
   if (customName) {
-    const isMd = customName.toLowerCase().endsWith('.md');
-    const checkName = isMd ? customName.slice(0, -3) : customName;
-    if (!isSafeUnitSegment(checkName)) {
+    const trimmed = customName.trim().replace(/\\/g, '/').replace(/\/+$/, '');
+    const segments = trimmed.split('/');
+    if (
+      !trimmed ||
+      path.isAbsolute(trimmed) ||
+      /^[A-Za-z]:/.test(trimmed) ||
+      segments.some((seg) => !seg || seg === '.' || seg === '..' || seg.startsWith('.'))
+    ) {
       fail(
-        `Error: Invalid unit name '${customName}'. Names cannot contain slashes or start with '.' (use a flat name like 'my-unit').`
+        `Error: Invalid unit name '${customName}'. Names cannot contain '..', be absolute, or have segments that start with '.'.`
       );
     }
+    customName = trimmed;
   }
 
   const upsertRegistryEntry = (unitName: string, originPath: string, destPath: string) => {

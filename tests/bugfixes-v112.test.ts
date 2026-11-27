@@ -69,7 +69,7 @@ describe('v1.1.2 Bug Fixes', () => {
     expect(fs.existsSync(path.join(customShelf, 'my-unit', 'manifest.json'))).toBe(true);
   });
 
-  it('2. resolveSafeUnitDir blocks dot-names and slashes in unit names', () => {
+  it('2. resolveSafeUnitDir blocks dot-names and traversal while allowing nested unit names', () => {
     const kdir = path.join(tmpDir, 'shelf');
     const work = path.join(tmpDir, 'work');
     fs.mkdirSync(work, { recursive: true });
@@ -80,10 +80,15 @@ describe('v1.1.2 Bug Fixes', () => {
     expect(dotRes.status).toBe(1);
     expect(dotRes.stderr).toMatch(/start with '\.'/i);
 
-    // Slash name
-    const slashRes = runCli(['install', path.join(work, 'demo'), '--name', 'team/demo', '--dir', kdir]);
-    expect(slashRes.status).toBe(1);
-    expect(slashRes.stderr).toMatch(/slashes/i);
+    // Nested dot-prefixed segment
+    const nestedDotRes = runCli(['install', path.join(work, 'demo'), '--name', 'team/.hidden', '--dir', kdir]);
+    expect(nestedDotRes.status).toBe(1);
+    expect(nestedDotRes.stderr).toMatch(/start with '\.'/i);
+
+    // Nested unit name is supported
+    const nestedRes = runCli(['install', path.join(work, 'demo'), '--name', 'team/demo', '--dir', kdir]);
+    expect(nestedRes.status).toBe(0);
+    expect(fs.existsSync(path.join(kdir, 'team', 'demo', 'manifest.json'))).toBe(true);
   });
 
   it('3. index creates missing parent directory for --output', () => {

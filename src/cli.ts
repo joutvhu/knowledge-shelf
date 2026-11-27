@@ -279,7 +279,7 @@ export function runCli(rawArgs: string[]): void {
       break;
     case 'remove':
     case 'rm':
-      cmdRemove(primaryDir, allDirs, args.slice(1));
+      cmdRemove(primaryDir, allDirs, args.slice(1), { isExplicitDir: cliDirs.length > 0 });
       break;
     case 'init':
       cmdInit(primaryDir, args.slice(1));

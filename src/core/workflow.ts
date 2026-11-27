@@ -97,6 +97,43 @@ export function isSafeCmdArg(arg: string): boolean {
   return !/["%!^&|<>\x00-\x1f]/.test(arg);
 }
 
+/**
+ * Resolves a bare command name against PATH + PATHEXT on Windows so `.bat`/`.cmd`
+ * shims (such as pyenv-win, conda, or npm shims) are found in PATH order instead of
+ * being skipped by CreateProcessW in favor of later `.exe` stubs (e.g. WindowsApps).
+ */
+export function resolveWindowsExecutable(cmd: string, env: NodeJS.ProcessEnv = process.env): string | null {
+  const pathEnv = env.PATH ?? env.Path ?? '';
+  if (!pathEnv) return null;
+
+  const allowedExts = new Set(['.com', '.exe', '.bat', '.cmd']);
+  const rawExts = (env.PATHEXT || '.COM;.EXE;.BAT;.CMD')
+    .split(';')
+    .map((e) => e.trim().toLowerCase())
+    .filter((e) => allowedExts.has(e));
+  const exts = rawExts.length > 0 ? rawExts : ['.com', '.exe', '.bat', '.cmd'];
+
+  const hasExt = /\.(?:com|exe|bat|cmd)$/i.test(cmd);
+  const dirs = pathEnv
+    .split(path.delimiter)
+    .map((d) => d.trim().replace(/^"(.*)"$/, '$1'))
+    .filter(Boolean);
+
+  for (const dir of dirs) {
+    const candidates = hasExt ? [path.join(dir, cmd)] : exts.map((ext) => path.join(dir, `${cmd}${ext}`));
+    for (const candidate of candidates) {
+      try {
+        if (fs.existsSync(candidate) && fs.statSync(candidate).isFile()) {
+          return candidate;
+        }
+      } catch {
+        /* skip inaccessible entry */
+      }
+    }
+  }
+  return null;
+}
+
 function killProcessTree(child: ReturnType<typeof spawn>): void {
   const pid = child.pid;
   if (pid && pid > 0) {
@@ -383,7 +420,7 @@ function executeCopyDirStep(
   for (const srcFile of files) {
     const rel = path.relative(sourceDir, srcFile).replace(/\\/g, '/');
     const targetRel = renderFilenames ? replacePlaceholders(rel, inputs) : rel;
-    if (/\{\{[A-Za-z0-9_]+\}\}/.test(targetRel)) {
+    if (renderFilenames && /\{\{[A-Za-z0-9_]+\}\}/.test(targetRel)) {
       results.errors.push(`Rendered filename '${targetRel}' contains unresolved placeholder(s).`);
       return;
     }
@@ -467,7 +504,12 @@ function executePatchStep(
       results.errors.push(`Patch target '${targetPath}' is not a file.`);
       return;
     }
-    existing = fs.readFileSync(targetPath, 'utf-8');
+    const buf = fs.readFileSync(targetPath);
+    if (buf.subarray(0, 8192).includes(0)) {
+      results.errors.push(`Patch target '${targetPath}' is a binary file.`);
+      return;
+    }
+    existing = buf.toString('utf-8');
   } else if (createIfMissing && (mode === 'append' || mode === 'prepend')) {
     existing = '';
   } else {
@@ -475,39 +517,44 @@ function executePatchStep(
     return;
   }
 
-  if (skipMarker && existing.includes(skipMarker)) {
+  const eol: '\r\n' | '\n' = existing.includes('\r\n') ? '\r\n' : '\n';
+  const normalizeEol = (s: string) => s.replace(/\r?\n/g, eol);
+  const normContent = normalizeEol(renderedContent);
+  const normAnchor = normalizeEol(renderedAnchor);
+  const normSkipMarker = skipMarker ? normalizeEol(skipMarker) : '';
+
+  if (normSkipMarker && existing.includes(normSkipMarker)) {
     results.files_skipped.push(targetPath);
     return;
   }
 
   let updated: string;
-  const eol = existing.includes('\r\n') ? '\r\n' : '\n';
 
   if (mode === 'append') {
     const sep = existing && !existing.endsWith('\n') ? eol : '';
-    updated = `${existing}${sep}${renderedContent}`;
+    updated = `${existing}${sep}${normContent}`;
   } else if (mode === 'prepend') {
-    const sep = existing && !renderedContent.endsWith('\n') ? eol : '';
-    updated = `${renderedContent}${sep}${existing}`;
+    const sep = existing && !normContent.endsWith('\n') ? eol : '';
+    updated = `${normContent}${sep}${existing}`;
   } else {
-    const idx = existing.indexOf(renderedAnchor);
+    const idx = existing.indexOf(normAnchor);
     if (idx === -1) {
       results.errors.push(`Patch anchor not found in '${targetPath}': ${renderedAnchor}`);
       return;
     }
     if (mode === 'insert_before') {
-      const sep = renderedContent.endsWith('\n') ? '' : eol;
-      updated = `${existing.slice(0, idx)}${renderedContent}${sep}${existing.slice(idx)}`;
+      const sep = normContent.endsWith('\n') ? '' : eol;
+      updated = `${existing.slice(0, idx)}${normContent}${sep}${existing.slice(idx)}`;
     } else if (mode === 'insert_after') {
-      const afterIdx = idx + renderedAnchor.length;
+      const afterIdx = idx + normAnchor.length;
       const needsSep =
-        !renderedAnchor.endsWith('\n') &&
-        !renderedContent.startsWith('\n') &&
-        !renderedContent.startsWith('\r\n');
+        !normAnchor.endsWith('\n') &&
+        !normContent.startsWith('\n') &&
+        !normContent.startsWith('\r\n');
       const sep = needsSep ? eol : '';
-      updated = `${existing.slice(0, afterIdx)}${sep}${renderedContent}${existing.slice(afterIdx)}`;
+      updated = `${existing.slice(0, afterIdx)}${sep}${normContent}${existing.slice(afterIdx)}`;
     } else {
-      updated = `${existing.slice(0, idx)}${renderedContent}${existing.slice(idx + renderedAnchor.length)}`;
+      updated = `${existing.slice(0, idx)}${normContent}${existing.slice(idx + normAnchor.length)}`;
     }
   }
 
@@ -651,18 +698,49 @@ async function executeRunStep(
     return;
   }
 
-  const buildSpawnArgs = (interp: string): [string, string[], boolean] => {
+  const prepareSpawn = (
+    interp: string
+  ): { bin: string; spawnArgs: string[]; verbatim: boolean; unsafeReason?: string } => {
     if (interp === 'cmd') {
       const cmdLine = `"${[resolvedScript, ...args].map((a) => `"${a}"`).join(' ')}"`;
-      return ['cmd.exe', ['/d', '/s', '/c', cmdLine], true];
+      return { bin: 'cmd.exe', spawnArgs: ['/d', '/s', '/c', cmdLine], verbatim: true };
     }
-    if (interp === 'pwsh' || interp === 'powershell') {
-      return [interp, ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', resolvedScript, ...args], false];
+    const baseArgs =
+      interp === 'pwsh' || interp === 'powershell'
+        ? ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', resolvedScript, ...args]
+        : [resolvedScript, ...args];
+
+    if (process.platform === 'win32') {
+      const resolvedBin = resolveWindowsExecutable(interp);
+      if (resolvedBin) {
+        const binExt = path.extname(resolvedBin).toLowerCase();
+        if (binExt === '.bat' || binExt === '.cmd') {
+          if (!isSafeCmdArg(resolvedBin) || baseArgs.some((a) => !isSafeCmdArg(a))) {
+            return {
+              bin: resolvedBin,
+              spawnArgs: baseArgs,
+              verbatim: true,
+              unsafeReason:
+                `Refusing to run '${scriptRel}' via batch shim '${resolvedBin}': the shim path, script path, ` +
+                `or an argument contains characters cmd.exe cannot pass safely (one of " % ! ^ & | < > or a control character).`,
+            };
+          }
+          const cmdLine = `"${[resolvedBin, ...baseArgs].map((a) => `"${a}"`).join(' ')}"`;
+          return { bin: 'cmd.exe', spawnArgs: ['/d', '/s', '/c', cmdLine], verbatim: true };
+        }
+        return { bin: resolvedBin, spawnArgs: baseArgs, verbatim: false };
+      }
     }
-    return [interp, [resolvedScript, ...args], false];
+    return { bin: interp, spawnArgs: baseArgs, verbatim: false };
   };
 
-  let [bin, spawnArgs, verbatim] = buildSpawnArgs(normalizedInterp);
+  let invocation = prepareSpawn(normalizedInterp);
+  if (invocation.unsafeReason) {
+    results.errors.push(invocation.unsafeReason);
+    return;
+  }
+
+  let { bin, spawnArgs, verbatim } = invocation;
   let result = await runProcessAsync(bin, spawnArgs, cwd, verbatim, timeoutMs);
 
   // Fallback from pwsh to Windows PowerShell if pwsh is not installed
@@ -673,7 +751,12 @@ async function executeRunStep(
     !rawInterpreter &&
     process.platform === 'win32'
   ) {
-    [bin, spawnArgs, verbatim] = buildSpawnArgs('powershell');
+    invocation = prepareSpawn('powershell');
+    if (invocation.unsafeReason) {
+      results.errors.push(invocation.unsafeReason);
+      return;
+    }
+    ({ bin, spawnArgs, verbatim } = invocation);
     result = await runProcessAsync(bin, spawnArgs, cwd, verbatim, timeoutMs);
   }
 
@@ -684,7 +767,12 @@ async function executeRunStep(
     normalizedInterp === 'python' &&
     !rawInterpreter
   ) {
-    [bin, spawnArgs, verbatim] = buildSpawnArgs('python3');
+    invocation = prepareSpawn('python3');
+    if (invocation.unsafeReason) {
+      results.errors.push(invocation.unsafeReason);
+      return;
+    }
+    ({ bin, spawnArgs, verbatim } = invocation);
     result = await runProcessAsync(bin, spawnArgs, cwd, verbatim, timeoutMs);
   }
 

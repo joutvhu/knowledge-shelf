@@ -12,7 +12,13 @@ import { spawnSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { clearIndexCache, toolRunWorkflow, toolSearchDocs, validateManifestUnitDir } from '../src/core.js';
+import {
+  clearIndexCache,
+  resolveWindowsExecutable,
+  toolRunWorkflow,
+  toolSearchDocs,
+  validateManifestUnitDir,
+} from '../src/core.js';
 import { assertNoSymlinks, assertSafeArchivePaths } from '../src/cli/git.js';
 
 const CLI_PATH = path.resolve(__dirname, '..', 'dist', 'index.js');
@@ -1023,5 +1029,301 @@ describe('Bug fixes v1.3.1', () => {
     );
     expect(resActive.isError).toBe(true);
     expect(resActive.text).toContain('strict trust policy');
+  });
+
+  it('27. add --path strips leading ./ or .\\ for sparse checkout and subsequent update', () => {
+    const bareRepo = path.join(tmpDir, 'sparse-dot.git');
+    const workDir = path.join(tmpDir, 'sparse-dot-work');
+    git(tmpDir, ['init', '--bare', '-b', 'main', bareRepo]);
+    git(tmpDir, ['clone', bareRepo, workDir]);
+    git(workDir, ['config', 'user.email', 'test@example.com']);
+    git(workDir, ['config', 'user.name', 'Test']);
+
+    const unitInRepo = path.join(workDir, 'units', 'my-unit');
+    fs.mkdirSync(unitInRepo, { recursive: true });
+    fs.writeFileSync(
+      path.join(unitInRepo, 'manifest.json'),
+      JSON.stringify({
+        name: 'my-unit',
+        version: '1.0.0',
+        type: 'cookbook',
+        description: 'Sparse path normalization test',
+      }),
+      'utf-8'
+    );
+    git(workDir, ['add', '.']);
+    git(workDir, ['commit', '-m', 'init']);
+    git(workDir, ['push', '-u', 'origin', 'main']);
+
+    const kb1 = path.join(tmpDir, 'kb1');
+    const addForward = runCli(['add', bareRepo, '--path', './units/my-unit', '--dir', kb1, '--no-global']);
+    expect(addForward.status).toBe(0);
+    expect(fs.existsSync(path.join(kb1, 'my-unit', 'manifest.json'))).toBe(true);
+
+    const kb2 = path.join(tmpDir, 'kb2');
+    const addBackslash = runCli(['add', bareRepo, '--path', '.\\units\\my-unit', '--dir', kb2, '--no-global']);
+    expect(addBackslash.status).toBe(0);
+    expect(fs.existsSync(path.join(kb2, 'my-unit', 'manifest.json'))).toBe(true);
+
+    // Push a new commit and verify update succeeds
+    fs.writeFileSync(path.join(unitInRepo, 'notes.md'), '# Notes\nUpdated.\n', 'utf-8');
+    git(workDir, ['add', '.']);
+    git(workDir, ['commit', '-m', 'update unit']);
+    git(workDir, ['push', 'origin', 'main']);
+
+    const updRes = runCli(['update', '--dir', kb1, '--no-global']);
+    expect(updRes.status).toBe(0);
+    expect(fs.existsSync(path.join(kb1, 'my-unit', 'notes.md'))).toBe(true);
+  });
+
+  it('28. copy_dir with render_filenames: false preserves {{...}} placeholders in filenames', async () => {
+    const kDir = path.join(tmpDir, 'literal-fn-kb');
+    const unitDir = path.join(kDir, 'literal-fn-unit');
+    const targetDir = path.join(tmpDir, 'literal-fn-target');
+    fs.mkdirSync(path.join(unitDir, 'templates', 'sub'), { recursive: true });
+    fs.mkdirSync(path.join(unitDir, 'workflows'), { recursive: true });
+    fs.mkdirSync(targetDir, { recursive: true });
+
+    fs.writeFileSync(
+      path.join(unitDir, 'manifest.json'),
+      JSON.stringify({
+        name: 'literal-fn-unit',
+        version: '1.0.0',
+        type: 'template',
+        description: 'Literal filename copy_dir test',
+      }),
+      'utf-8'
+    );
+    fs.writeFileSync(path.join(unitDir, 'templates', 'sub', '{{MODEL}}.txt'), 'App={{APP}}\n', 'utf-8');
+    fs.writeFileSync(
+      path.join(unitDir, 'workflows', 'setup.json'),
+      JSON.stringify({
+        inputs: { TARGET: { required: true }, APP: { required: true } },
+        steps: [
+          {
+            action: 'copy_dir',
+            source: 'templates',
+            target: '{{TARGET}}/out',
+            render_filenames: false,
+          },
+        ],
+      }),
+      'utf-8'
+    );
+
+    const res = await toolRunWorkflow(kDir, 'literal-fn-unit', 'setup', {
+      TARGET: targetDir,
+      APP: 'Demo',
+    });
+    expect(res.isError).toBeFalsy();
+    const outFile = path.join(targetDir, 'out', 'sub', '{{MODEL}}.txt');
+    expect(fs.existsSync(outFile)).toBe(true);
+    expect(fs.readFileSync(outFile, 'utf-8')).toBe('App=Demo\n');
+  });
+
+  it('29. resolveWindowsExecutable finds .bat shims in PATH order and run_workflow executes via cmd shim safely', async () => {
+    const dirA = path.join(tmpDir, 'shim-first');
+    const dirB = path.join(tmpDir, 'exe-second');
+    fs.mkdirSync(dirA, { recursive: true });
+    fs.mkdirSync(dirB, { recursive: true });
+
+    const shimPath = path.join(dirA, 'mytool.bat');
+    const laterExePath = path.join(dirB, 'mytool.exe');
+    fs.writeFileSync(shimPath, '@echo off\r\necho SHIM_RAN\r\n', 'utf-8');
+    fs.writeFileSync(laterExePath, '', 'utf-8');
+
+    const resolved = resolveWindowsExecutable('mytool', {
+      PATH: `${dirA}${path.delimiter}${dirB}`,
+      PATHEXT: '.COM;.EXE;.BAT;.CMD',
+    });
+    expect(resolved).toBe(shimPath);
+
+    if (process.platform === 'win32') {
+      // Test real run_workflow execution using a .bat shim placed ahead on PATH
+      const shimBin = path.join(tmpDir, 'py-shim');
+      fs.mkdirSync(shimBin, { recursive: true });
+      fs.writeFileSync(
+        path.join(shimBin, 'python.bat'),
+        `@echo off\r\n"${process.execPath}" -e "console.log('SHIM_NODE:' + process.argv.slice(1).join(','))" %*\r\n`,
+        'utf-8'
+      );
+
+      const kDir = path.join(tmpDir, 'shim-kb');
+      const unitDir = path.join(kDir, 'shim-unit');
+      fs.mkdirSync(path.join(unitDir, 'scripts'), { recursive: true });
+      fs.mkdirSync(path.join(unitDir, 'workflows'), { recursive: true });
+      fs.writeFileSync(
+        path.join(unitDir, 'manifest.json'),
+        JSON.stringify({
+          name: 'shim-unit',
+          version: '1.0.0',
+          type: 'toolkit',
+          description: 'Windows bat shim test',
+          workflows: { run_py: { description: 'Run py script' } },
+        }),
+        'utf-8'
+      );
+      fs.writeFileSync(path.join(unitDir, 'scripts', 'hello.py'), 'print("ok")\n', 'utf-8');
+      fs.writeFileSync(
+        path.join(unitDir, 'workflows', 'run_py.json'),
+        JSON.stringify({
+          steps: [{ action: 'run', script: 'scripts/hello.py', args: ['alpha'] }],
+        }),
+        'utf-8'
+      );
+
+      const origPath = process.env.PATH;
+      process.env.PATH = `${shimBin}${path.delimiter}${origPath || ''}`;
+      try {
+        const res = await toolRunWorkflow(kDir, 'shim-unit', 'run_py', {});
+        expect(res.isError).toBeFalsy();
+        const parsed = JSON.parse(res.text);
+        expect(parsed.scripts_run[0].stdout).toContain('SHIM_NODE:');
+        expect(parsed.scripts_run[0].stdout).toContain('alpha');
+
+        // Dangerous cmd metacharacter must be blocked before cmd.exe invocation (BatBadBut protection)
+        fs.writeFileSync(
+          path.join(unitDir, 'workflows', 'run_py.json'),
+          JSON.stringify({
+            steps: [{ action: 'run', script: 'scripts/hello.py', args: ['a&calc'] }],
+          }),
+          'utf-8'
+        );
+        const unsafeRes = await toolRunWorkflow(kDir, 'shim-unit', 'run_py', {});
+        expect(unsafeRes.isError).toBe(true);
+        expect(unsafeRes.text).toContain('cmd.exe cannot pass safely');
+      } finally {
+        process.env.PATH = origPath;
+      }
+    }
+  });
+
+  it('30. patch step matches LF multi-line anchor/skip_if_contains on CRLF files and preserves CRLF', async () => {
+    const kDir = path.join(tmpDir, 'crlf-patch-kb');
+    const unitDir = path.join(kDir, 'crlf-patch-unit');
+    const targetDir = path.join(tmpDir, 'crlf-target');
+    fs.mkdirSync(path.join(unitDir, 'workflows'), { recursive: true });
+    fs.mkdirSync(targetDir, { recursive: true });
+
+    const targetFile = path.join(targetDir, 'app.config.ts');
+    fs.writeFileSync(
+      targetFile,
+      'export const cfg = {\r\n  plugins: [\r\n    // ANCHOR\r\n  ],\r\n};\r\n',
+      'utf-8'
+    );
+
+    fs.writeFileSync(
+      path.join(unitDir, 'manifest.json'),
+      JSON.stringify({
+        name: 'crlf-patch-unit',
+        version: '1.0.0',
+        type: 'cookbook',
+        description: 'CRLF patch test',
+      }),
+      'utf-8'
+    );
+    fs.writeFileSync(
+      path.join(unitDir, 'workflows', 'apply.json'),
+      JSON.stringify({
+        inputs: { TARGET: { required: true } },
+        steps: [
+          {
+            action: 'patch',
+            target: '{{TARGET}}/app.config.ts',
+            mode: 'insert_after',
+            anchor: '  plugins: [\n    // ANCHOR',
+            content: '    "pluginA",\n    "pluginB",',
+            skip_if_contains: '  plugins: [\n    // ANCHOR\n    "pluginA",',
+          },
+        ],
+      }),
+      'utf-8'
+    );
+
+    const res1 = await toolRunWorkflow(kDir, 'crlf-patch-unit', 'apply', { TARGET: targetDir });
+    expect(res1.isError).toBeFalsy();
+    const afterFirst = fs.readFileSync(targetFile, 'utf-8');
+    expect(afterFirst).toBe(
+      'export const cfg = {\r\n  plugins: [\r\n    // ANCHOR\r\n    "pluginA",\r\n    "pluginB",\r\n  ],\r\n};\r\n'
+    );
+
+    // Re-running must be skipped via skip_if_contains despite LF vs CRLF difference
+    const res2 = await toolRunWorkflow(kDir, 'crlf-patch-unit', 'apply', { TARGET: targetDir });
+    expect(res2.isError).toBeFalsy();
+    const parsed2 = JSON.parse(res2.text);
+    expect(parsed2.files_skipped).toContain(targetFile);
+    expect(fs.readFileSync(targetFile, 'utf-8')).toBe(afterFirst);
+  });
+
+  it('31. install --name and export/import --name support nested unit names', () => {
+    const drafts = path.join(tmpDir, 'drafts');
+    const unitSrc = path.join(drafts, 'my-unit');
+    const kb1 = path.join(tmpDir, 'kb1');
+    const kb2 = path.join(tmpDir, 'kb2');
+    const archivePath = path.join(tmpDir, 'nested.zip');
+
+    expect(runCli(['scaffold', 'my-unit', '--output', drafts]).status).toBe(0);
+
+    const installNested = runCli(['install', unitSrc, '--name', 'team/nested-unit', '--dir', kb1, '--no-global']);
+    expect(installNested.status).toBe(0);
+    expect(fs.existsSync(path.join(kb1, 'team', 'nested-unit', 'manifest.json'))).toBe(true);
+
+    // Traversal or dot segments still rejected
+    const badInstall = runCli(['install', unitSrc, '--name', 'team/.hidden', '--dir', kb1, '--no-global']);
+    expect(badInstall.status).toBe(1);
+    expect(badInstall.stderr).toContain('Invalid unit name');
+
+    const expRes = runCli(['export', 'team/nested-unit', '--dir', kb1, '--no-global', '--output', archivePath]);
+    expect(expRes.status).toBe(0);
+
+    const impRes = runCli([
+      'import',
+      archivePath,
+      '--name',
+      'org/imported-unit',
+      '--dir',
+      kb2,
+      '--no-global',
+    ]);
+    expect(impRes.status).toBe(0);
+    expect(fs.existsSync(path.join(kb2, 'org', 'imported-unit', 'manifest.json'))).toBe(true);
+    const listRes = runCli(['list', '--dir', kb2, '--no-global']);
+    expect(listRes.stdout).toContain('org/imported-unit');
+  });
+
+  it('32. sync and sync --frozen normalize repeated ./ prefixes in source path', () => {
+    const bareRepo = path.join(tmpDir, 'sync-norm.git');
+    const workDir = path.join(tmpDir, 'sync-norm-work');
+    git(tmpDir, ['init', '--bare', '-b', 'main', bareRepo]);
+    git(tmpDir, ['clone', bareRepo, workDir]);
+    git(workDir, ['config', 'user.email', 'test@example.com']);
+    git(workDir, ['config', 'user.name', 'Test']);
+
+    const unitInRepo = path.join(workDir, 'units', 'alpha');
+    fs.mkdirSync(unitInRepo, { recursive: true });
+    fs.writeFileSync(
+      path.join(unitInRepo, 'manifest.json'),
+      JSON.stringify({ name: 'alpha', version: '1.0.0', type: 'cookbook', description: 'Sync norm test' }),
+      'utf-8'
+    );
+    git(workDir, ['add', '.']);
+    git(workDir, ['commit', '-m', 'init']);
+    git(workDir, ['push', '-u', 'origin', 'main']);
+
+    const kb = path.join(tmpDir, 'kb-sync-norm');
+    fs.mkdirSync(kb, { recursive: true });
+    fs.writeFileSync(
+      path.join(kb, 'knowledge-shelf.json'),
+      JSON.stringify({
+        version: '1.0',
+        sources: [{ name: 'alpha', url: bareRepo, branch: 'main', path: '././units/alpha' }],
+      }),
+      'utf-8'
+    );
+
+    const syncRes = runCli(['sync', '--dir', kb, '--no-global']);
+    expect(syncRes.status).toBe(0);
+    const frozenRes = runCli(['sync', '--frozen', '--dir', kb, '--no-global']);
+    expect(frozenRes.status).toBe(0);
   });
 });

@@ -6,7 +6,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { findManifestFolders, resolveInsideDir, stripBom } from '../core.js';
-import { getCacheDir } from './registry.js';
+import { getCacheDir, renameWithRetry } from './registry.js';
 
 let _gitChecked = false;
 
@@ -90,7 +90,11 @@ export function gitCloneSparse(url: string, targetDir: string, sparsePath: strin
   assertGitAvailable();
   assertSafeGitArg(url, 'repository URL');
   assertSafeGitArg(sparsePath, 'sparse path');
-  const normalizedSparse = sparsePath.replace(/\\/g, '/').replace(/^\/+|\/+$/g, '');
+  const normalizedSparse = sparsePath.replace(/\\/g, '/').replace(/^(?:\.?\/)+/, '').replace(/\/+$/, '');
+  if (!normalizedSparse || normalizedSparse === '.') {
+    gitClone(url, targetDir, branch);
+    return;
+  }
   const args = ['clone', '--depth', '1', '--filter=blob:none', '--sparse'];
   if (branch) {
     assertSafeGitArg(branch, 'branch');
@@ -293,12 +297,12 @@ export function replaceDirSync(knowledgeDir: string, srcDir: string, destDir: st
 
   const hadExisting = fs.existsSync(destDir);
   try {
-    if (hadExisting) fs.renameSync(destDir, backup);
+    if (hadExisting) renameWithRetry(destDir, backup);
     fs.mkdirSync(path.dirname(destDir), { recursive: true });
-    fs.renameSync(staged, destDir);
+    renameWithRetry(staged, destDir);
   } catch (e) {
     if (hadExisting && !fs.existsSync(destDir) && fs.existsSync(backup)) {
-      fs.renameSync(backup, destDir);
+      renameWithRetry(backup, destDir);
     }
     removeDirSync(staged);
     throw e;

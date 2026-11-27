@@ -31,10 +31,16 @@ export interface RegistryEntry {
 
 export interface RegistrySource extends RegistryEntry {}
 
+export function normalizeUnitName(name: string): string {
+  return (name || '').trim().replace(/\\/g, '/').replace(/\/+$/, '');
+}
+
 export function isSameUnitName(a: string, b: string): boolean {
-  if (a === b) return true;
+  const na = normalizeUnitName(a);
+  const nb = normalizeUnitName(b);
+  if (na === nb) return true;
   if (process.platform === 'win32') {
-    return a.toLowerCase() === b.toLowerCase();
+    return na.toLowerCase() === nb.toLowerCase();
   }
   return false;
 }
@@ -336,7 +342,7 @@ export function mutateRegistry(
   });
 }
 
-function renameWithRetry(source: string, destination: string): void {
+export function renameWithRetry(source: string, destination: string): void {
   const maxAttempts = 5;
   const retryCodes = new Set(['EPERM', 'EBUSY', 'EACCES']);
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {

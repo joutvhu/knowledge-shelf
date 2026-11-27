@@ -67,6 +67,7 @@ import {
   loadShelfCatalog,
   loadTeamConfig,
   mutateRegistry,
+  normalizeUnitName,
   recordInstalledSource,
   resolveSafeUnitDir,
   saveRegistry,
@@ -267,7 +268,7 @@ export function cmdAdd(knowledgeDir: string, args: string[]): void {
         console.error('Error: --path requires a subfolder argument.');
         process.exit(1);
       }
-      subPath = args[++i].replace(/\\/g, '/').replace(/^\/+|\/+$/g, '');
+      subPath = args[++i].replace(/\\/g, '/').replace(/^(?:\.?\/)+/, '').replace(/\/+$/, '');
     } else if (args[i] === '--name') {
       if (i + 1 >= args.length || args[i + 1].startsWith('-')) {
         console.error('Error: --name requires an alias argument.');
@@ -320,14 +321,20 @@ export function cmdAdd(knowledgeDir: string, args: string[]): void {
   }
 
   if (customName) {
-    const trimmed = customName.trim().replace(/[\\/]+$/, '');
-    const segments = trimmed.split(/[\\/]+/);
-    if (!trimmed || segments.some((seg) => !seg || seg === '.' || seg === '..' || seg.startsWith('.'))) {
+    const trimmed = normalizeUnitName(customName);
+    const segments = trimmed.split('/');
+    if (
+      !trimmed ||
+      path.isAbsolute(trimmed) ||
+      /^[A-Za-z]:/.test(trimmed) ||
+      segments.some((seg) => !seg || seg === '.' || seg === '..' || seg.startsWith('.'))
+    ) {
       console.error(
-        `Error: Invalid unit name '${customName}'. Names cannot contain '..' or segments starting with '.'.`
+        `Error: Invalid unit name '${customName}'. Names cannot contain '..', be absolute, or have segments starting with '.'.`
       );
       process.exit(1);
     }
+    customName = trimmed;
   }
 
   const repoName = deriveNameFromUrl(url);
@@ -364,11 +371,12 @@ export function cmdAdd(knowledgeDir: string, args: string[]): void {
   const registry = loadRegistry(knowledgeDir);
   const installedEntries: RegistryEntry[] = [];
   const installUnitFromSource = (
-      unitName: string,
+      rawUnitName: string,
       sourceDir: string,
       sourceSubPath: string | undefined,
       syncName: boolean
     ): 'installed' | 'skipped' | 'invalid' => {
+      const unitName = normalizeUnitName(rawUnitName) || rawUnitName;
       const isFile = fs.statSync(sourceDir).isFile();
       const destRes = tryResolveSafeUnitDir(knowledgeDir, unitName);
       if (!destRes.path) {
@@ -828,7 +836,8 @@ export function cmdUpdate(
       try {
         const reg = loadRegistry(d, { exitOnError: isSingleLayer });
         for (const s of reg.sources) {
-          const key = process.platform === 'win32' ? s.name.toLowerCase() : s.name;
+          const normName = normalizeUnitName(s.name);
+          const key = process.platform === 'win32' ? normName.toLowerCase() : normName;
           if (!seenNames.has(key)) {
             seenNames.add(key);
             allSources.push({ source: s, layerDir: d });
@@ -1410,7 +1419,8 @@ export function cmdOutdated(
       try {
         const reg = loadRegistry(d, { exitOnError: isSingleLayer });
         for (const s of reg.sources) {
-          const key = process.platform === 'win32' ? s.name.toLowerCase() : s.name;
+          const normName = normalizeUnitName(s.name);
+          const key = process.platform === 'win32' ? normName.toLowerCase() : normName;
           if (!seenNames.has(key)) {
             seenNames.add(key);
             allSources.push({ source: s, layerDir: d });
@@ -1467,7 +1477,7 @@ export function cmdOutdated(
 
 function normalizeSyncSubPath(p?: string): string | undefined {
   if (!p) return undefined;
-  const cleaned = p.replace(/\\/g, '/').replace(/^\.\//, '').replace(/^\/+|\/+$/g, '');
+  const cleaned = p.replace(/\\/g, '/').replace(/^(?:\.?\/)+/, '').replace(/\/+$/, '');
   return !cleaned || cleaned === '.' ? undefined : cleaned;
 }
 
@@ -1639,14 +1649,15 @@ export function cmdSync(knowledgeDir: string, args: string[]): void {
       const branch = gitGetBranch(cloneTarget);
 
       for (const s of group) {
-        const destRes = tryResolveSafeUnitDir(knowledgeDir, s.name);
+        const canonicalName = normalizeUnitName(s.name) || s.name;
+        const destRes = tryResolveSafeUnitDir(knowledgeDir, canonicalName);
         if (!destRes.path) {
           console.error(`  Error: ${destRes.error}`);
           failed++;
           continue;
         }
         const destDir = destRes.path;
-        const existing = registry.sources.find((r) => isSameUnitName(r.name, s.name));
+        const existing = registry.sources.find((r) => isSameUnitName(r.name, canonicalName));
         const effectivePin = s.pin || (s.ref && (!branch || s.ref !== branch) ? s.ref : undefined);
         const pinMatches = (effectivePin || undefined) === (existing?.pin || undefined);
         const expectedPath = normalizeSyncSubPath(s.path);
@@ -1665,13 +1676,13 @@ export function cmdSync(knowledgeDir: string, args: string[]): void {
           pinMatches &&
           sourceMatches
         ) {
-          console.log(`  ✓ '${s.name}' already at ${commit}`);
+          console.log(`  ✓ '${canonicalName}' already at ${commit}`);
           continue;
         }
 
         if (!force && existing && fs.existsSync(destDir) && hasLocalModifications(destDir, existing.checksum)) {
           console.log(
-            `  ⚠ Skipping '${s.name}' (local modifications detected; pass --force to overwrite)`
+            `  ⚠ Skipping '${canonicalName}' (local modifications detected; pass --force to overwrite)`
           );
           skipped++;
           continue;
@@ -1679,20 +1690,20 @@ export function cmdSync(knowledgeDir: string, args: string[]): void {
 
         const sourceDir = expectedPath ? resolveInsideDir(cloneTarget, expectedPath, true) : cloneTarget;
         if (!sourceDir || !fs.existsSync(sourceDir)) {
-          console.error(`  Error: Path '${s.path}' not found in repo for '${s.name}'.`);
+          console.error(`  Error: Path '${s.path}' not found in repo for '${canonicalName}'.`);
           failed++;
           continue;
         }
 
         const isSyncDir = fs.statSync(sourceDir).isDirectory();
-        const nestingErr = checkUnitNestingConflict(knowledgeDir, s.name, isSyncDir, registry.sources);
+        const nestingErr = checkUnitNestingConflict(knowledgeDir, canonicalName, isSyncDir, registry.sources);
         if (nestingErr) {
           console.error(`  Error: ${nestingErr}`);
           failed++;
           continue;
         }
 
-        const ok = installValidated(knowledgeDir, sourceDir, destDir, s.name, noVerify);
+        const ok = installValidated(knowledgeDir, sourceDir, destDir, canonicalName, noVerify);
         if (!ok) {
           failed++;
           continue;
@@ -1702,7 +1713,7 @@ export function cmdSync(knowledgeDir: string, args: string[]): void {
         const checksum = computeUnitChecksum(destDir);
         const sameUrl = existing?.url === s.url;
         const updatedEntry: RegistryEntry = {
-          name: s.name,
+          name: canonicalName,
           url: s.url,
           path: expectedPath,
           ...(branch ? { branch } : sameUrl && existing?.branch ? { branch: existing.branch } : {}),
@@ -1717,7 +1728,7 @@ export function cmdSync(knowledgeDir: string, args: string[]): void {
         recordInstalledSource(registry, updatedEntry);
         syncedEntries.push(updatedEntry);
 
-        console.log(`  ✓ Synced '${s.name}' (${commit})`);
+        console.log(`  ✓ Synced '${canonicalName}' (${commit})`);
         synced++;
       }
     } catch (e) {
@@ -2605,6 +2616,25 @@ export function cmdPublish(
       targetRelPath: destSubpath,
       populateClone: (destInRepo) => {
         if (destSubpath) {
+          if (fs.existsSync(destInRepo)) {
+            const destStat = fs.statSync(destInRepo);
+            if (destStat.isFile()) {
+              throw new Error(
+                `Destination path '${destSubpath}' is an existing file in target repository.`
+              );
+            }
+            if (
+              destStat.isDirectory() &&
+              !fs.existsSync(path.join(destInRepo, 'manifest.json')) &&
+              (findManifestFolders(destInRepo).length > 0 || findMdFiles(destInRepo).length > 0)
+            ) {
+              throw new Error(
+                `Destination path '${destSubpath}' is an existing container directory holding other knowledge units or documents. ` +
+                  `Use '--path ${destSubpath}/' to publish inside it as '${destSubpath}/${unitName}', ` +
+                  `or pass an explicit unit path like '--path ${destSubpath}/${unitName}'.`
+              );
+            }
+          }
           removeDirSync(destInRepo);
         } else {
           const isPreservedRepoEntry = (entryName: string): boolean => {

@@ -146,17 +146,18 @@ function isUnitTrusted(layerDir: string, unitName: string): { trusted: boolean; 
     if (!parsed || !Array.isArray(parsed.sources)) {
       return { trusted: true };
     }
-    const normUnit = unitName.replace(/\\/g, '/').toLowerCase();
+    const normRegName = (n?: string) => (n || '').trim().replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
+    const normUnit = normRegName(unitName);
 
     // 1. Exact match on source name
-    let entry = parsed.sources.find((s) => s.name?.toLowerCase() === normUnit);
+    let entry = parsed.sources.find((s) => normRegName(s.name) === normUnit);
 
     // 2. Ancestor source match if unitName is inside a subfolder of an installed repo
     if (!entry && normUnit.includes('/')) {
       const segments = normUnit.split('/');
       for (let i = segments.length - 1; i >= 1; i--) {
         const prefix = segments.slice(0, i).join('/');
-        const match = parsed.sources.find((s) => s.name?.toLowerCase() === prefix);
+        const match = parsed.sources.find((s) => normRegName(s.name) === prefix);
         if (match) {
           entry = match;
           break;
