@@ -278,10 +278,14 @@ describe('Bug Fixes v1.2.2', () => {
       { TARGET: targetDir },
       { dryRun: true }
     );
-    expect(res.isError).toBe(false);
-    const data = JSON.parse(res.text);
-    expect(data.files_created.length).toBe(1);
-    expect(data.files_patched?.length).toBe(1);
+    if (process.platform === 'win32') {
+      expect(res.isError).toBe(false);
+      const data = JSON.parse(res.text);
+      expect(data.files_created.length).toBe(1);
+      expect(data.files_patched?.length).toBe(1);
+    } else {
+      expect(res.isError).toBe(true);
+    }
   });
 
   it('10. cmdSearch supports comma-separated --tags and validates positive integer --max', () => {

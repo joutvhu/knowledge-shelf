@@ -106,6 +106,8 @@ describe('B3: Publish to an existing branch fast-forwards', () => {
     // Pre-create targetBranch on bare repo with an unrelated commit
     const branchClone = path.join(workRoot, 'branch-clone');
     execSync(`git clone "${bareRepo}" "${branchClone}"`, { stdio: 'pipe' });
+    git(branchClone, ['config', 'user.email', 'test@example.com']);
+    git(branchClone, ['config', 'user.name', 'Test User']);
     git(branchClone, ['checkout', '-b', targetBranch]);
     fs.writeFileSync(path.join(branchClone, 'pre-existing.txt'), 'Pre-existing content\n', 'utf-8');
     git(branchClone, ['add', 'pre-existing.txt']);

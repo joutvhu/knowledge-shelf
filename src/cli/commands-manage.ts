@@ -1474,7 +1474,6 @@ export function cmdExport(
       );
     } else if (process.platform === 'win32') {
       const escapedTarget = targetPath.replace(/'/g, "''");
-      const escapedKd = canonicalKd.replace(/'/g, "''");
       const escapedOutputPath = outputPath.replace(/'/g, "''");
       const escapedRelName = relName.replace(/'/g, "''");
       if (fs.existsSync(outputPath)) {
@@ -1492,9 +1491,11 @@ export function cmdExport(
             `  if ($target -is [System.IO.FileInfo]) { ` +
             `    [System.IO.Compression.ZipFileExtensions]::CreateEntryFromFile($zip, $target.FullName, '${escapedRelName}') | Out-Null ` +
             `  } else { ` +
+            `    $targetRoot = $target.FullName.TrimEnd('\\', '/'); ` +
             `    $files = Get-ChildItem -LiteralPath '${escapedTarget}' -Recurse -File -Force | Where-Object { $_.FullName -notmatch '[\\\\/]\\.git([\\\\/]|$)' }; ` +
             `    foreach ($f in $files) { ` +
-            `      $sub = $f.FullName.Substring('${escapedKd}'.Length).TrimStart('\\', '/').Replace('\\', '/'); ` +
+            `      $relPart = $f.FullName.Substring($targetRoot.Length).TrimStart('\\', '/').Replace('\\', '/'); ` +
+            `      $sub = '${escapedRelName}/' + $relPart; ` +
             `      [System.IO.Compression.ZipFileExtensions]::CreateEntryFromFile($zip, $f.FullName, $sub) | Out-Null ` +
             `    } ` +
             `  } ` +
