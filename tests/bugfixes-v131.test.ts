@@ -461,7 +461,7 @@ describe('Bug fixes v1.3.1', () => {
       [
         "import { spawn } from 'node:child_process';",
         "const out = process.argv[2];",
-        "const code = 'setTimeout(() => require(\"node:fs\").writeFileSync(process.argv[1], \"survived\"), 2000)';",
+        "const code = 'setTimeout(() => require(\"node:fs\").writeFileSync(process.argv[1], \"survived\"), 4000)';",
         "spawn(process.execPath, ['-e', code, out], { stdio: 'ignore' });",
         "setInterval(() => {}, 1000);",
       ].join('\n'),
@@ -483,12 +483,14 @@ describe('Bug fixes v1.3.1', () => {
       'utf-8'
     );
 
+    const start = Date.now();
     const res = await toolRunWorkflow(kDir, 'timeout-unit', 'hang', { TARGET: targetDir });
     expect(res.isError).toBe(true);
     const parsed = JSON.parse(res.text);
     expect(parsed.errors[0]).toContain('timed out');
 
-    await new Promise((r) => setTimeout(r, 1500));
+    const remainingWait = Math.max(1500, 4800 - (Date.now() - start));
+    await new Promise((r) => setTimeout(r, remainingWait));
     expect(fs.existsSync(path.join(targetDir, 'survived.txt'))).toBe(false);
   });
 

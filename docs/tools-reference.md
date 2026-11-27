@@ -254,12 +254,15 @@ Follow these steps to set up the project:
 
 ## get_resource
 
-Retrieve any file from the knowledge base as text.
+Retrieve any file from the knowledge base as text. Supports optional line slicing (`offset`/`limit`) for large files or Markdown section extraction (`section`).
 
 **Parameters:**
 | Name | Type | Required | Description |
 |---|---|---|---|
 | `name` | string | ✅ | File path relative to knowledge directory |
+| `offset` | number | ❌ | Optional 1-based starting line number for large files (integer >= 1) |
+| `limit` | number | ❌ | Optional maximum number of lines to return (integer 1–2000, default when `offset` set: 200) |
+| `section` | string | ❌ | Optional Markdown heading to extract from a `.md` reference resource |
 
 **Use cases:**
 - Read code templates: `my-boilerplate/src/BasePage.java`
